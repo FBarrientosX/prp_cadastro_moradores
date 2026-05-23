@@ -1,0 +1,93 @@
+INSTRUÇÕES PARA O CURSOR: Sistema de Cadastro de Condomínio
+Contexto do Projeto:
+Desenvolver uma aplicação web em Python (Flask) com banco de dados SQLite (usando SQLAlchemy) para gerenciar a coleta e atualização de dados de moradores de um condomínio. O foco é escalabilidade, simplicidade de manutenção e segurança. Não utilizaremos blueprint complexos no início, mas o código deve ser modular (rotas, modelos e formulários separados). O frontend deve usar Bootstrap 5 via CDN.
+
+Regras de Negócio e Acesso (CRÍTICO):
+Existem 3 níveis de acesso no sistema:
+
+Administrador Geral: Vê todos os blocos e todos os status. É o único com permissão para registrar os dados no sistema oficial e o ÚNICO que pode resetar/gerar uma nova senha para uma "Unidade".
+
+Síndico de Bloco: Vê e atua APENAS nas unidades pertencentes ao seu bloco designado. Sua função é aprovar ou reprovar cadastros "Pendentes".
+
+Unidade (Morador): A autenticação do morador é baseada na combinação Bloco + Apartamento + Senha.
+
+Regra de Primeiro Cadastro: Se a Unidade não tem cadastro aprovado, o formulário é público. O morador preenche os dados e cria uma senha no momento do envio. O cadastro fica "Pendente".
+
+Regra de Bloqueio: Se uma unidade já está "Pendente" ou "Aprovada/Registrada", qualquer nova tentativa de acesso àquela unidade na área pública exigirá a senha. Se a senha estiver errada, a requisição é barrada no backend e frontend.
+
+1. Estrutura de Banco de Dados (SQLAlchemy Models):
+
+Modelo Usuario (Admin e Síndicos):
+
+id (PK), username, password_hash, role (String: 'admin' ou 'sindico'), bloco_responsavel (String, null se admin).
+
+Modelo Unidade (Autenticação do Apartamento):
+
+id (PK), bloco (String), apartamento (String), password_hash (String), status (String: 'Pendente', 'Aprovada', 'Registrada'), data_criacao, data_alteracao.
+
+Modelo Pessoa (Os moradores vinculados à Unidade):
+
+id (PK), unidade_id (FK), nome_completo, cpf, vinculo (Proprietário, Locatário, Morador), telefone, email, parentesco, data_nascimento (opcional), is_responsavel (Boolean).
+
+Modelo Veiculo (Opcional, vinculado à Unidade):
+
+id (PK), unidade_id (FK), placa, marca, cor.
+
+2. Fluxos da Aplicação (Views/Routes):
+
+Fluxo do Morador (Rotas Públicas):
+
+GET /: Tela inicial. O usuário seleciona o Bloco e digita o número do Apartamento.
+
+POST /verificar-unidade: Verifica no banco.
+
+Se não existe: Redireciona para GET /cadastro-inicial.
+
+Se status == 'Pendente': Exibe aviso "Aguardando aprovação do Síndico".
+
+Se status == 'Aprovada' ou 'Registrada': Exibe campo de senha. Se a senha bater, redireciona para GET /atualizar-dados.
+
+POST /salvar-cadastro: Salva a Unidade (com a senha em hash), as Pessoas e Veiculos.
+
+Fluxo do Síndico (/sindico):
+
+Login exigido.
+
+Dashboard lista apenas as Unidades do bloco_responsavel do síndico logado que estão com status 'Pendente'.
+
+Botão "Aprovar": Muda status da unidade para 'Aprovada'.
+
+Botão "Reprovar": Deleta os dados pendentes para liberar a unidade para novo cadastro (ou muda status para 'Reprovado' com motivo).
+
+Fluxo do Admin (/admin):
+
+Login exigido.
+
+Dashboard lista todas as Unidades 'Aprovadas' de todos os blocos.
+
+Botão "Marcar como Registrado no Sistema": Muda status para 'Registrada'.
+
+Feature Especial: Busca por Bloco/Apto e botão "Resetar Senha" (Gera uma nova senha aleatória ou permite o admin digitar uma nova, salvando o hash).
+
+3. Estrutura de Diretórios Sugerida:
+
+Plaintext
+/app
+  ├── /static (CSS, JS)
+  ├── /templates
+  │     ├── base.html (Layout com Bootstrap)
+  │     ├── index.html (Seleção de bloco/apto)
+  │     ├── cadastro_morador.html (Formulário complexo)
+  │     ├── login.html
+  │     ├── dashboard_sindico.html
+  │     └── dashboard_admin.html
+  ├── models.py (SQLAlchemy)
+  ├── routes.py (Flask routes)
+  ├── auth.py (Lógica de login e hash de senhas)
+  └── __init__.py (App factory)
+run.py
+requirements.txt
+
+
+Instrução de Execução para o Cursor:
+"Por favor, inicie criando os arquivos requirements.txt, app/__init__.py, e app/models.py seguindo estritamente as regras de negócio e a estrutura de banco de dados descritas acima. Use as melhores práticas de Flask e SQLAlchemy."

@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-1">
+                    {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
+                </h1>
+                <p class="text-muted mb-4">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
+
+                <form method="post" action="{{ url_for('salvar_cadastro') }}">
+                    <h2 class="h5">Senha da unidade</h2>
+                    <p class="text-muted small">
+                        {% if modo == 'cadastro' %}
+                        Crie uma senha para acessar e atualizar este cadastro no futuro.
+                        {% else %}
+                        Deixe em branco para manter a senha atual.
+                        {% endif %}
+                    </p>
+                    <div class="row mb-4">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label" for="senha">Senha</label>
+                            <input type="password" class="form-control" id="senha" name="senha"
+                                   {% if modo == 'cadastro' %}required minlength="6"{% endif %}>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label" for="confirmar_senha">Confirmar senha</label>
+                            <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
+                                   {% if modo == 'cadastro' %}required minlength="6"{% endif %}>
+                        </div>
+                    </div>
+
+                    <h2 class="h5">Moradores</h2>
+                    <div id="pessoas-container">
+                        {% set lista_pessoas = pessoas if pessoas else [None] %}
+                        {% for pessoa in lista_pessoas %}
+                        <div class="border rounded p-3 mb-3 pessoa-item">
+                            {% set i = loop.index0 %}
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Nome completo</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_nome" required
+                                           value="{{ pessoa.nome_completo if pessoa else '' }}">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">CPF</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_cpf" required
+                                           value="{{ pessoa.cpf if pessoa else '' }}">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Vínculo</label>
+                                    <select class="form-select" name="pessoa_{{ i }}_vinculo" required>
+                                        {% for vinculo in vinculos %}
+                                        <option value="{{ vinculo }}"
+                                            {% if pessoa and pessoa.vinculo == vinculo %}selected{% endif %}>
+                                            {{ vinculo }}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Telefone</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_telefone" required
+                                           value="{{ pessoa.telefone if pessoa else '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">E-mail</label>
+                                    <input type="email" class="form-control" name="pessoa_{{ i }}_email"
+                                           value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Data de nascimento</label>
+                                    <input type="date" class="form-control" name="pessoa_{{ i }}_data_nascimento"
+                                           value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Parentesco</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_parentesco"
+                                           value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
+                                </div>
+                                <div class="col-md-6 form-check mt-4">
+                                    <input class="form-check-input" type="checkbox" name="pessoa_{{ i }}_is_responsavel"
+                                           id="resp_{{ i }}"
+                                           {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
+                                    <label class="form-check-label" for="resp_{{ i }}">Responsável pela unidade</label>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-pessoa">
+                        + Adicionar morador
+                    </button>
+
+                    <h2 class="h5">Veículos (opcional)</h2>
+                    <div id="veiculos-container">
+                        {% if veiculos %}
+                            {% for veiculo in veiculos %}
+                            <div class="border rounded p-3 mb-3 veiculo-item">
+                                {% set i = loop.index0 %}
+                                <div class="row g-3">
+                                    <div class="col-md-4">
+                                        <label class="form-label">Placa</label>
+                                        <input class="form-control" name="veiculo_{{ i }}_placa" required
+                                               value="{{ veiculo.placa }}">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Marca</label>
+                                        <input class="form-control" name="veiculo_{{ i }}_marca" required
+                                               value="{{ veiculo.marca }}">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Cor</label>
+                                        <input class="form-control" name="veiculo_{{ i }}_cor" required
+                                               value="{{ veiculo.cor }}">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-veiculo">
+                        + Adicionar veículo
+                    </button>
+
+                    <button type="submit" class="btn btn-primary">
+                        {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const vinculosOptions = {{ vinculos | tojson }};
+    let pessoaIndex = document.querySelectorAll(".pessoa-item").length;
+    let veiculoIndex = document.querySelectorAll(".veiculo-item").length;
+
+    document.getElementById("add-pessoa").addEventListener("click", () => {
+        const container = document.getElementById("pessoas-container");
+        const vinculoOptions = vinculosOptions.map((v) => `<option value="${v}">${v}</option>`).join("");
+        const wrapper = document.createElement("div");
+        wrapper.className = "border rounded p-3 mb-3 pessoa-item";
+        wrapper.innerHTML = `
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Nome completo</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_nome" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">CPF</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_cpf" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Vínculo</label>
+                    <select class="form-select" name="pessoa_${pessoaIndex}_vinculo" required>${vinculoOptions}</select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Telefone</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_telefone" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">E-mail</label>
+                    <input type="email" class="form-control" name="pessoa_${pessoaIndex}_email">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Data de nascimento</label>
+                    <input type="date" class="form-control" name="pessoa_${pessoaIndex}_data_nascimento">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Parentesco</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_parentesco">
+                </div>
+                <div class="col-md-6 form-check mt-4">
+                    <input class="form-check-input" type="checkbox" name="pessoa_${pessoaIndex}_is_responsavel" id="resp_${pessoaIndex}">
+                    <label class="form-check-label" for="resp_${pessoaIndex}">Responsável pela unidade</label>
+                </div>
+            </div>`;
+        container.appendChild(wrapper);
+        pessoaIndex += 1;
+    });
+
+    document.getElementById("add-veiculo").addEventListener("click", () => {
+        const container = document.getElementById("veiculos-container");
+        const wrapper = document.createElement("div");
+        wrapper.className = "border rounded p-3 mb-3 veiculo-item";
+        wrapper.innerHTML = `
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Placa</label>
+                    <input class="form-control" name="veiculo_${veiculoIndex}_placa" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Marca</label>
+                    <input class="form-control" name="veiculo_${veiculoIndex}_marca" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Cor</label>
+                    <input class="form-control" name="veiculo_${veiculoIndex}_cor" required>
+                </div>
+            </div>`;
+        container.appendChild(wrapper);
+        veiculoIndex += 1;
+    });
+</script>
+{% endblock %}

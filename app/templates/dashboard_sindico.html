@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard do Síndico{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Cadastros Pendentes</h1>
+        <p class="text-muted mb-0">Bloco {{ bloco }}</p>
+    </div>
+    <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
+</div>
+
+{% if unidades %}
+<div class="table-responsive">
+    <table class="table table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Apartamento</th>
+                <th>Responsável</th>
+                <th>Enviado em</th>
+                <th class="text-end">Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for unidade in unidades %}
+            <tr>
+                <td>{{ unidade.apartamento }}</td>
+                <td>
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {{ responsavel.nome_completo if responsavel else '-' }}
+                </td>
+                <td>{{ unidade.data_criacao.strftime('%d/%m/%Y %H:%M') }}</td>
+                <td class="text-end">
+                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
+                        <button type="submit" class="btn btn-success btn-sm">Aprovar</button>
+                    </form>
+                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="d-inline"
+                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
+                        <button type="submit" class="btn btn-danger btn-sm">Reprovar</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="alert alert-info">Nenhum cadastro pendente para o seu bloco.</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Início - Cadastro de Moradores{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-3">Acesso da Unidade</h1>
+                <p class="text-muted">Selecione o bloco e o apartamento para iniciar ou atualizar o cadastro.</p>
+
+                {% if pendente %}
+                <div class="alert alert-warning">
+                    A unidade <strong>Bloco {{ bloco }} - Apto {{ apartamento }}</strong> está
+                    aguardando aprovação do síndico.
+                </div>
+                {% else %}
+                <form method="post" action="{{ url_for('verificar_unidade') }}" id="form-unidade">
+                    <div class="mb-3">
+                        <label for="bloco" class="form-label">Bloco</label>
+                        <select class="form-select" id="bloco" name="bloco" required>
+                            <option value="">Selecione o bloco</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="apartamento" class="form-label">Apartamento</label>
+                        <select class="form-select" id="apartamento" name="apartamento" required disabled>
+                            <option value="">Selecione o apartamento</option>
+                        </select>
+                    </div>
+
+                    {% if exige_senha %}
+                    <div class="mb-3">
+                        <label for="senha" class="form-label">Senha da unidade</label>
+                        <input type="password" class="form-control" id="senha" name="senha" required
+                               minlength="6" autocomplete="current-password">
+                        <div class="form-text">Esta unidade já possui cadastro. Informe a senha para continuar.</div>
+                    </div>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary w-100">
+                        {% if exige_senha %}Entrar{% else %}Continuar{% endif %}
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const blocoSelect = document.getElementById("bloco");
+    const apartamentoSelect = document.getElementById("apartamento");
+    const blocoInicial = {{ bloco | tojson }};
+    const apartamentoInicial = {{ apartamento | tojson }};
+
+    function popularBlocos() {
+        Object.keys(CONDOMINIO_ESTRUTURA).sort().forEach((bloco) => {
+            const option = document.createElement("option");
+            option.value = bloco;
+            option.textContent = `Bloco ${bloco}`;
+            if (bloco === blocoInicial) {
+                option.selected = true;
+            }
+            blocoSelect.appendChild(option);
+        });
+    }
+
+    function popularApartamentos(bloco, apartamentoSelecionado = "") {
+        apartamentoSelect.innerHTML = '<option value="">Selecione o apartamento</option>';
+        apartamentoSelect.disabled = !bloco;
+
+        if (!bloco || !CONDOMINIO_ESTRUTURA[bloco]) {
+            return;
+        }
+
+        const andares = CONDOMINIO_ESTRUTURA[bloco];
+        Object.keys(andares).sort((a, b) => Number(a) - Number(b)).forEach((andar) => {
+            andares[andar].forEach((apto) => {
+                const option = document.createElement("option");
+                option.value = apto;
+                option.textContent = apto;
+                if (apto === apartamentoSelecionado) {
+                    option.selected = true;
+                }
+                apartamentoSelect.appendChild(option);
+            });
+        });
+    }
+
+    if (blocoSelect && apartamentoSelect) {
+        popularBlocos();
+        if (blocoInicial) {
+            popularApartamentos(blocoInicial, apartamentoInicial);
+        }
+
+        blocoSelect.addEventListener("change", (event) => {
+            popularApartamentos(event.target.value);
+        });
+    }
+</script>
+{% endblock %}

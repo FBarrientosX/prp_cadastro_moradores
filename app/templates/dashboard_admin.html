@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard do Administrador{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Unidades Aprovadas</h1>
+        <p class="text-muted mb-0">Prontas para registro no sistema oficial</p>
+    </div>
+    <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5">Buscar unidade e resetar senha</h2>
+        <form method="get" action="{{ url_for('admin_dashboard') }}" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label for="busca_bloco" class="form-label">Bloco</label>
+                <select class="form-select" id="busca_bloco" name="bloco">
+                    <option value="">Selecione</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="busca_apartamento" class="form-label">Apartamento</label>
+                <select class="form-select" id="busca_apartamento" name="apartamento" disabled>
+                    <option value="">Selecione</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-primary w-100">Buscar</button>
+            </div>
+        </form>
+
+        {% if unidade_busca %}
+        <hr>
+        <p class="mb-2">
+            <strong>{{ unidade_busca.identificador }}</strong> — Status: {{ unidade_busca.status }}
+        </p>
+        <form method="post" action="{{ url_for('admin_resetar_senha', unidade_id=unidade_busca.id) }}" class="row g-2">
+            <div class="col-md-4">
+                <input type="text" class="form-control" name="nova_senha"
+                       placeholder="Nova senha (opcional, gera automaticamente)">
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-warning w-100">Resetar senha</button>
+            </div>
+        </form>
+        {% elif bloco_busca and apartamento_busca %}
+        <hr>
+        <p class="text-muted">Nenhuma unidade encontrada para esta combinação.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if unidades %}
+<div class="table-responsive">
+    <table class="table table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Bloco</th>
+                <th>Apartamento</th>
+                <th>Responsável</th>
+                <th>Aprovado em</th>
+                <th class="text-end">Ação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for unidade in unidades %}
+            <tr>
+                <td>{{ unidade.bloco }}</td>
+                <td>{{ unidade.apartamento }}</td>
+                <td>
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {{ responsavel.nome_completo if responsavel else '-' }}
+                </td>
+                <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
+                <td class="text-end">
+                    <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
+                        <button type="submit" class="btn btn-success btn-sm">Marcar como Registrado</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="alert alert-info">Nenhuma unidade aprovada aguardando registro.</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const blocoSelect = document.getElementById("busca_bloco");
+    const apartamentoSelect = document.getElementById("busca_apartamento");
+    const blocoInicial = {{ bloco_busca | tojson }};
+    const apartamentoInicial = {{ apartamento_busca | tojson }};
+
+    function popularBlocos() {
+        Object.keys(CONDOMINIO_ESTRUTURA).sort().forEach((bloco) => {
+            const option = document.createElement("option");
+            option.value = bloco;
+            option.textContent = `Bloco ${bloco}`;
+            if (bloco === blocoInicial) option.selected = true;
+            blocoSelect.appendChild(option);
+        });
+    }
+
+    function popularApartamentos(bloco, apartamentoSelecionado = "") {
+        apartamentoSelect.innerHTML = '<option value="">Selecione</option>';
+        apartamentoSelect.disabled = !bloco;
+        if (!bloco || !CONDOMINIO_ESTRUTURA[bloco]) return;
+
+        Object.keys(CONDOMINIO_ESTRUTURA[bloco]).sort((a, b) => Number(a) - Number(b)).forEach((andar) => {
+            CONDOMINIO_ESTRUTURA[bloco][andar].forEach((apto) => {
+                const option = document.createElement("option");
+                option.value = apto;
+                option.textContent = apto;
+                if (apto === apartamentoSelecionado) option.selected = true;
+                apartamentoSelect.appendChild(option);
+            });
+        });
+    }
+
+    popularBlocos();
+    if (blocoInicial) popularApartamentos(blocoInicial, apartamentoInicial);
+    blocoSelect.addEventListener("change", (e) => popularApartamentos(e.target.value));
+</script>
+{% endblock %}
