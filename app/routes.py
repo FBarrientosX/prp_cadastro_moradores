@@ -355,7 +355,7 @@ def sindico_dashboard():
     return render_template(
         "dashboard_sindico.html",
         unidades=unidades,
-        bloco=usuario.bloco_responsavel,
+        current_user=usuario,
     )
 
 

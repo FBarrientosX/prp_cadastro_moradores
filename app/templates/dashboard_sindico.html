@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h1 class="h3 mb-1">Cadastros Pendentes</h1>
-        <p class="text-muted mb-0">Bloco {{ bloco }}</p>
+        <p class="text-muted mb-0">{{ current_user.bloco_responsavel }}</p>
     </div>
     <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
 </div>
@@ -24,14 +24,16 @@
         </thead>
         <tbody>
             {% for unidade in unidades %}
+            {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
             <tr>
                 <td>{{ unidade.apartamento }}</td>
-                <td>
-                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
-                    {{ responsavel.nome_completo if responsavel else '-' }}
-                </td>
+                <td>{{ responsavel.nome_completo if responsavel else '-' }}</td>
                 <td>{{ unidade.data_criacao.strftime('%d/%m/%Y %H:%M') }}</td>
-                <td class="text-end">
+                <td class="text-end text-nowrap">
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                        Ver Detalhes
+                    </button>
                     <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
                         <button type="submit" class="btn btn-success btn-sm">Aprovar</button>
                     </form>
@@ -45,6 +47,130 @@
         </tbody>
     </table>
 </div>
+
+{% for unidade in unidades %}
+{% set pessoas = unidade.pessoas.all() %}
+{% set veiculos = unidade.veiculos.all() %}
+<div class="modal fade" id="modal-detalhes-{{ unidade.id }}" tabindex="-1"
+     aria-labelledby="modal-detalhes-label-{{ unidade.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modal-detalhes-label-{{ unidade.id }}">
+                    Detalhes do cadastro — {{ current_user.bloco_responsavel }}, Apto {{ unidade.apartamento }}
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Unidade</h3>
+                    <dl class="row mb-0">
+                        <dt class="col-sm-3">Bloco</dt>
+                        <dd class="col-sm-9">{{ current_user.bloco_responsavel }}</dd>
+                        <dt class="col-sm-3">Apartamento</dt>
+                        <dd class="col-sm-9">{{ unidade.apartamento }}</dd>
+                        <dt class="col-sm-3">Enviado em</dt>
+                        <dd class="col-sm-9">{{ unidade.data_criacao.strftime('%d/%m/%Y às %H:%M') }}</dd>
+                        <dt class="col-sm-3">Status</dt>
+                        <dd class="col-sm-9"><span class="badge bg-warning text-dark">{{ unidade.status }}</span></dd>
+                    </dl>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Moradores ({{ pessoas|length }})</h3>
+                    {% if pessoas %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>CPF</th>
+                                    <th>Vínculo</th>
+                                    <th>Parentesco</th>
+                                    <th>Telefone</th>
+                                    <th>E-mail</th>
+                                    <th>Nascimento</th>
+                                    <th>Responsável</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for pessoa in pessoas %}
+                                <tr>
+                                    <td>{{ pessoa.nome_completo }}</td>
+                                    <td>{{ pessoa.cpf }}</td>
+                                    <td>{{ pessoa.vinculo }}</td>
+                                    <td>{{ pessoa.parentesco or '—' }}</td>
+                                    <td>{{ pessoa.telefone }}</td>
+                                    <td>{{ pessoa.email or '—' }}</td>
+                                    <td>
+                                        {% if pessoa.data_nascimento %}
+                                        {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
+                                        {% else %}
+                                        —
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if pessoa.is_responsavel %}
+                                        <span class="badge bg-primary">Sim</span>
+                                        {% else %}
+                                        Não
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhuma pessoa cadastrada.</p>
+                    {% endif %}
+                </section>
+
+                <section>
+                    <h3 class="h6 text-uppercase text-muted">Veículos ({{ veiculos|length }})</h3>
+                    {% if veiculos %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Placa</th>
+                                    <th>Marca</th>
+                                    <th>Cor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for veiculo in veiculos %}
+                                <tr>
+                                    <td>{{ veiculo.placa }}</td>
+                                    <td>{{ veiculo.marca }}</td>
+                                    <td>{{ veiculo.cor }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhum veículo cadastrado.</p>
+                    {% endif %}
+                </section>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+                <div>
+                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
+                        <button type="submit" class="btn btn-success">Aprovar</button>
+                    </form>
+                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="d-inline"
+                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
+                        <button type="submit" class="btn btn-danger">Reprovar</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
 {% else %}
 <div class="alert alert-info">Nenhum cadastro pendente para o seu bloco.</div>
 {% endif %}
