@@ -40,6 +40,7 @@
                         <th>Apartamento</th>
                         <th>Responsável</th>
                         <th>Aprovado em</th>
+                        <th>Documento</th>
                         <th class="text-end">Ações</th>
                     </tr>
                 </thead>
@@ -51,6 +52,13 @@
                         <td>{{ unidade.apartamento }}</td>
                         <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
                         <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if unidade.documento_status == 'Entregue' %}
+                            <span class="badge bg-success">Doc. OK</span>
+                            {% else %}
+                            <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                        </td>
                         <td class="text-end text-nowrap">
                             <button type="button" class="btn btn-info btn-sm"
                                     data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
@@ -85,6 +93,7 @@
                         <th>Apartamento</th>
                         <th>Responsável</th>
                         <th>Registrado em</th>
+                        <th>Documento</th>
                         <th class="text-end">Ações</th>
                     </tr>
                 </thead>
@@ -96,6 +105,13 @@
                         <td>{{ unidade.apartamento }}</td>
                         <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
                         <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if unidade.documento_status == 'Entregue' %}
+                            <span class="badge bg-success">Doc. OK</span>
+                            {% else %}
+                            <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                        </td>
                         <td class="text-end text-nowrap">
                             <button type="button" class="btn btn-info btn-sm"
                                     data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
@@ -258,15 +274,15 @@
                     {% endif %}
                 </section>
             </div>
-            <div class="modal-footer justify-content-between">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
-                <div>
+            <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
+                <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
+                <div class="d-flex flex-wrap gap-2 w-100 w-sm-auto justify-content-end order-1">
                     {% if unidade.status == 'Aprovada' %}
-                    <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
-                        <button type="submit" class="btn btn-success">Marcar como Registrado</button>
+                    <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
+                        <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>
                     </form>
                     {% endif %}
-                    <button type="button" class="btn btn-danger"
+                    <button type="button" class="btn btn-danger flex-fill flex-sm-grow-0"
                             data-bs-dismiss="modal"
                             onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modal-senha-{{ unidade.id }}')).show(), 300)">
                         Resetar Senha

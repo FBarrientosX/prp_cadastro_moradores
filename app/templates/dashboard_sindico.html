@@ -47,6 +47,13 @@
                     {% else %}
                     <span class="badge bg-dark">{{ status }}</span>
                     {% endif %}
+                    {% if unidade and status != 'Aguardando Morador' %}
+                        {% if unidade.documento_status == 'Entregue' %}
+                        <span class="badge bg-success">Doc. OK</span>
+                        {% else %}
+                        <span class="badge bg-danger">Doc. Pendente</span>
+                        {% endif %}
+                    {% endif %}
                 </td>
                 <td class="text-end text-nowrap">
                     {% if status == 'Aguardando Morador' %}
@@ -209,16 +216,16 @@
                     {% endif %}
                 </section>
             </div>
-            <div class="modal-footer justify-content-between">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+            <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
+                <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
                 {% if unidade.status == 'Pendente' %}
-                <div>
-                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
-                        <button type="submit" class="btn btn-success">Aprovar</button>
+                <div class="d-flex gap-2 w-100 w-sm-auto justify-content-end order-1">
+                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
+                        <button type="submit" class="btn btn-success w-100">Aprovar</button>
                     </form>
-                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="d-inline"
+                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0"
                           onsubmit="return confirm('Reprovar e remover este cadastro?');">
-                        <button type="submit" class="btn btn-danger">Reprovar</button>
+                        <button type="submit" class="btn btn-danger w-100">Reprovar</button>
                     </form>
                 </div>
                 {% endif %}
