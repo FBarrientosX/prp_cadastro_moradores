@@ -5,6 +5,8 @@
 {% endblock %}
 
 {% block content %}
+{% set responsavel_atual = (pessoas|selectattr('is_responsavel')|list|first) if pessoas else None %}
+{% set exibe_contrato_locacao = responsavel_atual and responsavel_atual.vinculo == 'Locatário' %}
 <div class="row justify-content-center">
     <div class="col-lg-10">
         <div class="card shadow-sm">
@@ -60,7 +62,9 @@
                                            value="{{ pessoa.nome_completo if pessoa else '' }}">
                                 </div>
                                 <div class="col-6 col-md-3">
-                                    <label class="form-label">CPF</label>
+                                    <label class="form-label">
+                                        CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
                                     <input class="form-control" name="pessoa_{{ i }}_cpf" required
                                            value="{{ pessoa.cpf if pessoa else '' }}">
                                 </div>
@@ -76,12 +80,16 @@
                                     </select>
                                 </div>
                                 <div class="col-12 col-sm-4">
-                                    <label class="form-label">Telefone</label>
-                                    <input class="form-control" name="pessoa_{{ i }}_telefone" required
+                                    <label class="form-label">
+                                        Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
+                                    <input class="form-control" name="pessoa_{{ i }}_telefone"
                                            value="{{ pessoa.telefone if pessoa else '' }}">
                                 </div>
                                 <div class="col-12 col-sm-4">
-                                    <label class="form-label">E-mail</label>
+                                    <label class="form-label">
+                                        E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
                                     <input type="email" class="form-control" name="pessoa_{{ i }}_email"
                                            value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
                                 </div>
@@ -94,6 +102,31 @@
                                     <label class="form-label">Parentesco</label>
                                     <input class="form-control" name="pessoa_{{ i }}_parentesco"
                                            value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
+                                </div>
+                                <div class="col-12 interfone-consentimento">
+                                    <label class="form-label d-block mb-2">
+                                        Consentimento LGPD - Uso do telefone no interfone
+                                    </label>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio"
+                                               name="pessoa_{{ i }}_autoriza_interfone"
+                                               id="autoriza_interfone_{{ i }}_true"
+                                               value="true" required
+                                               {% if pessoa and pessoa.autoriza_interfone %}checked{% endif %}>
+                                        <label class="form-check-label" for="autoriza_interfone_{{ i }}_true">
+                                            Sim, autorizo o uso deste número para o interfone.
+                                        </label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio"
+                                               name="pessoa_{{ i }}_autoriza_interfone"
+                                               id="autoriza_interfone_{{ i }}_false"
+                                               value="false" required
+                                               {% if pessoa and not pessoa.autoriza_interfone %}checked{% endif %}>
+                                        <label class="form-check-label" for="autoriza_interfone_{{ i }}_false">
+                                            Não autorizo.
+                                        </label>
+                                    </div>
                                 </div>
                                 <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
                                     <div class="form-check">
@@ -174,24 +207,45 @@
                     <!-- DOCUMENTO -->
                     <section class="mb-4 p-3 border rounded">
                         <h2 class="h5 mb-1">Comprovante de Propriedade</h2>
+                        <div class="alert alert-warning mb-0">
+                            <strong>Aviso:</strong> É obrigatória a apresentação do documento de propriedade
+                            (RGI, Contrato de Compra e Venda ou equivalente) diretamente à administração para
+                            a regularização e aprovação final da unidade.
+                        </div>
+                    </section>
+
+                    <section id="contrato-locacao-section" class="mb-4 p-3 border rounded"
+                             {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
+                        <h2 class="h5 mb-1">Contrato de Locação</h2>
+                        <div class="alert alert-warning mb-0">
+                            <strong>Aviso:</strong> É obrigatória a apresentação do Contrato de Locação
+                            diretamente à administração para a regularização e aprovação final da unidade.
+                        </div>
+                    </section>
+
+                    <section id="proprietario-section" class="mb-4 p-3 border rounded bg-light"
+                             {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
+                        <h2 class="h5 mb-1">Dados do Proprietário (Dono do Imóvel)</h2>
                         <p class="text-muted small mb-3">
-                            Envie o RGI, Contrato de Compra e Venda ou documento equivalente.
-                            Formatos aceitos: PDF, PNG, JPG. Máximo 10 MB.
+                            Insira os dados básicos do dono do imóvel. A administração complementará o restante dos dados.
                         </p>
-                        <div class="alert alert-info py-2 small mb-3">
-                            <strong>Aviso:</strong> O envio digital é opcional neste momento, mas a
-                            entrega do documento é <strong>obrigatória para a regularização</strong> da unidade.
-                            Caso não envie agora, poderá entregá-lo fisicamente na administração.
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label class="form-label">Nome do Proprietário</label>
+                                <input type="text" class="form-control" name="proprietario_nome"
+                                       value="{{ unidade.proprietario_nome if unidade and unidade.proprietario_nome else '' }}">
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">Telefone do Proprietário (se souber)</label>
+                                <input type="text" class="form-control" name="proprietario_telefone"
+                                       value="{{ unidade.proprietario_telefone if unidade and unidade.proprietario_telefone else '' }}">
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">E-mail do Proprietário (se souber)</label>
+                                <input type="email" class="form-control" name="proprietario_email"
+                                       value="{{ unidade.proprietario_email if unidade and unidade.proprietario_email else '' }}">
+                            </div>
                         </div>
-                        <input type="file" class="form-control" name="documento"
-                               accept=".pdf,.png,.jpg,.jpeg">
-                        {% if unidade and unidade.documento_url %}
-                        <div class="form-text text-success mt-2">
-                            Documento já enviado anteriormente.
-                            <a href="{{ unidade.documento_url }}" target="_blank">Ver documento atual</a>.
-                            Envie um novo arquivo para substituí-lo.
-                        </div>
-                        {% endif %}
                     </section>
 
                     <button type="submit" class="btn btn-primary btn-lg w-100">
@@ -207,6 +261,7 @@
 {% block scripts %}
 <script>
     const vinculosOptions = {{ vinculos | tojson }};
+    const vinculoLocatario = "Locatário";
     let pessoaIndex = document.querySelectorAll(".pessoa-item").length;
     let veiculoIndex = document.querySelectorAll(".veiculo-item").length;
 
@@ -231,6 +286,148 @@
     possuiVeiculoCheck.addEventListener("change", toggleVeiculos);
     toggleVeiculos();
 
+    // === Toggle de Contrato de Locação ===
+    const contratoSection = document.getElementById("contrato-locacao-section");
+    const proprietarioSection = document.getElementById("proprietario-section");
+    const proprietarioInputs = proprietarioSection
+        ? proprietarioSection.querySelectorAll("input")
+        : [];
+
+    function deveExibirContratoLocacao() {
+        const pessoas = document.querySelectorAll(".pessoa-item");
+        return Array.from(pessoas).some((pessoa) => {
+            const vinculo = pessoa.querySelector('select[name$="_vinculo"]');
+            const responsavel = pessoa.querySelector('input[name$="_is_responsavel"]');
+            return vinculo && responsavel && responsavel.checked && vinculo.value === vinculoLocatario;
+        });
+    }
+
+    function toggleContratoLocacao() {
+        const visivel = deveExibirContratoLocacao();
+        contratoSection.style.display = visivel ? "" : "none";
+        if (proprietarioSection) {
+            proprietarioSection.style.display = visivel ? "" : "none";
+        }
+        if (!visivel) {
+            proprietarioInputs.forEach((input) => {
+                input.value = "";
+            });
+        }
+    }
+
+    function calcularIdade(dataStr) {
+        if (!dataStr) {
+            return null;
+        }
+
+        const nascimento = new Date(`${dataStr}T00:00:00`);
+        if (Number.isNaN(nascimento.getTime())) {
+            return null;
+        }
+
+        const hoje = new Date();
+        let idade = hoje.getFullYear() - nascimento.getFullYear();
+        const aindaNaoFezAniversario =
+            hoje.getMonth() < nascimento.getMonth() ||
+            (hoje.getMonth() === nascimento.getMonth() && hoje.getDate() < nascimento.getDate());
+
+        if (aindaNaoFezAniversario) {
+            idade -= 1;
+        }
+        return idade;
+    }
+
+    function atualizarObrigatoriedadePessoa(elementoPessoa) {
+        const campoData = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
+        const campoCpf = elementoPessoa.querySelector('input[name$="_cpf"]');
+        const campoTelefone = elementoPessoa.querySelector('input[name$="_telefone"]');
+        const campoEmail = elementoPessoa.querySelector('input[name$="_email"]');
+        const campoResponsavel = elementoPessoa.querySelector('input[name$="_is_responsavel"]');
+        const radiosInterfone = elementoPessoa.querySelectorAll('input[type="radio"][name$="_autoriza_interfone"]');
+        const interfoneContainer = elementoPessoa.querySelector(".interfone-consentimento");
+        const cpfHint = elementoPessoa.querySelector(".cpf-minor-hint");
+        const telefoneHint = elementoPessoa.querySelector(".telefone-minor-hint");
+        const emailHint = elementoPessoa.querySelector(".email-minor-hint");
+
+        const idade = campoData ? calcularIdade(campoData.value) : null;
+        const isMenor = idade !== null && idade < 18;
+        const isResponsavel = Boolean(campoResponsavel && campoResponsavel.checked);
+
+        if (campoCpf) {
+            if (isMenor) {
+                campoCpf.removeAttribute("required");
+            } else {
+                campoCpf.setAttribute("required", "");
+            }
+        }
+
+        if (campoTelefone) {
+            if (isMenor || !isResponsavel) {
+                campoTelefone.removeAttribute("required");
+            } else {
+                campoTelefone.setAttribute("required", "");
+            }
+        }
+
+        if (campoEmail) {
+            if (isMenor || !isResponsavel) {
+                campoEmail.removeAttribute("required");
+            } else {
+                campoEmail.setAttribute("required", "");
+            }
+        }
+
+        radiosInterfone.forEach((radio) => {
+            if (isMenor) {
+                radio.removeAttribute("required");
+                radio.checked = false;
+                radio.disabled = true;
+            } else {
+                radio.disabled = false;
+                radio.setAttribute("required", "");
+            }
+        });
+        if (interfoneContainer) {
+            interfoneContainer.style.display = isMenor ? "none" : "";
+        }
+
+        [cpfHint, telefoneHint, emailHint].forEach((hint) => {
+            if (!hint) {
+                return;
+            }
+            if (isMenor) {
+                hint.classList.remove("d-none");
+            } else {
+                hint.classList.add("d-none");
+            }
+        });
+    }
+
+    function registrarEventosPessoa(elementoPessoa) {
+        const vinculo = elementoPessoa.querySelector('select[name$="_vinculo"]');
+        const responsavel = elementoPessoa.querySelector('input[name$="_is_responsavel"]');
+        const dataNascimento = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
+        if (vinculo) {
+            vinculo.addEventListener("change", toggleContratoLocacao);
+        }
+        if (responsavel) {
+            responsavel.addEventListener("change", () => {
+                toggleContratoLocacao();
+                atualizarObrigatoriedadePessoa(elementoPessoa);
+            });
+        }
+        if (dataNascimento) {
+            dataNascimento.addEventListener("change", () => atualizarObrigatoriedadePessoa(elementoPessoa));
+            dataNascimento.addEventListener("input", () => atualizarObrigatoriedadePessoa(elementoPessoa));
+        }
+    }
+
+    document.querySelectorAll(".pessoa-item").forEach((item) => {
+        registrarEventosPessoa(item);
+        atualizarObrigatoriedadePessoa(item);
+    });
+    toggleContratoLocacao();
+
     // === Adicionar Morador ===
     document.getElementById("add-pessoa").addEventListener("click", () => {
         const container = document.getElementById("pessoas-container");
@@ -244,7 +441,9 @@
                     <input class="form-control" name="pessoa_${pessoaIndex}_nome" required>
                 </div>
                 <div class="col-6 col-md-3">
-                    <label class="form-label">CPF</label>
+                    <label class="form-label">
+                        CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                    </label>
                     <input class="form-control" name="pessoa_${pessoaIndex}_cpf" required>
                 </div>
                 <div class="col-6 col-md-3">
@@ -252,11 +451,15 @@
                     <select class="form-select" name="pessoa_${pessoaIndex}_vinculo" required>${vinculoOptions}</select>
                 </div>
                 <div class="col-12 col-sm-4">
-                    <label class="form-label">Telefone</label>
-                    <input class="form-control" name="pessoa_${pessoaIndex}_telefone" required>
+                    <label class="form-label">
+                        Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                    </label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_telefone">
                 </div>
                 <div class="col-12 col-sm-4">
-                    <label class="form-label">E-mail</label>
+                    <label class="form-label">
+                        E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                    </label>
                     <input type="email" class="form-control" name="pessoa_${pessoaIndex}_email">
                 </div>
                 <div class="col-12 col-sm-4">
@@ -267,6 +470,21 @@
                     <label class="form-label">Parentesco</label>
                     <input class="form-control" name="pessoa_${pessoaIndex}_parentesco">
                 </div>
+                <div class="col-12 interfone-consentimento">
+                    <label class="form-label d-block mb-2">Consentimento LGPD - Uso do telefone no interfone</label>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="pessoa_${pessoaIndex}_autoriza_interfone" id="autoriza_interfone_${pessoaIndex}_true" value="true" required>
+                        <label class="form-check-label" for="autoriza_interfone_${pessoaIndex}_true">
+                            Sim, autorizo o uso deste número para o interfone.
+                        </label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="pessoa_${pessoaIndex}_autoriza_interfone" id="autoriza_interfone_${pessoaIndex}_false" value="false" required>
+                        <label class="form-check-label" for="autoriza_interfone_${pessoaIndex}_false">
+                            Não autorizo.
+                        </label>
+                    </div>
+                </div>
                 <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" name="pessoa_${pessoaIndex}_is_responsavel" id="resp_${pessoaIndex}">
@@ -275,6 +493,9 @@
                 </div>
             </div>`;
         container.appendChild(wrapper);
+        registrarEventosPessoa(wrapper);
+        atualizarObrigatoriedadePessoa(wrapper);
+        toggleContratoLocacao();
         pessoaIndex += 1;
     });
 

@@ -21,6 +21,7 @@ class StatusDocumento:
     PENDENTE = "Pendente"
     ENTREGUE = "Entregue"
     NAO_ENVIADO = "Nao Enviado"
+    NAO_APLICAVEL = "Nao Aplicavel"
 
 
 class VinculoPessoa:
@@ -81,6 +82,15 @@ class Unidade(db.Model):
     documento_status = db.Column(
         db.String(20), nullable=False, default=StatusDocumento.NAO_ENVIADO
     )
+    contrato_locacao_drive_id = db.Column(db.String(100), nullable=True)
+    contrato_locacao_url = db.Column(db.String(500), nullable=True)
+    contrato_locacao_status = db.Column(
+        db.String(20), nullable=False, default=StatusDocumento.NAO_APLICAVEL
+    )
+    proprietario_nome = db.Column(db.String(200), nullable=True)
+    proprietario_cpf = db.Column(db.String(14), nullable=True)
+    proprietario_telefone = db.Column(db.String(20), nullable=True)
+    proprietario_email = db.Column(db.String(120), nullable=True)
 
     pessoas = db.relationship(
         "Pessoa",
@@ -124,6 +134,7 @@ class Pessoa(db.Model):
     parentesco = db.Column(db.String(100), nullable=True)
     data_nascimento = db.Column(db.Date, nullable=True)
     is_responsavel = db.Column(db.Boolean, nullable=False, default=False)
+    autoriza_interfone = db.Column(db.Boolean, nullable=False, default=False)
 
     unidade = db.relationship("Unidade", back_populates="pessoas")
 

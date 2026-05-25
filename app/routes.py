@@ -1,8 +1,9 @@
 from datetime import datetime
+import traceback
 
 from flask import flash, redirect, render_template, request, session, url_for
 
-from app import ALLOWED_EXTENSIONS, db
+from app import db
 from app.auth import (
     admin_required,
     gerar_senha_aleatoria,
@@ -57,6 +58,16 @@ def _parse_data(data_str):
         return None
 
 
+def _calcular_idade(data_nascimento):
+    if not data_nascimento:
+        return None
+    hoje = datetime.now().date()
+    idade = hoje.year - data_nascimento.year
+    if (hoje.month, hoje.day) < (data_nascimento.month, data_nascimento.day):
+        idade -= 1
+    return idade
+
+
 def _parse_pessoas_form(form):
     pessoas = []
     indice = 0
@@ -69,19 +80,44 @@ def _parse_pessoas_form(form):
         if vinculo not in VinculoPessoa.CHOICES:
             raise ValueError(f"Vínculo inválido para {nome}.")
 
+        data_nascimento = _parse_data(form.get(f"pessoa_{indice}_data_nascimento", ""))
+        idade = _calcular_idade(data_nascimento) if data_nascimento else None
+        is_menor = idade is not None and idade < 18
+        is_responsavel = form.get(f"pessoa_{indice}_is_responsavel") == "on"
+
+        cpf = form.get(f"pessoa_{indice}_cpf", "").strip()
+        telefone = form.get(f"pessoa_{indice}_telefone", "").strip()
+        email = form.get(f"pessoa_{indice}_email", "").strip()
+        autoriza_interfone_raw = (
+            form.get(f"pessoa_{indice}_autoriza_interfone", "").strip().lower()
+        )
+        autoriza_interfone = autoriza_interfone_raw == "true"
+
+        if not is_menor and not cpf:
+            raise ValueError(f"CPF é obrigatório para {nome} (maior de idade).")
+
+        if is_responsavel and not is_menor:
+            if not telefone:
+                raise ValueError(
+                    f"Telefone é obrigatório para o responsável {nome} (maior de idade)."
+                )
+            if not email:
+                raise ValueError(
+                    f"E-mail é obrigatório para o responsável {nome} (maior de idade)."
+                )
+
         pessoas.append(
             {
                 "nome_completo": nome,
-                "cpf": form.get(f"pessoa_{indice}_cpf", "").strip(),
+                "cpf": cpf or "",
                 "vinculo": vinculo,
-                "telefone": form.get(f"pessoa_{indice}_telefone", "").strip(),
-                "email": form.get(f"pessoa_{indice}_email", "").strip() or None,
+                "telefone": telefone or "",
+                "email": email or None,
                 "parentesco": form.get(f"pessoa_{indice}_parentesco", "").strip()
                 or None,
-                "data_nascimento": _parse_data(
-                    form.get(f"pessoa_{indice}_data_nascimento", "")
-                ),
-                "is_responsavel": form.get(f"pessoa_{indice}_is_responsavel") == "on",
+                "data_nascimento": data_nascimento,
+                "is_responsavel": is_responsavel,
+                "autoriza_interfone": autoriza_interfone,
             }
         )
         indice += 1
@@ -115,39 +151,36 @@ def _parse_veiculos_form(form):
     return veiculos
 
 
-def _extensao_permitida(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+def _responsavel_e_locatario(pessoas_data):
+    return any(
+        p["is_responsavel"] and p["vinculo"] == VinculoPessoa.LOCATARIO
+        for p in pessoas_data
+    )
 
 
-def _upload_documento_drive(unidade, arquivo):
-    if not arquivo or not arquivo.filename:
-        return
-    if not _extensao_permitida(arquivo.filename):
-        raise ValueError("Formato de arquivo inválido. Aceitos: PDF, PNG, JPG, JPEG.")
-
-    from app.drive_api import upload_to_drive
-
-    extensao = arquivo.filename.rsplit(".", 1)[1].lower()
-    nome_arquivo = f"doc_bloco{unidade.bloco}_apto{unidade.apartamento}.{extensao}"
-
-    resultado = upload_to_drive(arquivo.stream, nome_arquivo)
-
-    unidade.documento_drive_id = resultado["id"]
-    unidade.documento_url = resultado["webViewLink"]
-    unidade.documento_status = StatusDocumento.PENDENTE
+def _parse_proprietario_form(form):
+    return {
+        "proprietario_nome": form.get("proprietario_nome", "").strip() or None,
+        "proprietario_telefone": form.get("proprietario_telefone", "").strip() or None,
+        "proprietario_email": form.get("proprietario_email", "").strip() or None,
+    }
 
 
 def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
-    for pessoa in unidade.pessoas.all():
-        db.session.delete(pessoa)
-    for veiculo in unidade.veiculos.all():
-        db.session.delete(veiculo)
+    try:
+        for pessoa in unidade.pessoas.all():
+            db.session.delete(pessoa)
+        for veiculo in unidade.veiculos.all():
+            db.session.delete(veiculo)
 
-    for dados in pessoas_data:
-        db.session.add(Pessoa(unidade_id=unidade.id, **dados))
+        for dados in pessoas_data:
+            db.session.add(Pessoa(unidade_id=unidade.id, **dados))
 
-    for dados in veiculos_data:
-        db.session.add(Veiculo(unidade_id=unidade.id, **dados))
+        for dados in veiculos_data:
+            db.session.add(Veiculo(unidade_id=unidade.id, **dados))
+    except Exception as exc:
+        db.session.rollback()
+        raise RuntimeError("Falha ao atualizar moradores e veículos.") from exc
 
 
 def index():
@@ -318,6 +351,7 @@ def salvar_cadastro():
                 bloco=bloco,
                 apartamento=apartamento,
                 status=StatusUnidade.PENDENTE,
+                documento_status=StatusDocumento.PENDENTE,
             )
             unidade.set_password(senha)
             db.session.add(unidade)
@@ -325,14 +359,40 @@ def salvar_cadastro():
 
         _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data)
 
-        arquivo = request.files.get("documento")
-        if arquivo and arquivo.filename:
-            _upload_documento_drive(unidade, arquivo)
+        if _responsavel_e_locatario(pessoas_data):
+            if not modo_atualizacao:
+                unidade.contrato_locacao_status = StatusDocumento.PENDENTE
+            elif unidade.contrato_locacao_status == StatusDocumento.NAO_APLICAVEL:
+                unidade.contrato_locacao_status = StatusDocumento.PENDENTE
+
+            dados_proprietario = _parse_proprietario_form(request.form)
+            unidade.proprietario_nome = dados_proprietario["proprietario_nome"]
+            unidade.proprietario_telefone = dados_proprietario["proprietario_telefone"]
+            unidade.proprietario_email = dados_proprietario["proprietario_email"]
+            if not modo_atualizacao:
+                unidade.proprietario_cpf = None
+        else:
+            unidade.contrato_locacao_drive_id = None
+            unidade.contrato_locacao_url = None
+            unidade.contrato_locacao_status = StatusDocumento.NAO_APLICAVEL
+            unidade.proprietario_nome = None
+            unidade.proprietario_cpf = None
+            unidade.proprietario_telefone = None
+            unidade.proprietario_email = None
+            unidade.contrato_locacao_drive_id = None
+            unidade.contrato_locacao_url = None
+
+        if modo_atualizacao:
+            unidade.status = StatusUnidade.PENDENTE
+            unidade.data_alteracao = datetime.utcnow()
 
         db.session.commit()
 
         if modo_atualizacao:
-            flash("Dados atualizados com sucesso.", "success")
+            flash(
+                "Dados atualizados e cadastro reenviado para nova aprovação do síndico.",
+                "success",
+            )
             return redirect(url_for("atualizar_dados"))
 
         session.pop("cadastro_bloco", None)
@@ -346,6 +406,16 @@ def salvar_cadastro():
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), "danger")
+        if modo_atualizacao:
+            return redirect(url_for("atualizar_dados"))
+        return redirect(url_for("cadastro_inicial"))
+    except Exception:
+        db.session.rollback()
+        traceback.print_exc()
+        flash(
+            "Ocorreu um erro ao salvar o cadastro. Tente novamente em instantes.",
+            "danger",
+        )
         if modo_atualizacao:
             return redirect(url_for("atualizar_dados"))
         return redirect(url_for("cadastro_inicial"))
@@ -532,6 +602,87 @@ def admin_validar_documento(unidade_id):
     return redirect(url_for("admin_dashboard"))
 
 
+@admin_required
+def admin_validar_contrato_locacao(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+
+    if unidade.contrato_locacao_status == StatusDocumento.NAO_APLICAVEL:
+        flash(
+            f"Contrato de locação não se aplica à unidade Bloco {unidade.bloco}, "
+            f"Apto {unidade.apartamento}.",
+            "warning",
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
+    db.session.commit()
+    flash(
+        f"Contrato de locação da unidade Bloco {unidade.bloco}, "
+        f"Apto {unidade.apartamento} marcado como entregue/validado.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
+def admin_validar_documentos(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade.documento_status = StatusDocumento.ENTREGUE
+    if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
+        unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
+
+    db.session.commit()
+    flash(
+        f"Documentos da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
+        f"marcados como entregues/validados.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
+def admin_atualizar_status_documentos(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+    documento_status = request.form.get("documento_status", "").strip()
+    contrato_status = request.form.get("contrato_locacao_status", "").strip()
+    status_permitidos = {StatusDocumento.PENDENTE, StatusDocumento.ENTREGUE}
+
+    if documento_status in status_permitidos:
+        unidade.documento_status = documento_status
+
+    if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
+        if contrato_status in status_permitidos:
+            unidade.contrato_locacao_status = contrato_status
+    else:
+        unidade.contrato_locacao_status = StatusDocumento.NAO_APLICAVEL
+
+    db.session.commit()
+    flash(
+        f"Status dos documentos da unidade Bloco {unidade.bloco}, "
+        f"Apto {unidade.apartamento} atualizados.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
+def admin_salvar_proprietario(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade.proprietario_nome = request.form.get("proprietario_nome", "").strip() or None
+    unidade.proprietario_cpf = request.form.get("proprietario_cpf", "").strip() or None
+    unidade.proprietario_telefone = (
+        request.form.get("proprietario_telefone", "").strip() or None
+    )
+    unidade.proprietario_email = request.form.get("proprietario_email", "").strip() or None
+    db.session.commit()
+    flash(
+        f"Dados do proprietário da unidade Bloco {unidade.bloco}, "
+        f"Apto {unidade.apartamento} salvos com sucesso.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
 def init_app(app):
     app.add_url_rule("/", "index", index, methods=["GET"])
     app.add_url_rule(
@@ -590,5 +741,29 @@ def init_app(app):
         "/admin/validar-documento/<int:unidade_id>",
         "admin_validar_documento",
         admin_validar_documento,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/validar-contrato-locacao/<int:unidade_id>",
+        "admin_validar_contrato_locacao",
+        admin_validar_contrato_locacao,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/validar-documentos/<int:unidade_id>",
+        "admin_validar_documentos",
+        admin_validar_documentos,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/salvar-proprietario/<int:unidade_id>",
+        "admin_salvar_proprietario",
+        admin_salvar_proprietario,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/atualizar-status-documentos/<int:unidade_id>",
+        "admin_atualizar_status_documentos",
+        admin_atualizar_status_documentos,
         methods=["POST"],
     )
