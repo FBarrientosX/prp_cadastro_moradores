@@ -14,7 +14,7 @@
                 </h1>
                 <p class="text-muted mb-4">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
 
-                <form method="post" action="{{ url_for('salvar_cadastro') }}">
+                <form method="post" action="{{ url_for('salvar_cadastro') }}" enctype="multipart/form-data">
                     <h2 class="h5">Senha da unidade</h2>
                     <p class="text-muted small">
                         {% if modo == 'cadastro' %}
@@ -128,6 +128,21 @@
                     <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-veiculo">
                         + Adicionar veículo
                     </button>
+
+                    <h2 class="h5">Documento de Propriedade (opcional)</h2>
+                    <p class="text-muted small">
+                        Envie um comprovante de propriedade (RGI, Contrato de Compra e Venda, etc.).
+                        Formatos aceitos: PDF, PNG, JPG. Máximo 10 MB.
+                    </p>
+                    <div class="mb-4">
+                        <input type="file" class="form-control" name="documento"
+                               accept=".pdf,.png,.jpg,.jpeg">
+                        {% if unidade and unidade.documento_path %}
+                        <div class="form-text text-success">
+                            Documento já enviado anteriormente. Envie um novo para substituí-lo.
+                        </div>
+                        {% endif %}
+                    </div>
 
                     <button type="submit" class="btn btn-primary">
                         {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}

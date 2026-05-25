@@ -1,8 +1,10 @@
+import os
 from datetime import datetime
 
-from flask import flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, redirect, render_template, request, session, url_for
+from werkzeug.utils import secure_filename
 
-from app import db
+from app import ALLOWED_EXTENSIONS, db
 from app.auth import (
     admin_required,
     gerar_senha_aleatoria,
@@ -15,7 +17,15 @@ from app.auth import (
     sindico_required,
     unidade_required,
 )
-from app.models import Pessoa, StatusUnidade, Unidade, Usuario, Veiculo, VinculoPessoa
+from app.models import (
+    Pessoa,
+    StatusDocumento,
+    StatusUnidade,
+    Unidade,
+    Usuario,
+    Veiculo,
+    VinculoPessoa,
+)
 from app.utils import (
     blocos_equivalentes,
     get_apartamentos_bloco,
@@ -105,6 +115,27 @@ def _parse_veiculos_form(form):
         indice += 1
 
     return veiculos
+
+
+def _extensao_permitida(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _salvar_documento(unidade, arquivo):
+    if not arquivo or not arquivo.filename:
+        return
+    if not _extensao_permitida(arquivo.filename):
+        raise ValueError("Formato de arquivo inválido. Aceitos: PDF, PNG, JPG, JPEG.")
+
+    extensao = arquivo.filename.rsplit(".", 1)[1].lower()
+    nome_arquivo = f"doc_bloco{unidade.bloco}_apto{unidade.apartamento}.{extensao}"
+    nome_seguro = secure_filename(nome_arquivo)
+
+    caminho_completo = os.path.join(current_app.config["UPLOAD_FOLDER"], nome_seguro)
+    arquivo.save(caminho_completo)
+
+    unidade.documento_path = f"uploads/documentos/{nome_seguro}"
+    unidade.documento_status = StatusDocumento.PENDENTE
 
 
 def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
@@ -294,6 +325,11 @@ def salvar_cadastro():
             db.session.flush()
 
         _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data)
+
+        arquivo = request.files.get("documento")
+        if arquivo and arquivo.filename:
+            _salvar_documento(unidade, arquivo)
+
         db.session.commit()
 
         if modo_atualizacao:
@@ -431,32 +467,21 @@ def admin_logout():
 
 @admin_required
 def admin_dashboard():
-    unidades = (
+    aguardando_registro = (
         Unidade.query.filter_by(status=StatusUnidade.APROVADA)
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
-
-    bloco_busca = request.args.get("bloco", "").strip()
-    apartamento_busca = request.args.get("apartamento", "").strip()
-    unidade_busca = None
-
-    if bloco_busca and apartamento_busca:
-        if validar_unidade(bloco_busca, apartamento_busca):
-            bloco_busca, apartamento_busca = normalizar_bloco_apartamento(
-                bloco_busca, apartamento_busca
-            )
-            unidade_busca = _buscar_unidade(bloco_busca, apartamento_busca)
-        else:
-            flash("Combinação de bloco e apartamento inválida.", "danger")
+    finalizados = (
+        Unidade.query.filter_by(status=StatusUnidade.REGISTRADA)
+        .order_by(Unidade.bloco, Unidade.apartamento)
+        .all()
+    )
 
     return render_template(
         "dashboard_admin.html",
-        unidades=unidades,
-        condominio_estrutura=get_condominio_estrutura(),
-        bloco_busca=bloco_busca,
-        apartamento_busca=apartamento_busca,
-        unidade_busca=unidade_busca,
+        aguardando_registro=aguardando_registro,
+        finalizados=finalizados,
     )
 
 
@@ -490,6 +515,19 @@ def admin_resetar_senha(unidade_id):
     db.session.commit()
     flash(
         f"Senha da unidade {unidade.identificador} redefinida: {nova_senha}",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
+def admin_validar_documento(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade.documento_status = StatusDocumento.ENTREGUE
+    db.session.commit()
+    flash(
+        f"Documento da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
+        f"marcado como entregue/validado.",
         "success",
     )
     return redirect(url_for("admin_dashboard"))
@@ -547,5 +585,11 @@ def init_app(app):
         "/admin/resetar-senha/<int:unidade_id>",
         "admin_resetar_senha",
         admin_resetar_senha,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/validar-documento/<int:unidade_id>",
+        "admin_validar_documento",
+        admin_validar_documento,
         methods=["POST"],
     )

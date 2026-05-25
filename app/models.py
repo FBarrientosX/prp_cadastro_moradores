@@ -17,6 +17,12 @@ class StatusUnidade:
     REPROVADA = "Reprovada"
 
 
+class StatusDocumento:
+    PENDENTE = "Pendente"
+    ENTREGUE = "Entregue"
+    NAO_ENVIADO = "Nao Enviado"
+
+
 class VinculoPessoa:
     PROPRIETARIO = "Proprietário"
     LOCATARIO = "Locatário"
@@ -69,6 +75,10 @@ class Unidade(db.Model):
         nullable=False,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
+    )
+    documento_path = db.Column(db.String(300), nullable=True)
+    documento_status = db.Column(
+        db.String(20), nullable=False, default=StatusDocumento.NAO_ENVIADO
     )
 
     pessoas = db.relationship(

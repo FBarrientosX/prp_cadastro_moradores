@@ -161,7 +161,7 @@
                     {% endif %}
                 </section>
 
-                <section>
+                <section class="mb-4">
                     <h3 class="h6 text-uppercase text-muted">Veículos ({{ veiculos|length }})</h3>
                     {% if veiculos %}
                     <div class="table-responsive">
@@ -186,6 +186,26 @@
                     </div>
                     {% else %}
                     <p class="text-muted mb-0">Nenhum veículo cadastrado.</p>
+                    {% endif %}
+                </section>
+
+                <section>
+                    <h3 class="h6 text-uppercase text-muted">Documento de Propriedade</h3>
+                    {% if unidade.documento_status == 'Nao Enviado' %}
+                    <div class="alert alert-secondary mb-0">
+                        Documento não enviado pelo morador.
+                        <small class="d-block mt-1 text-muted">Aprovação permitida, mas pendência física ativa.</small>
+                    </div>
+                    {% elif unidade.documento_status == 'Pendente' %}
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-warning text-dark">Aguardando validação</span>
+                        <a href="{{ url_for('static', filename=unidade.documento_path) }}"
+                           target="_blank" class="btn btn-outline-primary btn-sm">
+                            Abrir/Baixar documento
+                        </a>
+                    </div>
+                    {% elif unidade.documento_status == 'Entregue' %}
+                    <span class="badge bg-success">Documento Validado pela Administração</span>
                     {% endif %}
                 </section>
             </div>
