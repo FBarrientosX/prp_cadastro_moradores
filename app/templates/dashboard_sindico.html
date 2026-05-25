@@ -5,32 +5,54 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h1 class="h3 mb-1">Cadastros Pendentes</h1>
-        <p class="text-muted mb-0">{{ current_user.bloco_responsavel }}</p>
+        <h1 class="h3 mb-1">Mapa do Bloco</h1>
+        <p class="text-muted mb-0">{{ current_user.bloco_responsavel }} — {{ mapa_bloco|length }} unidades</p>
     </div>
     <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
 </div>
 
-{% if unidades %}
 <div class="table-responsive">
     <table class="table table-striped align-middle">
         <thead>
             <tr>
                 <th>Apartamento</th>
                 <th>Responsável</th>
-                <th>Enviado em</th>
+                <th>Status</th>
                 <th class="text-end">Ações</th>
             </tr>
         </thead>
         <tbody>
-            {% for unidade in unidades %}
-            {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+            {% for item in mapa_bloco %}
+            {% set unidade = item.unidade %}
+            {% set status = item.status %}
             <tr>
-                <td>{{ unidade.apartamento }}</td>
-                <td>{{ responsavel.nome_completo if responsavel else '-' }}</td>
-                <td>{{ unidade.data_criacao.strftime('%d/%m/%Y %H:%M') }}</td>
+                <td>{{ item.apartamento }}</td>
+                <td>
+                    {% if unidade %}
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {{ responsavel.nome_completo if responsavel else '—' }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td>
+                    {% if status == 'Aguardando Morador' %}
+                    <span class="badge bg-secondary">Aguardando Morador</span>
+                    {% elif status == 'Pendente' %}
+                    <span class="badge bg-warning text-dark">Aprovação Pendente</span>
+                    {% elif status == 'Aprovada' %}
+                    <span class="badge bg-success">Aprovado</span>
+                    {% elif status == 'Registrada' %}
+                    <span class="badge bg-primary">Registrado no Sistema</span>
+                    {% else %}
+                    <span class="badge bg-dark">{{ status }}</span>
+                    {% endif %}
+                </td>
                 <td class="text-end text-nowrap">
-                    <button type="button" class="btn btn-secondary btn-sm"
+                    {% if status == 'Aguardando Morador' %}
+                    <button type="button" class="btn btn-secondary btn-sm" disabled>Sem cadastro</button>
+                    {% elif status == 'Pendente' %}
+                    <button type="button" class="btn btn-info btn-sm"
                             data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
                         Ver Detalhes
                     </button>
@@ -41,6 +63,12 @@
                           onsubmit="return confirm('Reprovar e remover este cadastro?');">
                         <button type="submit" class="btn btn-danger btn-sm">Reprovar</button>
                     </form>
+                    {% else %}
+                    <button type="button" class="btn btn-info btn-sm"
+                            data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                        Ver Detalhes
+                    </button>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}
@@ -48,7 +76,8 @@
     </table>
 </div>
 
-{% for unidade in unidades %}
+{% for item in mapa_bloco if item.unidade %}
+{% set unidade = item.unidade %}
 {% set pessoas = unidade.pessoas.all() %}
 {% set veiculos = unidade.veiculos.all() %}
 <div class="modal fade" id="modal-detalhes-{{ unidade.id }}" tabindex="-1"
@@ -57,7 +86,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2 class="modal-title h5" id="modal-detalhes-label-{{ unidade.id }}">
-                    Detalhes do cadastro — {{ current_user.bloco_responsavel }}, Apto {{ unidade.apartamento }}
+                    Detalhes — {{ current_user.bloco_responsavel }}, Apto {{ unidade.apartamento }}
                 </h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
@@ -72,7 +101,17 @@
                         <dt class="col-sm-3">Enviado em</dt>
                         <dd class="col-sm-9">{{ unidade.data_criacao.strftime('%d/%m/%Y às %H:%M') }}</dd>
                         <dt class="col-sm-3">Status</dt>
-                        <dd class="col-sm-9"><span class="badge bg-warning text-dark">{{ unidade.status }}</span></dd>
+                        <dd class="col-sm-9">
+                            {% if unidade.status == 'Pendente' %}
+                            <span class="badge bg-warning text-dark">Aprovação Pendente</span>
+                            {% elif unidade.status == 'Aprovada' %}
+                            <span class="badge bg-success">Aprovado</span>
+                            {% elif unidade.status == 'Registrada' %}
+                            <span class="badge bg-primary">Registrado no Sistema</span>
+                            {% else %}
+                            <span class="badge bg-dark">{{ unidade.status }}</span>
+                            {% endif %}
+                        </dd>
                     </dl>
                 </section>
 
@@ -105,16 +144,12 @@
                                     <td>
                                         {% if pessoa.data_nascimento %}
                                         {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
-                                        {% else %}
-                                        —
-                                        {% endif %}
+                                        {% else %}—{% endif %}
                                     </td>
                                     <td>
                                         {% if pessoa.is_responsavel %}
                                         <span class="badge bg-primary">Sim</span>
-                                        {% else %}
-                                        Não
-                                        {% endif %}
+                                        {% else %}Não{% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -156,6 +191,7 @@
             </div>
             <div class="modal-footer justify-content-between">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+                {% if unidade.status == 'Pendente' %}
                 <div>
                     <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
                         <button type="submit" class="btn btn-success">Aprovar</button>
@@ -165,13 +201,10 @@
                         <button type="submit" class="btn btn-danger">Reprovar</button>
                     </form>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
 </div>
 {% endfor %}
-
-{% else %}
-<div class="alert alert-info">Nenhum cadastro pendente para o seu bloco.</div>
-{% endif %}
 {% endblock %}

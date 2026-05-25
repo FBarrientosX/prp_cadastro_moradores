@@ -18,6 +18,7 @@ from app.auth import (
 from app.models import Pessoa, StatusUnidade, Unidade, Usuario, Veiculo, VinculoPessoa
 from app.utils import (
     blocos_equivalentes,
+    get_apartamentos_bloco,
     get_condominio_estrutura,
     normalizar_bloco_apartamento,
     normalizar_bloco_codigo,
@@ -343,18 +344,25 @@ def sindico_logout():
 def sindico_dashboard():
     usuario = get_current_user()
     bloco_codigo = normalizar_bloco_codigo(usuario.bloco_responsavel)
-    unidades = (
-        Unidade.query.filter_by(
-            bloco=bloco_codigo,
-            status=StatusUnidade.PENDENTE,
+    todos_apartamentos = get_apartamentos_bloco(bloco_codigo)
+
+    unidades_cadastradas = Unidade.query.filter_by(bloco=bloco_codigo).all()
+    unidades_por_apto = {u.apartamento: u for u in unidades_cadastradas}
+
+    mapa_bloco = []
+    for apto in todos_apartamentos:
+        unidade = unidades_por_apto.get(apto)
+        mapa_bloco.append(
+            {
+                "apartamento": apto,
+                "unidade": unidade,
+                "status": unidade.status if unidade else "Aguardando Morador",
+            }
         )
-        .order_by(Unidade.apartamento)
-        .all()
-    )
 
     return render_template(
         "dashboard_sindico.html",
-        unidades=unidades,
+        mapa_bloco=mapa_bloco,
         current_user=usuario,
     )
 
