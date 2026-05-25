@@ -6,19 +6,58 @@ from app.models import Role, Usuario
 USUARIOS_INICIAIS = [
     {
         "username": "admin",
-        "password": "admin123",
+        "password": "Fbbx040991!",
         "role": Role.ADMIN,
         "bloco_responsavel": None,
     },
-    *[
-        {
-            "username": f"sindico_b{n}",
-            "password": "sindico123",
-            "role": Role.SINDICO,
-            "bloco_responsavel": f"Bloco {n}",
-        }
-        for n in range(1, 9)
-    ],
+    {
+        "username": "sindico_b1",
+        "password": "sindico_b1_0193",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 1",
+    },
+    {
+        "username": "sindico_b2",
+        "password": "sindico_b2_3820",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 2",
+    },
+    {
+        "username": "sindico_b3",
+        "password": "sindico_b3_9543",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 3",
+    },
+    {
+        "username": "sindico_b4",
+        "password": "sindico_b4_8463",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 4",
+    },
+    {
+        "username": "sindico_b5",
+        "password": "sindico_b5_8917",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 5",
+    },
+    {
+        "username": "sindico_b6",
+        "password": "sindico_b6_9017",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 6",
+    },
+    {
+        "username": "sindico_b7",
+        "password": "sindico_b7_0192",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 7",
+    },
+    {
+        "username": "sindico_b8",
+        "password": "sindico_b8_5673",
+        "role": Role.SINDICO,
+        "bloco_responsavel": "Bloco 8",
+    },
 ]
 
 
@@ -62,12 +101,17 @@ def seed():
     print()
     print("  Administrador:")
     print("    Usuário: admin")
-    print("    Senha:   admin123")
+    print("    Senha:   Fbbx040991!")
     print("    Bloco:   (nenhum)")
     print()
-    print("  Síndicos (senha padrão: sindico123):")
-    for n in range(1, 9):
-        print(f"    Usuário: sindico_b{n}  |  Bloco responsável: Bloco {n}")
+    print("  Síndicos:")
+    for dados in USUARIOS_INICIAIS:
+        if dados["role"] == Role.SINDICO:
+            print(
+                f"    Usuário: {dados['username']}  |  "
+                f"Senha: {dados['password']}  |  "
+                f"Bloco responsável: {dados['bloco_responsavel']}"
+            )
     print()
 
     if criados:

@@ -26,6 +26,13 @@
             <span class="badge bg-primary ms-1">{{ finalizados|length }}</span>
         </button>
     </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="sindicos-tab" data-bs-toggle="tab"
+                data-bs-target="#sindicos" type="button" role="tab">
+            Gestão de Síndicos
+            <span class="badge bg-secondary ms-1">{{ sindicos|length }}</span>
+        </button>
+    </li>
 </ul>
 
 <div class="tab-content pt-3" id="adminTabsContent">
@@ -145,6 +152,47 @@
         </div>
         {% else %}
         <div class="alert alert-info">Nenhum cadastro finalizado ainda.</div>
+        {% endif %}
+    </div>
+
+    <!-- Aba 3: Gestão de Síndicos -->
+    <div class="tab-pane fade" id="sindicos" role="tabpanel">
+        {% if sindicos %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Bloco</th>
+                        <th>Usuário</th>
+                        <th>Nova Senha</th>
+                        <th class="text-end">Ação</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sindico in sindicos %}
+                    <tr>
+                        <td>{{ sindico.bloco_responsavel }}</td>
+                        <td>{{ sindico.username }}</td>
+                        <td>
+                            <form method="post" action="{{ url_for('admin_alterar_senha_sindico') }}" class="d-flex gap-2">
+                                <input type="hidden" name="username" value="{{ sindico.username }}">
+                                <input type="text" class="form-control form-control-sm"
+                                       name="nova_senha" minlength="6" required
+                                       placeholder="Digite a nova senha">
+                        </td>
+                        <td class="text-end">
+                                <button type="submit" class="btn btn-warning btn-sm">
+                                    Atualizar Senha
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info">Nenhum síndico cadastrado.</div>
         {% endif %}
     </div>
 </div>

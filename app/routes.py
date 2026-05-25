@@ -546,11 +546,17 @@ def admin_dashboard():
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
+    sindicos = (
+        Usuario.query.filter_by(role="sindico")
+        .order_by(Usuario.bloco_responsavel, Usuario.username)
+        .all()
+    )
 
     return render_template(
         "dashboard_admin.html",
         aguardando_registro=aguardando_registro,
         finalizados=finalizados,
+        sindicos=sindicos,
     )
 
 
@@ -666,6 +672,33 @@ def admin_atualizar_status_documentos(unidade_id):
 
 
 @admin_required
+def admin_alterar_senha_sindico():
+    username = request.form.get("username", "").strip()
+    nova_senha = request.form.get("nova_senha", "").strip()
+
+    if not username or not nova_senha:
+        flash("Informe o síndico e a nova senha.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    if len(nova_senha) < 6:
+        flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    sindico = Usuario.query.filter_by(username=username, role="sindico").first()
+    if not sindico:
+        flash("Síndico não encontrado.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    sindico.set_password(nova_senha)
+    db.session.commit()
+    flash(
+        f"Senha do síndico do {sindico.bloco_responsavel} atualizada com sucesso.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
 def admin_salvar_proprietario(unidade_id):
     unidade = Unidade.query.get_or_404(unidade_id)
     unidade.proprietario_nome = request.form.get("proprietario_nome", "").strip() or None
@@ -765,5 +798,11 @@ def init_app(app):
         "/admin/atualizar-status-documentos/<int:unidade_id>",
         "admin_atualizar_status_documentos",
         admin_atualizar_status_documentos,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/alterar-senha-sindico",
+        "admin_alterar_senha_sindico",
+        admin_alterar_senha_sindico,
         methods=["POST"],
     )
