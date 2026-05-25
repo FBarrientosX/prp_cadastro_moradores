@@ -243,7 +243,7 @@
                     {% elif unidade.documento_status == 'Pendente' %}
                     <div class="d-flex align-items-center gap-2 mb-2">
                         <span class="badge bg-warning text-dark">Aguardando validação</span>
-                        <a href="{{ url_for('static', filename=unidade.documento_path) }}"
+                        <a href="{{ unidade.documento_url }}"
                            target="_blank" class="btn btn-outline-primary btn-sm">
                             Abrir/Baixar documento
                         </a>

@@ -5,7 +5,6 @@ from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads", "documentos")
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 
 
@@ -18,7 +17,6 @@ def create_app(config=None):
             "DATABASE_URL", "sqlite:///condominio.db"
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        UPLOAD_FOLDER=UPLOAD_FOLDER,
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
     )
 
@@ -30,8 +28,6 @@ def create_app(config=None):
     from app import routes
 
     routes.init_app(app)
-
-    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
     with app.app_context():
         from app import models  # noqa: F401

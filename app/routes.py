@@ -1,8 +1,6 @@
-import os
 from datetime import datetime
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
-from werkzeug.utils import secure_filename
+from flask import flash, redirect, render_template, request, session, url_for
 
 from app import ALLOWED_EXTENSIONS, db
 from app.auth import (
@@ -121,20 +119,21 @@ def _extensao_permitida(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def _salvar_documento(unidade, arquivo):
+def _upload_documento_drive(unidade, arquivo):
     if not arquivo or not arquivo.filename:
         return
     if not _extensao_permitida(arquivo.filename):
         raise ValueError("Formato de arquivo inválido. Aceitos: PDF, PNG, JPG, JPEG.")
 
+    from app.drive_api import upload_to_drive
+
     extensao = arquivo.filename.rsplit(".", 1)[1].lower()
     nome_arquivo = f"doc_bloco{unidade.bloco}_apto{unidade.apartamento}.{extensao}"
-    nome_seguro = secure_filename(nome_arquivo)
 
-    caminho_completo = os.path.join(current_app.config["UPLOAD_FOLDER"], nome_seguro)
-    arquivo.save(caminho_completo)
+    resultado = upload_to_drive(arquivo.stream, nome_arquivo)
 
-    unidade.documento_path = f"uploads/documentos/{nome_seguro}"
+    unidade.documento_drive_id = resultado["id"]
+    unidade.documento_url = resultado["webViewLink"]
     unidade.documento_status = StatusDocumento.PENDENTE
 
 
@@ -328,7 +327,7 @@ def salvar_cadastro():
 
         arquivo = request.files.get("documento")
         if arquivo and arquivo.filename:
-            _salvar_documento(unidade, arquivo)
+            _upload_documento_drive(unidade, arquivo)
 
         db.session.commit()
 
