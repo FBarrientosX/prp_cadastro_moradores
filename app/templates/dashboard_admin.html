@@ -47,16 +47,24 @@
                 <tbody>
                     {% for unidade in aguardando_registro %}
                     {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
+                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set contrato_pendente = contrato_aplicavel and unidade.contrato_locacao_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set doc_pendente = documento_base_pendente or contrato_pendente %}
+                    {% set doc_ok = unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
                     <tr>
                         <td>Bloco {{ unidade.bloco }}</td>
                         <td>{{ unidade.apartamento }}</td>
                         <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
                         <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
                         <td>
-                            {% if unidade.documento_status == 'Entregue' %}
+                            {% if doc_ok %}
                             <span class="badge bg-success">Doc. OK</span>
-                            {% else %}
+                            {% elif doc_pendente %}
                             <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                            {% if contrato_aplicavel %}
+                            <span class="badge bg-info text-dark">Contrato Locação</span>
                             {% endif %}
                         </td>
                         <td class="text-end text-nowrap">
@@ -100,16 +108,24 @@
                 <tbody>
                     {% for unidade in finalizados %}
                     {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
+                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set contrato_pendente = contrato_aplicavel and unidade.contrato_locacao_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set doc_pendente = documento_base_pendente or contrato_pendente %}
+                    {% set doc_ok = unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
                     <tr>
                         <td>Bloco {{ unidade.bloco }}</td>
                         <td>{{ unidade.apartamento }}</td>
                         <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
                         <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
                         <td>
-                            {% if unidade.documento_status == 'Entregue' %}
+                            {% if doc_ok %}
                             <span class="badge bg-success">Doc. OK</span>
-                            {% else %}
+                            {% elif doc_pendente %}
                             <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                            {% if contrato_aplicavel %}
+                            <span class="badge bg-info text-dark">Contrato Locação</span>
                             {% endif %}
                         </td>
                         <td class="text-end text-nowrap">
@@ -138,6 +154,8 @@
 {% for unidade in todas_unidades %}
 {% set pessoas = unidade.pessoas.all() %}
 {% set veiculos = unidade.veiculos.all() %}
+{% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+{% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
 <div class="modal fade" id="modal-detalhes-{{ unidade.id }}" tabindex="-1"
      aria-labelledby="modal-detalhes-label-{{ unidade.id }}" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -182,6 +200,7 @@
                                     <th>Parentesco</th>
                                     <th>Telefone</th>
                                     <th>E-mail</th>
+                                    <th>Interfone</th>
                                     <th>Nascimento</th>
                                     <th>Responsável</th>
                                 </tr>
@@ -195,6 +214,13 @@
                                     <td>{{ pessoa.parentesco or '—' }}</td>
                                     <td>{{ pessoa.telefone }}</td>
                                     <td>{{ pessoa.email or '—' }}</td>
+                                    <td>
+                                        {% if pessoa.autoriza_interfone %}
+                                        <span class="badge bg-success">Interfone: Autorizado</span>
+                                        {% else %}
+                                        <span class="badge bg-danger">Interfone: NÃO Autorizado</span>
+                                        {% endif %}
+                                    </td>
                                     <td>
                                         {% if pessoa.data_nascimento %}
                                         {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
@@ -214,6 +240,39 @@
                     <p class="text-muted mb-0">Nenhuma pessoa cadastrada.</p>
                     {% endif %}
                 </section>
+
+                {% if contrato_aplicavel %}
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Dados do Proprietário</h3>
+                    <form method="post" action="{{ url_for('admin_salvar_proprietario', unidade_id=unidade.id) }}">
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label class="form-label">Nome do Proprietário</label>
+                                <input type="text" class="form-control" name="proprietario_nome"
+                                       value="{{ unidade.proprietario_nome or '' }}">
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">CPF do Proprietário</label>
+                                <input type="text" class="form-control" name="proprietario_cpf"
+                                       value="{{ unidade.proprietario_cpf or '' }}">
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">Telefone do Proprietário</label>
+                                <input type="text" class="form-control" name="proprietario_telefone"
+                                       value="{{ unidade.proprietario_telefone or '' }}">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">E-mail do Proprietário</label>
+                                <input type="email" class="form-control" name="proprietario_email"
+                                       value="{{ unidade.proprietario_email or '' }}">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary btn-sm mt-3">
+                            Salvar Dados do Proprietário
+                        </button>
+                    </form>
+                </section>
+                {% endif %}
 
                 <section class="mb-4">
                     <h3 class="h6 text-uppercase text-muted">Veículos ({{ veiculos|length }})</h3>
@@ -244,39 +303,40 @@
                 </section>
 
                 <section>
-                    <h3 class="h6 text-uppercase text-muted">Documento de Propriedade</h3>
-                    {% if unidade.documento_status == 'Nao Enviado' %}
-                    <div class="alert alert-secondary mb-0">
-                        Documento não enviado pelo morador.
-                        <small class="d-block mt-1 text-muted">Pendência física ativa. O admin pode validar manualmente caso o morador entregue em mãos.</small>
-                    </div>
-                    <form method="post" action="{{ url_for('admin_validar_documento', unidade_id=unidade.id) }}" class="mt-2">
-                        <button type="submit" class="btn btn-outline-success btn-sm"
-                                onclick="return confirm('Confirma que o documento foi recebido fisicamente?')">
-                            Marcar Documento como Entregue/Validado
+                    <h3 class="h6 text-uppercase text-muted">Validação Documental</h3>
+                    <form method="post" action="{{ url_for('admin_atualizar_status_documentos', unidade_id=unidade.id) }}">
+                        <div class="row g-3">
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">Comprovante de Propriedade</label>
+                                <select class="form-select" name="documento_status">
+                                    <option value="Pendente" {% if unidade.documento_status == 'Pendente' %}selected{% endif %}>Pendente</option>
+                                    <option value="Entregue" {% if unidade.documento_status == 'Entregue' %}selected{% endif %}>Entregue</option>
+                                </select>
+                            </div>
+                            {% if unidade.contrato_locacao_status != 'Nao Aplicavel' %}
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">Contrato de Locação</label>
+                                <select class="form-select" name="contrato_locacao_status">
+                                    <option value="Pendente" {% if unidade.contrato_locacao_status == 'Pendente' %}selected{% endif %}>Pendente</option>
+                                    <option value="Entregue" {% if unidade.contrato_locacao_status == 'Entregue' %}selected{% endif %}>Entregue</option>
+                                </select>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <button type="submit" class="btn btn-outline-success btn-sm mt-3">
+                            Salvar Status dos Documentos
                         </button>
                     </form>
-                    {% elif unidade.documento_status == 'Pendente' %}
-                    <div class="d-flex align-items-center gap-2 mb-2">
-                        <span class="badge bg-warning text-dark">Aguardando validação</span>
-                        <a href="{{ unidade.documento_url }}"
-                           target="_blank" class="btn btn-outline-primary btn-sm">
-                            Abrir/Baixar documento
-                        </a>
-                    </div>
-                    <form method="post" action="{{ url_for('admin_validar_documento', unidade_id=unidade.id) }}">
-                        <button type="submit" class="btn btn-success btn-sm">
-                            Marcar Documento como Entregue/Validado
-                        </button>
-                    </form>
-                    {% elif unidade.documento_status == 'Entregue' %}
-                    <span class="badge bg-success">Documento Validado pela Administração</span>
-                    {% endif %}
                 </section>
             </div>
             <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
                 <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
                 <div class="d-flex flex-wrap gap-2 w-100 w-sm-auto justify-content-end order-1">
+                    <form method="post" action="{{ url_for('admin_validar_documentos', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
+                        <button type="submit" class="btn btn-outline-success w-100">
+                            Validar Todos os Documentos
+                        </button>
+                    </form>
                     {% if unidade.status == 'Aprovada' %}
                     <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
                         <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>

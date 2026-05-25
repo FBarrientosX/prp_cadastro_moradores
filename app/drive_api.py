@@ -1,69 +1,73 @@
-"""Módulo de integração com a API do Google Drive via Service Account."""
+"""Integração com Google Drive via OAuth 2.0 (Client ID)."""
 
-import os
+import os.path
 
-from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-DRIVE_FOLDER_ID = os.environ.get(
-    "DRIVE_FOLDER_ID", "1__3z-vm9LB8_Cfv4j8E97fPtT-ec9Ezt"
-)
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+DRIVE_FOLDER_ID = "1__3z-vm9LB8_Cfv4j8E97fPtT-ec9Ezt"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CLIENT_SECRET_PATH = os.path.join(BASE_DIR, "client_secret.json")
+TOKEN_PATH = os.path.join(BASE_DIR, "token.json")
 
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-CREDENTIALS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "credentials.json"
-)
+def obter_credenciais():
+    creds = None
 
-MIME_TYPES = {
-    "pdf": "application/pdf",
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-}
+    if os.path.exists(TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                creds = None
+
+        if not creds or not creds.valid:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRET_PATH,
+                SCOPES,
+            )
+            creds = flow.run_local_server(port=8080)
+
+        with open(TOKEN_PATH, "w", encoding="utf-8") as token_file:
+            token_file.write(creds.to_json())
+
+    return creds
 
 
 def _get_drive_service():
-    credentials = service_account.Credentials.from_service_account_file(
-        CREDENTIALS_PATH, scopes=SCOPES
-    )
-    return build("drive", "v3", credentials=credentials)
+    creds = obter_credenciais()
+    return build("drive", "v3", credentials=creds)
 
 
 def upload_to_drive(file_stream, filename):
-    """Faz upload de arquivo para a pasta do condomínio no Google Drive.
-
-    Args:
-        file_stream: Stream do arquivo (ex: request.files['documento'])
-        filename: Nome do arquivo a ser salvo no Drive
-
-    Returns:
-        dict com 'id' e 'webViewLink' do arquivo criado no Drive
-    """
-    extensao = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
-    mime_type = MIME_TYPES.get(extensao, "application/octet-stream")
-
     service = _get_drive_service()
 
-    file_metadata = {
-        "name": filename,
-        "parents": [DRIVE_FOLDER_ID],
-    }
+    stream = file_stream.stream if hasattr(file_stream, "stream") else file_stream
+    if hasattr(stream, "seek"):
+        stream.seek(0)
 
-    media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=True)
+    media = MediaIoBaseUpload(
+        stream,
+        mimetype=getattr(file_stream, "content_type", "application/octet-stream"),
+        resumable=True,
+    )
+    file_metadata = {"name": filename, "parents": [DRIVE_FOLDER_ID]}
 
     arquivo = (
         service.files()
-        .create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webViewLink",
-        )
+        .create(body=file_metadata, media_body=media, fields="id,webViewLink")
         .execute()
     )
 
-    return {
-        "id": arquivo.get("id"),
-        "webViewLink": arquivo.get("webViewLink"),
-    }
+    file_id = arquivo.get("id")
+    user_permission = {"type": "anyone", "role": "reader"}
+    service.permissions().create(fileId=file_id, body=user_permission).execute()
+
+    return {"id": file_id, "webViewLink": arquivo.get("webViewLink")}
