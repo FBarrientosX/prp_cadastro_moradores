@@ -95,8 +95,11 @@
                                 </div>
                                 <div class="col-12 col-sm-4">
                                     <label class="form-label">Data de nascimento</label>
-                                    <input type="date" class="form-control" name="pessoa_{{ i }}_data_nascimento"
+                                    <input type="date" class="form-control campo-data-nascimento"
+                                           autocomplete="bday" data-no-datepicker="true"
+                                           name="pessoa_{{ i }}_data_nascimento"
                                            value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
+                                    <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
                                 </div>
                                 <div class="col-12 col-sm-6">
                                     <label class="form-label">Parentesco</label>
@@ -337,6 +340,30 @@
         return idade;
     }
 
+    function configurarCampoDataNascimento(campoData) {
+        if (!campoData) {
+            return;
+        }
+
+        // Mantem o seletor nativo HTML5 (iOS/Android).
+        campoData.type = "date";
+        campoData.setAttribute("autocomplete", "bday");
+        campoData.setAttribute("data-no-datepicker", "true");
+
+        // Faixa util para selecao rapida de ano no seletor nativo.
+        const hoje = new Date();
+        const maxData = hoje.toISOString().split("T")[0];
+        const minData = new Date(
+            hoje.getFullYear() - 120,
+            hoje.getMonth(),
+            hoje.getDate(),
+        )
+            .toISOString()
+            .split("T")[0];
+        campoData.max = maxData;
+        campoData.min = minData;
+    }
+
     function atualizarObrigatoriedadePessoa(elementoPessoa) {
         const campoData = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
         const campoCpf = elementoPessoa.querySelector('input[name$="_cpf"]');
@@ -407,6 +434,7 @@
         const vinculo = elementoPessoa.querySelector('select[name$="_vinculo"]');
         const responsavel = elementoPessoa.querySelector('input[name$="_is_responsavel"]');
         const dataNascimento = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
+        configurarCampoDataNascimento(dataNascimento);
         if (vinculo) {
             vinculo.addEventListener("change", toggleContratoLocacao);
         }
@@ -464,7 +492,10 @@
                 </div>
                 <div class="col-12 col-sm-4">
                     <label class="form-label">Data de nascimento</label>
-                    <input type="date" class="form-control" name="pessoa_${pessoaIndex}_data_nascimento">
+                    <input type="date" class="form-control campo-data-nascimento"
+                           autocomplete="bday" data-no-datepicker="true"
+                           name="pessoa_${pessoaIndex}_data_nascimento">
+                    <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
                 </div>
                 <div class="col-12 col-sm-6">
                     <label class="form-label">Parentesco</label>
