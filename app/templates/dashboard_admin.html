@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard do Administrador{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Painel do Administrador</h1>
+        <p class="text-muted mb-0">Gerenciamento de todas as unidades do condomínio</p>
+    </div>
+    <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+</div>
+
+<ul class="nav nav-tabs" id="adminTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="aguardando-tab" data-bs-toggle="tab"
+                data-bs-target="#aguardando" type="button" role="tab">
+            Aguardando Registro
+            <span class="badge bg-warning text-dark ms-1">{{ aguardando_registro|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="finalizados-tab" data-bs-toggle="tab"
+                data-bs-target="#finalizados" type="button" role="tab">
+            Cadastros Finalizados
+            <span class="badge bg-primary ms-1">{{ finalizados|length }}</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content pt-3" id="adminTabsContent">
+    <!-- Aba 1: Aguardando Registro -->
+    <div class="tab-pane fade show active" id="aguardando" role="tabpanel">
+        {% if aguardando_registro %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Bloco</th>
+                        <th>Apartamento</th>
+                        <th>Responsável</th>
+                        <th>Aprovado em</th>
+                        <th>Documento</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for unidade in aguardando_registro %}
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    <tr>
+                        <td>Bloco {{ unidade.bloco }}</td>
+                        <td>{{ unidade.apartamento }}</td>
+                        <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
+                        <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if unidade.documento_status == 'Entregue' %}
+                            <span class="badge bg-success">Doc. OK</span>
+                            {% else %}
+                            <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-info btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                                Ver Detalhes
+                            </button>
+                            <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-success btn-sm">Marcar como Registrado</button>
+                            </form>
+                            <button type="button" class="btn btn-danger btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
+                                Resetar Senha
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info">Nenhuma unidade aprovada aguardando registro.</div>
+        {% endif %}
+    </div>
+
+    <!-- Aba 2: Cadastros Finalizados -->
+    <div class="tab-pane fade" id="finalizados" role="tabpanel">
+        {% if finalizados %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Bloco</th>
+                        <th>Apartamento</th>
+                        <th>Responsável</th>
+                        <th>Registrado em</th>
+                        <th>Documento</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for unidade in finalizados %}
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    <tr>
+                        <td>Bloco {{ unidade.bloco }}</td>
+                        <td>{{ unidade.apartamento }}</td>
+                        <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
+                        <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if unidade.documento_status == 'Entregue' %}
+                            <span class="badge bg-success">Doc. OK</span>
+                            {% else %}
+                            <span class="badge bg-danger">Doc. Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-info btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                                Ver Detalhes
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
+                                Resetar Senha
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info">Nenhum cadastro finalizado ainda.</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Modais de Detalhes -->
+{% set todas_unidades = aguardando_registro + finalizados %}
+{% for unidade in todas_unidades %}
+{% set pessoas = unidade.pessoas.all() %}
+{% set veiculos = unidade.veiculos.all() %}
+<div class="modal fade" id="modal-detalhes-{{ unidade.id }}" tabindex="-1"
+     aria-labelledby="modal-detalhes-label-{{ unidade.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modal-detalhes-label-{{ unidade.id }}">
+                    Detalhes — Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Unidade</h3>
+                    <dl class="row mb-0">
+                        <dt class="col-sm-3">Bloco</dt>
+                        <dd class="col-sm-9">Bloco {{ unidade.bloco }}</dd>
+                        <dt class="col-sm-3">Apartamento</dt>
+                        <dd class="col-sm-9">{{ unidade.apartamento }}</dd>
+                        <dt class="col-sm-3">Cadastrado em</dt>
+                        <dd class="col-sm-9">{{ unidade.data_criacao.strftime('%d/%m/%Y às %H:%M') }}</dd>
+                        <dt class="col-sm-3">Status</dt>
+                        <dd class="col-sm-9">
+                            {% if unidade.status == 'Aprovada' %}
+                            <span class="badge bg-success">Aprovado</span>
+                            {% elif unidade.status == 'Registrada' %}
+                            <span class="badge bg-primary">Registrado no Sistema</span>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Moradores ({{ pessoas|length }})</h3>
+                    {% if pessoas %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>CPF</th>
+                                    <th>Vínculo</th>
+                                    <th>Parentesco</th>
+                                    <th>Telefone</th>
+                                    <th>E-mail</th>
+                                    <th>Nascimento</th>
+                                    <th>Responsável</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for pessoa in pessoas %}
+                                <tr>
+                                    <td>{{ pessoa.nome_completo }}</td>
+                                    <td>{{ pessoa.cpf }}</td>
+                                    <td>{{ pessoa.vinculo }}</td>
+                                    <td>{{ pessoa.parentesco or '—' }}</td>
+                                    <td>{{ pessoa.telefone }}</td>
+                                    <td>{{ pessoa.email or '—' }}</td>
+                                    <td>
+                                        {% if pessoa.data_nascimento %}
+                                        {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
+                                        {% else %}—{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if pessoa.is_responsavel %}
+                                        <span class="badge bg-primary">Sim</span>
+                                        {% else %}Não{% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhuma pessoa cadastrada.</p>
+                    {% endif %}
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Veículos ({{ veiculos|length }})</h3>
+                    {% if veiculos %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Placa</th>
+                                    <th>Marca</th>
+                                    <th>Cor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for veiculo in veiculos %}
+                                <tr>
+                                    <td>{{ veiculo.placa }}</td>
+                                    <td>{{ veiculo.marca }}</td>
+                                    <td>{{ veiculo.cor }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhum veículo cadastrado.</p>
+                    {% endif %}
+                </section>
+
+                <section>
+                    <h3 class="h6 text-uppercase text-muted">Documento de Propriedade</h3>
+                    {% if unidade.documento_status == 'Nao Enviado' %}
+                    <div class="alert alert-secondary mb-0">
+                        Documento não enviado pelo morador.
+                        <small class="d-block mt-1 text-muted">Pendência física ativa. O admin pode validar manualmente caso o morador entregue em mãos.</small>
+                    </div>
+                    <form method="post" action="{{ url_for('admin_validar_documento', unidade_id=unidade.id) }}" class="mt-2">
+                        <button type="submit" class="btn btn-outline-success btn-sm"
+                                onclick="return confirm('Confirma que o documento foi recebido fisicamente?')">
+                            Marcar Documento como Entregue/Validado
+                        </button>
+                    </form>
+                    {% elif unidade.documento_status == 'Pendente' %}
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <span class="badge bg-warning text-dark">Aguardando validação</span>
+                        <a href="{{ unidade.documento_url }}"
+                           target="_blank" class="btn btn-outline-primary btn-sm">
+                            Abrir/Baixar documento
+                        </a>
+                    </div>
+                    <form method="post" action="{{ url_for('admin_validar_documento', unidade_id=unidade.id) }}">
+                        <button type="submit" class="btn btn-success btn-sm">
+                            Marcar Documento como Entregue/Validado
+                        </button>
+                    </form>
+                    {% elif unidade.documento_status == 'Entregue' %}
+                    <span class="badge bg-success">Documento Validado pela Administração</span>
+                    {% endif %}
+                </section>
+            </div>
+            <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
+                <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
+                <div class="d-flex flex-wrap gap-2 w-100 w-sm-auto justify-content-end order-1">
+                    {% if unidade.status == 'Aprovada' %}
+                    <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
+                        <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>
+                    </form>
+                    {% endif %}
+                    <button type="button" class="btn btn-danger flex-fill flex-sm-grow-0"
+                            data-bs-dismiss="modal"
+                            onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modal-senha-{{ unidade.id }}')).show(), 300)">
+                        Resetar Senha
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Resetar Senha -->
+<div class="modal fade" id="modal-senha-{{ unidade.id }}" tabindex="-1"
+     aria-labelledby="modal-senha-label-{{ unidade.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_resetar_senha', unidade_id=unidade.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modal-senha-label-{{ unidade.id }}">
+                        Resetar Senha — Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">
+                        Defina uma nova senha para esta unidade. Se deixar em branco, uma senha aleatória será gerada automaticamente.
+                    </p>
+                    <div class="mb-3">
+                        <label for="nova_senha_{{ unidade.id }}" class="form-label">Nova senha</label>
+                        <input type="text" class="form-control" id="nova_senha_{{ unidade.id }}"
+                               name="nova_senha" placeholder="Mínimo 6 caracteres (opcional)" minlength="6">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-danger">Confirmar Reset</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

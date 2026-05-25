@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-1">
+                    {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
+                </h1>
+                <p class="text-muted mb-4">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
+
+                <form method="post" action="{{ url_for('salvar_cadastro') }}" enctype="multipart/form-data">
+
+                    <!-- SENHA -->
+                    <section class="mb-4 p-3 border rounded bg-light">
+                        <h2 class="h5 mb-1">Senha da Unidade</h2>
+                        {% if modo == 'cadastro' %}
+                        <p class="text-muted small mb-3">
+                            Crie uma senha segura (mínimo 6 caracteres). Ela será necessária para
+                            <strong>futuras atualizações</strong> de cadastro desta unidade.
+                            Guarde-a em local seguro.
+                        </p>
+                        {% else %}
+                        <p class="text-muted small mb-3">
+                            Deixe em branco para manter a senha atual. Preencha apenas se desejar alterá-la.
+                        </p>
+                        {% endif %}
+                        <div class="row">
+                            <div class="col-12 col-sm-6 mb-3">
+                                <label class="form-label" for="senha">Senha</label>
+                                <input type="password" class="form-control" id="senha" name="senha"
+                                       {% if modo == 'cadastro' %}required minlength="6"{% endif %}
+                                       autocomplete="new-password">
+                            </div>
+                            <div class="col-12 col-sm-6 mb-3">
+                                <label class="form-label" for="confirmar_senha">Confirmar senha</label>
+                                <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
+                                       {% if modo == 'cadastro' %}required minlength="6"{% endif %}
+                                       autocomplete="new-password">
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- MORADORES -->
+                    <h2 class="h5">Moradores</h2>
+                    <div id="pessoas-container">
+                        {% set lista_pessoas = pessoas if pessoas else [None] %}
+                        {% for pessoa in lista_pessoas %}
+                        <div class="border rounded p-3 mb-3 pessoa-item">
+                            {% set i = loop.index0 %}
+                            <div class="row g-3">
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Nome completo</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_nome" required
+                                           value="{{ pessoa.nome_completo if pessoa else '' }}">
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <label class="form-label">CPF</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_cpf" required
+                                           value="{{ pessoa.cpf if pessoa else '' }}">
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <label class="form-label">Vínculo</label>
+                                    <select class="form-select" name="pessoa_{{ i }}_vinculo" required>
+                                        {% for vinculo in vinculos %}
+                                        <option value="{{ vinculo }}"
+                                            {% if pessoa and pessoa.vinculo == vinculo %}selected{% endif %}>
+                                            {{ vinculo }}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-12 col-sm-4">
+                                    <label class="form-label">Telefone</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_telefone" required
+                                           value="{{ pessoa.telefone if pessoa else '' }}">
+                                </div>
+                                <div class="col-12 col-sm-4">
+                                    <label class="form-label">E-mail</label>
+                                    <input type="email" class="form-control" name="pessoa_{{ i }}_email"
+                                           value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
+                                </div>
+                                <div class="col-12 col-sm-4">
+                                    <label class="form-label">Data de nascimento</label>
+                                    <input type="date" class="form-control" name="pessoa_{{ i }}_data_nascimento"
+                                           value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
+                                </div>
+                                <div class="col-12 col-sm-6">
+                                    <label class="form-label">Parentesco</label>
+                                    <input class="form-control" name="pessoa_{{ i }}_parentesco"
+                                           value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
+                                </div>
+                                <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="pessoa_{{ i }}_is_responsavel"
+                                               id="resp_{{ i }}"
+                                               {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
+                                        <label class="form-check-label" for="resp_{{ i }}">Responsável pela unidade</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-pessoa">
+                        + Adicionar morador
+                    </button>
+
+                    <!-- VEÍCULOS -->
+                    <h2 class="h5">Veículos</h2>
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="possui-veiculo"
+                                   {% if veiculos %}checked{% endif %}>
+                            <label class="form-check-label" for="possui-veiculo">
+                                Possui veículo estacionado no condomínio?
+                            </label>
+                        </div>
+                    </div>
+                    <div id="veiculos-section" {% if not veiculos %}style="display: none;"{% endif %}>
+                        <div id="veiculos-container">
+                            {% if veiculos %}
+                                {% for veiculo in veiculos %}
+                                <div class="border rounded p-3 mb-3 veiculo-item">
+                                    {% set i = loop.index0 %}
+                                    <div class="row g-3">
+                                        <div class="col-12 col-sm-4">
+                                            <label class="form-label">Placa</label>
+                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_placa" required
+                                                   value="{{ veiculo.placa }}">
+                                        </div>
+                                        <div class="col-6 col-sm-4">
+                                            <label class="form-label">Marca</label>
+                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_marca" required
+                                                   value="{{ veiculo.marca }}">
+                                        </div>
+                                        <div class="col-6 col-sm-4">
+                                            <label class="form-label">Cor</label>
+                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_cor" required
+                                                   value="{{ veiculo.cor }}">
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="border rounded p-3 mb-3 veiculo-item">
+                                    <div class="row g-3">
+                                        <div class="col-12 col-sm-4">
+                                            <label class="form-label">Placa</label>
+                                            <input class="form-control veiculo-field" name="veiculo_0_placa">
+                                        </div>
+                                        <div class="col-6 col-sm-4">
+                                            <label class="form-label">Marca</label>
+                                            <input class="form-control veiculo-field" name="veiculo_0_marca">
+                                        </div>
+                                        <div class="col-6 col-sm-4">
+                                            <label class="form-label">Cor</label>
+                                            <input class="form-control veiculo-field" name="veiculo_0_cor">
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-veiculo">
+                            + Adicionar veículo
+                        </button>
+                    </div>
+
+                    <!-- DOCUMENTO -->
+                    <section class="mb-4 p-3 border rounded">
+                        <h2 class="h5 mb-1">Comprovante de Propriedade</h2>
+                        <p class="text-muted small mb-3">
+                            Envie o RGI, Contrato de Compra e Venda ou documento equivalente.
+                            Formatos aceitos: PDF, PNG, JPG. Máximo 10 MB.
+                        </p>
+                        <div class="alert alert-info py-2 small mb-3">
+                            <strong>Aviso:</strong> O envio digital é opcional neste momento, mas a
+                            entrega do documento é <strong>obrigatória para a regularização</strong> da unidade.
+                            Caso não envie agora, poderá entregá-lo fisicamente na administração.
+                        </div>
+                        <input type="file" class="form-control" name="documento"
+                               accept=".pdf,.png,.jpg,.jpeg">
+                        {% if unidade and unidade.documento_url %}
+                        <div class="form-text text-success mt-2">
+                            Documento já enviado anteriormente.
+                            <a href="{{ unidade.documento_url }}" target="_blank">Ver documento atual</a>.
+                            Envie um novo arquivo para substituí-lo.
+                        </div>
+                        {% endif %}
+                    </section>
+
+                    <button type="submit" class="btn btn-primary btn-lg w-100">
+                        {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const vinculosOptions = {{ vinculos | tojson }};
+    let pessoaIndex = document.querySelectorAll(".pessoa-item").length;
+    let veiculoIndex = document.querySelectorAll(".veiculo-item").length;
+
+    // === Toggle de Veículos ===
+    const possuiVeiculoCheck = document.getElementById("possui-veiculo");
+    const veiculosSection = document.getElementById("veiculos-section");
+
+    function toggleVeiculos() {
+        const visivel = possuiVeiculoCheck.checked;
+        veiculosSection.style.display = visivel ? "" : "none";
+
+        veiculosSection.querySelectorAll(".veiculo-field").forEach((input) => {
+            if (visivel) {
+                input.setAttribute("required", "");
+            } else {
+                input.removeAttribute("required");
+                input.value = "";
+            }
+        });
+    }
+
+    possuiVeiculoCheck.addEventListener("change", toggleVeiculos);
+    toggleVeiculos();
+
+    // === Adicionar Morador ===
+    document.getElementById("add-pessoa").addEventListener("click", () => {
+        const container = document.getElementById("pessoas-container");
+        const vinculoOptions = vinculosOptions.map((v) => `<option value="${v}">${v}</option>`).join("");
+        const wrapper = document.createElement("div");
+        wrapper.className = "border rounded p-3 mb-3 pessoa-item";
+        wrapper.innerHTML = `
+            <div class="row g-3">
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Nome completo</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_nome" required>
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label">CPF</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_cpf" required>
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label">Vínculo</label>
+                    <select class="form-select" name="pessoa_${pessoaIndex}_vinculo" required>${vinculoOptions}</select>
+                </div>
+                <div class="col-12 col-sm-4">
+                    <label class="form-label">Telefone</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_telefone" required>
+                </div>
+                <div class="col-12 col-sm-4">
+                    <label class="form-label">E-mail</label>
+                    <input type="email" class="form-control" name="pessoa_${pessoaIndex}_email">
+                </div>
+                <div class="col-12 col-sm-4">
+                    <label class="form-label">Data de nascimento</label>
+                    <input type="date" class="form-control" name="pessoa_${pessoaIndex}_data_nascimento">
+                </div>
+                <div class="col-12 col-sm-6">
+                    <label class="form-label">Parentesco</label>
+                    <input class="form-control" name="pessoa_${pessoaIndex}_parentesco">
+                </div>
+                <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="pessoa_${pessoaIndex}_is_responsavel" id="resp_${pessoaIndex}">
+                        <label class="form-check-label" for="resp_${pessoaIndex}">Responsável pela unidade</label>
+                    </div>
+                </div>
+            </div>`;
+        container.appendChild(wrapper);
+        pessoaIndex += 1;
+    });
+
+    // === Adicionar Veículo ===
+    document.getElementById("add-veiculo").addEventListener("click", () => {
+        const container = document.getElementById("veiculos-container");
+        const wrapper = document.createElement("div");
+        wrapper.className = "border rounded p-3 mb-3 veiculo-item";
+        wrapper.innerHTML = `
+            <div class="row g-3">
+                <div class="col-12 col-sm-4">
+                    <label class="form-label">Placa</label>
+                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_placa" required>
+                </div>
+                <div class="col-6 col-sm-4">
+                    <label class="form-label">Marca</label>
+                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_marca" required>
+                </div>
+                <div class="col-6 col-sm-4">
+                    <label class="form-label">Cor</label>
+                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_cor" required>
+                </div>
+            </div>`;
+        container.appendChild(wrapper);
+        veiculoIndex += 1;
+    });
+</script>
+{% endblock %}

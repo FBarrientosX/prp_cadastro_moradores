@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard do Síndico{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Mapa do Bloco</h1>
+        <p class="text-muted mb-0">{{ current_user.bloco_responsavel }} — {{ mapa_bloco|length }} unidades</p>
+    </div>
+    <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Apartamento</th>
+                <th>Responsável</th>
+                <th>Status</th>
+                <th class="text-end">Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in mapa_bloco %}
+            {% set unidade = item.unidade %}
+            {% set status = item.status %}
+            <tr>
+                <td>{{ item.apartamento }}</td>
+                <td>
+                    {% if unidade %}
+                    {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
+                    {{ responsavel.nome_completo if responsavel else '—' }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td>
+                    {% if status == 'Aguardando Morador' %}
+                    <span class="badge bg-secondary">Aguardando Morador</span>
+                    {% elif status == 'Pendente' %}
+                    <span class="badge bg-warning text-dark">Aprovação Pendente</span>
+                    {% elif status == 'Aprovada' %}
+                    <span class="badge bg-success">Aprovado</span>
+                    {% elif status == 'Registrada' %}
+                    <span class="badge bg-primary">Registrado no Sistema</span>
+                    {% else %}
+                    <span class="badge bg-dark">{{ status }}</span>
+                    {% endif %}
+                    {% if unidade and status != 'Aguardando Morador' %}
+                        {% if unidade.documento_status == 'Entregue' %}
+                        <span class="badge bg-success">Doc. OK</span>
+                        {% else %}
+                        <span class="badge bg-danger">Doc. Pendente</span>
+                        {% endif %}
+                    {% endif %}
+                </td>
+                <td class="text-end text-nowrap">
+                    {% if status == 'Aguardando Morador' %}
+                    <button type="button" class="btn btn-secondary btn-sm" disabled>Sem cadastro</button>
+                    {% elif status == 'Pendente' %}
+                    <button type="button" class="btn btn-info btn-sm"
+                            data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                        Ver Detalhes
+                    </button>
+                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
+                        <button type="submit" class="btn btn-success btn-sm">Aprovar</button>
+                    </form>
+                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="d-inline"
+                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
+                        <button type="submit" class="btn btn-danger btn-sm">Reprovar</button>
+                    </form>
+                    {% else %}
+                    <button type="button" class="btn btn-info btn-sm"
+                            data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
+                        Ver Detalhes
+                    </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% for item in mapa_bloco if item.unidade %}
+{% set unidade = item.unidade %}
+{% set pessoas = unidade.pessoas.all() %}
+{% set veiculos = unidade.veiculos.all() %}
+<div class="modal fade" id="modal-detalhes-{{ unidade.id }}" tabindex="-1"
+     aria-labelledby="modal-detalhes-label-{{ unidade.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modal-detalhes-label-{{ unidade.id }}">
+                    Detalhes — {{ current_user.bloco_responsavel }}, Apto {{ unidade.apartamento }}
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Unidade</h3>
+                    <dl class="row mb-0">
+                        <dt class="col-sm-3">Bloco</dt>
+                        <dd class="col-sm-9">{{ current_user.bloco_responsavel }}</dd>
+                        <dt class="col-sm-3">Apartamento</dt>
+                        <dd class="col-sm-9">{{ unidade.apartamento }}</dd>
+                        <dt class="col-sm-3">Enviado em</dt>
+                        <dd class="col-sm-9">{{ unidade.data_criacao.strftime('%d/%m/%Y às %H:%M') }}</dd>
+                        <dt class="col-sm-3">Status</dt>
+                        <dd class="col-sm-9">
+                            {% if unidade.status == 'Pendente' %}
+                            <span class="badge bg-warning text-dark">Aprovação Pendente</span>
+                            {% elif unidade.status == 'Aprovada' %}
+                            <span class="badge bg-success">Aprovado</span>
+                            {% elif unidade.status == 'Registrada' %}
+                            <span class="badge bg-primary">Registrado no Sistema</span>
+                            {% else %}
+                            <span class="badge bg-dark">{{ unidade.status }}</span>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Moradores ({{ pessoas|length }})</h3>
+                    {% if pessoas %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>CPF</th>
+                                    <th>Vínculo</th>
+                                    <th>Parentesco</th>
+                                    <th>Telefone</th>
+                                    <th>E-mail</th>
+                                    <th>Nascimento</th>
+                                    <th>Responsável</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for pessoa in pessoas %}
+                                <tr>
+                                    <td>{{ pessoa.nome_completo }}</td>
+                                    <td>{{ pessoa.cpf }}</td>
+                                    <td>{{ pessoa.vinculo }}</td>
+                                    <td>{{ pessoa.parentesco or '—' }}</td>
+                                    <td>{{ pessoa.telefone }}</td>
+                                    <td>{{ pessoa.email or '—' }}</td>
+                                    <td>
+                                        {% if pessoa.data_nascimento %}
+                                        {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
+                                        {% else %}—{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if pessoa.is_responsavel %}
+                                        <span class="badge bg-primary">Sim</span>
+                                        {% else %}Não{% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhuma pessoa cadastrada.</p>
+                    {% endif %}
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Veículos ({{ veiculos|length }})</h3>
+                    {% if veiculos %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Placa</th>
+                                    <th>Marca</th>
+                                    <th>Cor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for veiculo in veiculos %}
+                                <tr>
+                                    <td>{{ veiculo.placa }}</td>
+                                    <td>{{ veiculo.marca }}</td>
+                                    <td>{{ veiculo.cor }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhum veículo cadastrado.</p>
+                    {% endif %}
+                </section>
+
+                <section>
+                    <h3 class="h6 text-uppercase text-muted">Documento de Propriedade</h3>
+                    {% if unidade.documento_status == 'Nao Enviado' %}
+                    <div class="alert alert-secondary mb-0">
+                        Documento não enviado pelo morador.
+                        <small class="d-block mt-1 text-muted">Aprovação permitida, mas pendência física ativa.</small>
+                    </div>
+                    {% elif unidade.documento_status == 'Pendente' %}
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-warning text-dark">Aguardando validação</span>
+                        <a href="{{ unidade.documento_url }}"
+                           target="_blank" class="btn btn-outline-primary btn-sm">
+                            Abrir/Baixar documento
+                        </a>
+                    </div>
+                    {% elif unidade.documento_status == 'Entregue' %}
+                    <span class="badge bg-success">Documento Validado pela Administração</span>
+                    {% endif %}
+                </section>
+            </div>
+            <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
+                <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
+                {% if unidade.status == 'Pendente' %}
+                <div class="d-flex gap-2 w-100 w-sm-auto justify-content-end order-1">
+                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
+                        <button type="submit" class="btn btn-success w-100">Aprovar</button>
+                    </form>
+                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0"
+                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
+                        <button type="submit" class="btn btn-danger w-100">Reprovar</button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
