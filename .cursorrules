@@ -1,93 +1,360 @@
-INSTRUÇÕES PARA O CURSOR: Sistema de Cadastro de Condomínio
-Contexto do Projeto:
-Desenvolver uma aplicação web em Python (Flask) com banco de dados SQLite (usando SQLAlchemy) para gerenciar a coleta e atualização de dados de moradores de um condomínio. O foco é escalabilidade, simplicidade de manutenção e segurança. Não utilizaremos blueprint complexos no início, mas o código deve ser modular (rotas, modelos e formulários separados). O frontend deve usar Bootstrap 5 via CDN.
+INSTRUÇÕES PARA O CURSOR: Sistema de Cadastro de Moradores do Condomínio (estado real atual)
 
-Regras de Negócio e Acesso (CRÍTICO):
-Existem 3 níveis de acesso no sistema:
+Objetivo deste arquivo:
+- Servir como referência operacional fiel ao que já está implementado no código atual.
+- Evitar suposições de funcionalidades futuras.
+- Guiar alterações mantendo consistência com regras de negócio, rotas, modelos e templates existentes.
 
-Administrador Geral: Vê todos os blocos e todos os status. É o único com permissão para registrar os dados no sistema oficial e o ÚNICO que pode resetar/gerar uma nova senha para uma "Unidade".
+==================================================
+1) CONTEXTO E STACK TECNOLÓGICO
+==================================================
 
-Síndico de Bloco: Vê e atua APENAS nas unidades pertencentes ao seu bloco designado. Sua função é aprovar ou reprovar cadastros "Pendentes".
+Backend:
+- Python + Flask em arquitetura simples (sem Blueprints no estado atual).
+- SQLAlchemy (`flask_sqlalchemy`) para persistência.
+- Banco padrão: SQLite (`sqlite:///condominio.db`) definido em `app/__init__.py`.
 
-Unidade (Morador): A autenticação do morador é baseada na combinação Bloco + Apartamento + Senha.
+Segurança e autenticação:
+- Hash de senha com `werkzeug.security` (`generate_password_hash` e `check_password_hash`).
+- Sessão Flask para autenticação de usuário (admin/síndico) e de unidade (morador).
+- Decorators de acesso: `admin_required`, `sindico_required`, `unidade_required`.
 
-Regra de Primeiro Cadastro: Se a Unidade não tem cadastro aprovado, o formulário é público. O morador preenche os dados e cria uma senha no momento do envio. O cadastro fica "Pendente".
+Frontend:
+- Templates Jinja2 + Bootstrap 5.3.3 via CDN.
+- JavaScript nativo (sem framework) para dinâmica de formulários, regra de menoridade, exibição de contrato e seleção de bloco/apartamento.
 
-Regra de Bloqueio: Se uma unidade já está "Pendente" ou "Aprovada/Registrada", qualquer nova tentativa de acesso àquela unidade na área pública exigirá a senha. Se a senha estiver errada, a requisição é barrada no backend e frontend.
+Configurações e limites:
+- `SECRET_KEY` via variável de ambiente, com fallback local de desenvolvimento.
+- `SQLALCHEMY_TRACK_MODIFICATIONS=False`.
+- `SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 15}}`.
+- `MAX_CONTENT_LENGTH=10MB`.
+- `ALLOWED_EXTENSIONS={"pdf","png","jpg","jpeg"}` definido, porém sem fluxo ativo de upload em rotas hoje.
 
-1. Estrutura de Banco de Dados (SQLAlchemy Models):
+Migração de esquema em runtime (implementada):
+- Em `create_app`, após `db.create_all()`, há verificações de colunas em `unidades` e `pessoas`.
+- Se colunas novas não existirem, são adicionadas via `ALTER TABLE`:
+  - `unidades`: `contrato_locacao_drive_id`, `contrato_locacao_url`, `contrato_locacao_status`,
+    `proprietario_nome`, `proprietario_cpf`, `proprietario_telefone`, `proprietario_email`.
+  - `pessoas`: `autoriza_interfone`.
 
-Modelo Usuario (Admin e Síndicos):
+Integrações existentes no código:
+- Arquivo `app/drive_api.py` com integração Google Drive OAuth 2.0 e upload (`upload_to_drive`).
+- No estado atual, não há rota chamando `upload_to_drive`; a integração está pronta no código, mas não conectada aos fluxos HTTP.
 
-id (PK), username, password_hash, role (String: 'admin' ou 'sindico'), bloco_responsavel (String, null se admin).
+==================================================
+2) REGRAS DE NEGÓCIO E ACESSO (ADMIN, SÍNDICO, UNIDADE)
+==================================================
 
-Modelo Unidade (Autenticação do Apartamento):
+Papéis de usuário:
+- `admin`: acesso total ao painel administrativo.
+- `sindico`: acesso apenas ao bloco sob responsabilidade (`bloco_responsavel`).
+- Unidade/morador: autenticação por `bloco + apartamento + senha da unidade`.
 
-id (PK), bloco (String), apartamento (String), password_hash (String), status (String: 'Pendente', 'Aprovada', 'Registrada'), data_criacao, data_alteracao.
+Status de unidade (`StatusUnidade`):
+- `Pendente`
+- `Aprovada`
+- `Registrada`
+- `Reprovada` (existente como constante; no fluxo atual de reprovação o registro é removido)
 
-Modelo Pessoa (Os moradores vinculados à Unidade):
+Status documental (`StatusDocumento`):
+- `Pendente`
+- `Entregue`
+- `Nao Enviado`
+- `Nao Aplicavel`
 
-id (PK), unidade_id (FK), nome_completo, cpf, vinculo (Proprietário, Locatário, Morador), telefone, email, parentesco, data_nascimento (opcional), is_responsavel (Boolean).
+Regras centrais da unidade:
+- Se a unidade não existe: pode iniciar cadastro público.
+- Se unidade reprovada: é removida e liberada para novo cadastro.
+- Se unidade já existe em `Pendente`, `Aprovada` ou `Registrada`: exige senha para continuar.
+- Senha da unidade:
+  - Criação obrigatória no cadastro inicial, confirmação obrigatória, mínimo 6 caracteres.
+  - Em atualização, troca é opcional; se informada, deve confirmar e manter mínimo 6.
+- Atualização de dados por unidade aprovada/registrada:
+  - Ao salvar alterações, status volta para `Pendente` para nova análise do síndico.
 
-Modelo Veiculo (Opcional, vinculado à Unidade):
+Regras de pessoas/moradores:
+- Deve existir ao menos 1 pessoa cadastrada.
+- Deve existir ao menos 1 pessoa marcada como responsável.
+- `vinculo` aceito apenas entre:
+  - `Proprietário`
+  - `Locatário`
+  - `Morador`
+- Regra por menoridade (baseada em data de nascimento):
+  - CPF deixa de ser obrigatório para menor de 18.
+  - Consentimento de interfone é ocultado/desabilitado para menor.
+- Para responsável maior de idade:
+  - Telefone obrigatório.
+  - E-mail obrigatório.
 
-id (PK), unidade_id (FK), placa, marca, cor.
+Regra de locação/proprietário:
+- Se existir responsável com vínculo `Locatário`:
+  - Contrato de locação torna-se aplicável.
+  - `contrato_locacao_status` vai/permanece em `Pendente` (salvo quando já estiver em outro estado manualmente atualizado).
+  - Formulário exibe seção de dados básicos do proprietário.
+- Se não houver responsável locatário:
+  - Contrato volta para `Nao Aplicavel`.
+  - IDs/URLs de contrato e dados de proprietário são limpos.
 
-2. Fluxos da Aplicação (Views/Routes):
+Permissões do síndico:
+- Pode visualizar mapa completo do próprio bloco (incluindo unidades sem cadastro).
+- Pode aprovar/reprovar apenas unidades do seu bloco (validação por equivalência de bloco).
+- Reprovação atual remove o cadastro da unidade (delete).
 
-Fluxo do Morador (Rotas Públicas):
+Permissões do admin:
+- Visualiza unidades `Aprovada` e `Registrada` no painel administrativo.
+- Pode marcar unidade aprovada como `Registrada`.
+- Pode resetar senha de unidade (manual ou aleatória).
+- Pode excluir cadastro completo da unidade.
+- Pode gerenciar status de documentação.
+- Pode alterar senha de síndicos.
+- Pode salvar/complementar dados de proprietário.
 
-GET /: Tela inicial. O usuário seleciona o Bloco e digita o número do Apartamento.
+==================================================
+3) ESTRUTURA EXATA DE BLOCOS E APARTAMENTOS
+==================================================
 
-POST /verificar-unidade: Verifica no banco.
+Fonte da verdade: `app/utils.py`.
 
-Se não existe: Redireciona para GET /cadastro-inicial.
+Mapa de blocos e andares (`BLOCOS_ANDARES`):
+- Bloco `1`: 7 andares
+- Bloco `2`: 7 andares
+- Bloco `3`: 8 andares
+- Bloco `4`: 8 andares
+- Bloco `5`: 8 andares
+- Bloco `6`: 8 andares
+- Bloco `7`: 8 andares
+- Bloco `8`: 8 andares
 
-Se status == 'Pendente': Exibe aviso "Aguardando aprovação do Síndico".
+Apartamentos por andar:
+- `APARTAMENTOS_POR_ANDAR = 8`
+- Regra matemática: para cada `andar`, apartamentos são `andar*100 + 1..8`.
+- Exemplo:
+  - 1º andar: `101` a `108`
+  - 2º andar: `201` a `208`
+  - ...
 
-Se status == 'Aprovada' ou 'Registrada': Exibe campo de senha. Se a senha bater, redireciona para GET /atualizar-dados.
+Normalização e validação:
+- `normalizar_bloco_codigo`: converte entradas como `Bloco 1` para `1`.
+- `normalizar_bloco_apartamento`: padroniza bloco e apartamento para string.
+- `validar_unidade`: garante bloco válido e apartamento pertencente ao bloco.
+- `blocos_equivalentes`: compara blocos já normalizados.
 
-POST /salvar-cadastro: Salva a Unidade (com a senha em hash), as Pessoas e Veiculos.
+Estrutura enviada ao frontend:
+- `get_condominio_estrutura()` retorna `bloco -> andar -> [apartamentos]`.
+- É usada na tela inicial para preencher selects de bloco/apartamento.
 
-Fluxo do Síndico (/sindico):
+==================================================
+4) MODELOS DE BANCO DE DADOS ATUAIS
+==================================================
 
-Login exigido.
+Modelo `Usuario` (`usuarios`):
+- `id` (PK)
+- `username` (único, indexado, obrigatório)
+- `password_hash` (obrigatório)
+- `role` (obrigatório: `admin` ou `sindico`)
+- `bloco_responsavel` (opcional; usado pelo síndico)
+- Métodos/propriedades:
+  - `set_password`, `check_password`
+  - `is_admin`, `is_sindico`
 
-Dashboard lista apenas as Unidades do bloco_responsavel do síndico logado que estão com status 'Pendente'.
+Modelo `Unidade` (`unidades`):
+- Constraint única: (`bloco`, `apartamento`)
+- Campos:
+  - `id` (PK)
+  - `bloco` (indexado, obrigatório)
+  - `apartamento` (indexado, obrigatório)
+  - `password_hash` (obrigatório)
+  - `status` (obrigatório, default `Pendente`)
+  - `data_criacao` (default UTC atual)
+  - `data_alteracao` (default UTC atual, atualiza no update)
+  - `documento_drive_id` (opcional)
+  - `documento_url` (opcional)
+  - `documento_status` (obrigatório, default `Nao Enviado`)
+  - `contrato_locacao_drive_id` (opcional)
+  - `contrato_locacao_url` (opcional)
+  - `contrato_locacao_status` (obrigatório, default `Nao Aplicavel`)
+  - `proprietario_nome` (opcional)
+  - `proprietario_cpf` (opcional)
+  - `proprietario_telefone` (opcional)
+  - `proprietario_email` (opcional)
+- Relacionamentos:
+  - `pessoas` (1:N, cascade `all, delete-orphan`, lazy dynamic)
+  - `veiculos` (1:N, cascade `all, delete-orphan`, lazy dynamic)
+- Auxiliares:
+  - `identificador = "{bloco} - {apartamento}"`
+  - `set_password`, `check_password`
 
-Botão "Aprovar": Muda status da unidade para 'Aprovada'.
+Modelo `Pessoa` (`pessoas`):
+- `id` (PK)
+- `unidade_id` (FK `unidades.id`, indexado, obrigatório)
+- `nome_completo` (obrigatório)
+- `cpf` (obrigatório no schema; fluxo de negócio permite vazio em menores)
+- `vinculo` (obrigatório)
+- `telefone` (obrigatório no schema; fluxo permite vazio em alguns casos)
+- `email` (opcional)
+- `parentesco` (opcional)
+- `data_nascimento` (opcional)
+- `is_responsavel` (boolean, obrigatório, default False)
+- `autoriza_interfone` (boolean, obrigatório, default False)
 
-Botão "Reprovar": Deleta os dados pendentes para liberar a unidade para novo cadastro (ou muda status para 'Reprovado' com motivo).
+Modelo `Veiculo` (`veiculos`):
+- `id` (PK)
+- `unidade_id` (FK `unidades.id`, indexado, obrigatório)
+- `placa` (obrigatório)
+- `marca` (obrigatório)
+- `cor` (obrigatório)
 
-Fluxo do Admin (/admin):
+==================================================
+5) FLUXOS DE TELAS E ROTAS (PÚBLICAS E PROTEGIDAS)
+==================================================
 
-Login exigido.
+Rotas públicas (sem login):
+- `GET /`:
+  - Renderiza `index.html`.
+  - Entrega estrutura do condomínio para preenchimento dinâmico de bloco/apto.
+- `POST /verificar-unidade`:
+  - Normaliza/valida bloco e apartamento.
+  - Se unidade não existe: salva em sessão e redireciona para `/cadastro-inicial`.
+  - Se unidade reprovada: remove unidade, libera novo cadastro e redireciona para `/cadastro-inicial`.
+  - Se unidade existe e status exige senha: solicita senha e valida hash.
+  - Se status `Pendente`: informa que aguarda aprovação.
+  - Se autenticada e status permitido: registra login da unidade e redireciona para `/atualizar-dados`.
+- `GET /cadastro-inicial`:
+  - Exige bloco/apto válidos em sessão.
+  - Impede acesso se unidade já existir.
+  - Renderiza `cadastro_morador.html` em `modo="cadastro"`.
+- `POST /salvar-cadastro`:
+  - Suporta cadastro inicial e atualização (quando unidade está logada via sessão).
+  - Faz parse e validação de pessoas/veículos.
+  - Cria unidade nova (`Pendente`, `documento_status=Pendente`) ou atualiza existente.
+  - Recalcula regras de contrato/proprietário conforme perfil do responsável.
+  - Em atualização, status volta para `Pendente`.
+  - Commit com feedback via flash.
 
-Dashboard lista todas as Unidades 'Aprovadas' de todos os blocos.
+Rotas de unidade autenticada:
+- `GET /atualizar-dados` (protegida por `@unidade_required`):
+  - Permitida somente se status da unidade for `Aprovada` ou `Registrada`.
+  - Renderiza `cadastro_morador.html` em `modo="atualizacao"` com dados atuais.
 
-Botão "Marcar como Registrado no Sistema": Muda status para 'Registrada'.
+Rotas do síndico:
+- `GET|POST /sindico/login`
+- `GET /sindico/logout`
+- `GET /sindico` (protegida por `@sindico_required`):
+  - Renderiza `dashboard_sindico.html` com mapa completo do bloco.
+  - Mostra status por apartamento (inclusive "Aguardando Morador").
+- `POST /sindico/aprovar/<unidade_id>` (protegida):
+  - Requer unidade do bloco do síndico e status `Pendente`.
+  - Atualiza para `Aprovada`.
+- `POST /sindico/reprovar/<unidade_id>` (protegida):
+  - Requer unidade do bloco do síndico e status `Pendente`.
+  - Remove unidade do banco.
 
-Feature Especial: Busca por Bloco/Apto e botão "Resetar Senha" (Gera uma nova senha aleatória ou permite o admin digitar uma nova, salvando o hash).
+Rotas do admin:
+- `GET|POST /admin/login`
+- `GET /admin/logout`
+- `GET /admin` (protegida por `@admin_required`):
+  - Renderiza `dashboard_admin.html` com abas:
+    - Aguardando Registro (`Aprovada`)
+    - Cadastros Finalizados (`Registrada`)
+    - Gestão de Síndicos
+- `POST /admin/registrar/<unidade_id>`:
+  - Apenas para unidade `Aprovada`.
+  - Atualiza para `Registrada`.
+- `POST /admin/resetar-senha/<unidade_id>`:
+  - Usa senha informada ou gera aleatória.
+  - Exige mínimo 6 caracteres.
+- `POST /admin/excluir-unidade/<unidade_id>`:
+  - Exclui cadastro completo da unidade.
+- `POST /admin/validar-documento/<unidade_id>`
+- `POST /admin/validar-contrato-locacao/<unidade_id>`
+- `POST /admin/validar-documentos/<unidade_id>`
+- `POST /admin/atualizar-status-documentos/<unidade_id>`:
+  - Permite `Pendente` ou `Entregue`.
+  - Mantém `Nao Aplicavel` quando contrato não se aplica.
+- `POST /admin/alterar-senha-sindico`:
+  - Atualiza senha de síndico (mínimo 6).
+- `POST /admin/salvar-proprietario/<unidade_id>`:
+  - Salva dados complementares de proprietário.
 
-3. Estrutura de Diretórios Sugerida:
+Comportamento das telas/templates:
+- `base.html`: layout, navbar, flashes, Bootstrap CDN.
+- `index.html`: seleção dinâmica bloco/apto + solicitação condicional de senha.
+- `cadastro_morador.html`:
+  - Cadastro/atualização de moradores, veículos, senha da unidade.
+  - Regras de menoridade e obrigatoriedades no JS.
+  - Exibição condicional de contrato de locação e dados de proprietário.
+- `dashboard_sindico.html`:
+  - Tabela de mapa do bloco com badges de status/documentação.
+  - Modais de detalhes por unidade.
+  - Botões aprovar/reprovar em cadastros pendentes.
+- `dashboard_admin.html`:
+  - Painel por abas.
+  - Modais com detalhes, validação documental, reset de senha e exclusão total.
+  - Gestão de senha de síndicos.
+- `login.html`: tela de login compartilhada para admin e síndico.
 
-Plaintext
+==================================================
+6) ESTRUTURA DE DIRETÓRIOS (ESTADO ATUAL)
+==================================================
+
+Projeto atual mapeado:
+
 /app
-  ├── /static (CSS, JS)
-  ├── /templates
-  │     ├── base.html (Layout com Bootstrap)
-  │     ├── index.html (Seleção de bloco/apto)
-  │     ├── cadastro_morador.html (Formulário complexo)
-  │     ├── login.html
-  │     ├── dashboard_sindico.html
-  │     └── dashboard_admin.html
-  ├── models.py (SQLAlchemy)
-  ├── routes.py (Flask routes)
-  ├── auth.py (Lógica de login e hash de senhas)
-  └── __init__.py (App factory)
-run.py
-requirements.txt
+  __init__.py                 # app factory, config, create_all e migrações de colunas via ALTER TABLE
+  auth.py                     # sessão, decorators, login/logout, senha aleatória
+  models.py                   # modelos SQLAlchemy e enums de status/papel/vínculo
+  routes.py                   # todas as rotas HTTP atuais
+  utils.py                    # regra matemática blocos/andares/apartamentos + validações
+  drive_api.py                # integração Google Drive OAuth/upload (não conectada às rotas atuais)
+  /templates
+    base.html
+    index.html
+    cadastro_morador.html
+    login.html
+    dashboard_sindico.html
+    dashboard_admin.html
 
+/.cursorrules                # este arquivo
+/.gitignore                  # ignora cache Python, instance, .env, credenciais e *.db
+/README.md                   # descrição curta
 
-Instrução de Execução para o Cursor:
-"Por favor, inicie criando os arquivos requirements.txt, app/__init__.py, e app/models.py seguindo estritamente as regras de negócio e a estrutura de banco de dados descritas acima. Use as melhores práticas de Flask e SQLAlchemy."
+Observações de estrutura real:
+- Não há `run.py` no estado atual.
+- Não há `requirements.txt` no estado atual.
+- Diretório `instance/` é ignorado no git; banco SQLite local pode existir fora de versionamento.
+
+==================================================
+7) DIRETRIZES PARA FUTURAS ALTERAÇÕES NO CÓDIGO
+==================================================
+
+Diretriz geral:
+- Alterar somente comportamentos já existentes ou extensões coerentes com o fluxo atual.
+- Não introduzir arquitetura nova (ex.: Blueprint) sem solicitação explícita.
+
+Ao mexer em regras de bloco/apartamento:
+- Sempre atualizar `app/utils.py` como fonte única da regra.
+- Manter consistência entre backend (`validar_unidade`) e frontend (`condominio_estrutura`).
+
+Ao mexer em autenticação/autorização:
+- Preservar decorators e verificações de role.
+- Preservar segregação de acesso por bloco para síndico.
+- Preservar fluxo de unidade com senha e sessão dedicada.
+
+Ao mexer em cadastro de moradores:
+- Respeitar exigência de ao menos 1 pessoa e 1 responsável.
+- Manter validações de menoridade e obrigatoriedade de contato do responsável maior.
+- Manter vínculo entre responsável locatário e obrigatoriedade lógica de contrato de locação.
+
+Ao mexer em dashboard/admin:
+- Manter ações críticas protegidas por `@admin_required`.
+- Em exclusão de unidade, preservar comportamento de remoção completa.
+- Em status documental, respeitar `Nao Aplicavel` quando contrato não se aplica.
+
+Ao mexer em banco:
+- Se novos campos forem adicionados em tabelas existentes, espelhar estratégia atual de compatibilidade
+  em `app/__init__.py` (verificações de coluna + `ALTER TABLE` quando necessário).
+
+Ao mexer em templates:
+- Manter Bootstrap via CDN e padrão visual atual.
+- Manter mensagens de feedback via `flash`.
+- Evitar quebrar IDs/names usados por parser backend (`pessoa_{i}_...`, `veiculo_{i}_...`).

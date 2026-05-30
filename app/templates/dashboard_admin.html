@@ -395,6 +395,14 @@
                             onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modal-senha-{{ unidade.id }}')).show(), 300)">
                         Resetar Senha
                     </button>
+                    <form method="post"
+                          action="{{ url_for('admin_excluir_unidade', unidade_id=unidade.id) }}"
+                          class="flex-fill flex-sm-grow-0"
+                          onsubmit="return confirm('ATENÇÃO: Tem certeza que deseja apagar TODOS os moradores, veículos, documentos e a senha desta unidade? Esta ação não pode ser desfeita.')">
+                        <button type="submit" class="btn btn-danger w-100">
+                            Excluir/Resetar Cadastro
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
