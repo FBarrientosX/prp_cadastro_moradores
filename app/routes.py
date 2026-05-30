@@ -596,6 +596,20 @@ def admin_resetar_senha(unidade_id):
 
 
 @admin_required
+def admin_excluir_unidade(unidade_id):
+    unidade = Unidade.query.get_or_404(unidade_id)
+
+    db.session.delete(unidade)
+    db.session.commit()
+
+    flash(
+        "Cadastro da unidade apagado com sucesso. Ela está livre para novo registro.",
+        "success",
+    )
+    return redirect(url_for("admin_dashboard"))
+
+
+@admin_required
 def admin_validar_documento(unidade_id):
     unidade = Unidade.query.get_or_404(unidade_id)
     unidade.documento_status = StatusDocumento.ENTREGUE
@@ -768,6 +782,12 @@ def init_app(app):
         "/admin/resetar-senha/<int:unidade_id>",
         "admin_resetar_senha",
         admin_resetar_senha,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/excluir-unidade/<int:unidade_id>",
+        "admin_excluir_unidade",
+        admin_excluir_unidade,
         methods=["POST"],
     )
     app.add_url_rule(
