@@ -16,7 +16,12 @@ from app.auth import (
     sindico_required,
     unidade_required,
 )
+from app.email_service import (
+    enviar_email_validacao_parcial,
+    enviar_email_validacao_sucesso,
+)
 from app.models import (
+    LogAuditoria,
     Pessoa,
     StatusDocumento,
     StatusUnidade,
@@ -47,6 +52,45 @@ def _contexto_index(**extra):
 
 def _buscar_unidade(bloco, apartamento):
     return Unidade.query.filter_by(bloco=bloco, apartamento=apartamento).first()
+
+
+def _registrar_auditoria(usuario, mensagem):
+    db.session.add(
+        LogAuditoria(
+            usuario_id=usuario.id,
+            mensagem=mensagem,
+        )
+    )
+
+
+def _adicionar_notificacao_sindico(unidade, nome_morador, motivo):
+    nova_linha = (
+        f"O cadastro do morador {nome_morador} foi reprovado e removido pelo síndico "
+        f"responsável. Motivo informado: {motivo}.\n"
+        "Por favor, procure o síndico do seu bloco para maiores orientações e "
+        "esclarecimentos antes de tentar cadastrar esta pessoa novamente."
+    )
+    if unidade.notificacao_sindico:
+        unidade.notificacao_sindico = f"{unidade.notificacao_sindico}\n\n{nova_linha}"
+    else:
+        unidade.notificacao_sindico = nova_linha
+
+
+def _emails_unicos(pessoas):
+    emails = []
+    vistos = set()
+    for pessoa in pessoas:
+        if not pessoa.email:
+            continue
+        email = pessoa.email.strip()
+        if not email:
+            continue
+        chave = email.lower()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        emails.append(email)
+    return emails
 
 
 def _parse_data(data_str):
@@ -299,6 +343,14 @@ def atualizar_dados(unidade):
     )
 
 
+@unidade_required
+def limpar_notificacao_sindico(unidade):
+    unidade.notificacao_sindico = None
+    db.session.commit()
+    flash("Aviso do síndico removido da sua tela.", "success")
+    return redirect(url_for("atualizar_dados"))
+
+
 def salvar_cadastro():
     bloco = session.get("cadastro_bloco")
     apartamento = session.get("cadastro_apartamento")
@@ -507,6 +559,179 @@ def sindico_reprovar(unidade_id):
     db.session.delete(unidade)
     db.session.commit()
     flash(f"Cadastro da unidade {unidade.identificador} reprovado e removido.", "info")
+    return redirect(url_for("sindico_dashboard"))
+
+
+@sindico_required
+def sindico_reprovar_pessoa(pessoa_id):
+    usuario = get_current_user()
+    pessoa = Pessoa.query.get_or_404(pessoa_id)
+    unidade = pessoa.unidade
+
+    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+        flash("Você não tem permissão para esta unidade.", "danger")
+        return redirect(url_for("sindico_dashboard"))
+
+    if unidade.status != StatusUnidade.PENDENTE:
+        flash("Apenas moradores de cadastros pendentes podem ser reprovados.", "warning")
+        return redirect(url_for("sindico_dashboard"))
+
+    motivos_validos = {
+        "Não é morador da unidade",
+        "Dados incorretos ou incompletos",
+        "Outros",
+    }
+    motivo = request.form.get("motivo", "").strip()
+    if motivo not in motivos_validos:
+        flash("Informe o motivo da reprovação do morador.", "danger")
+        return redirect(url_for("sindico_dashboard"))
+
+    responsavel = unidade.pessoas.filter_by(is_responsavel=True).first()
+    email_responsavel = responsavel.email.strip() if responsavel and responsavel.email else None
+    nome_pessoa = pessoa.nome_completo
+    identificador_unidade = unidade.identificador
+
+    _adicionar_notificacao_sindico(unidade, nome_pessoa, motivo)
+    db.session.delete(pessoa)
+    _registrar_auditoria(
+        usuario,
+        f"O síndico {usuario.username} reprovou/excluiu o morador "
+        f"'{nome_pessoa}' da unidade '{identificador_unidade}'. Motivo: {motivo}",
+    )
+    db.session.commit()
+
+    if email_responsavel:
+        try:
+            enviar_email_reprovacao(
+                email_destino=email_responsavel,
+                bloco=unidade.bloco,
+                apartamento=unidade.apartamento,
+                nome_morador=nome_pessoa,
+                motivo=motivo,
+            )
+        except Exception:
+            traceback.print_exc()
+            flash(
+                "Morador removido, mas não foi possível enviar o e-mail de notificação.",
+                "warning",
+            )
+    else:
+        flash(
+            "Morador removido, mas a unidade não possui e-mail de responsável cadastrado.",
+            "warning",
+        )
+
+    flash(
+        f"Morador '{nome_pessoa}' reprovado e removido do cadastro da unidade "
+        f"{identificador_unidade}.",
+        "success",
+    )
+    return redirect(url_for("sindico_dashboard"))
+
+
+@sindico_required
+def sindico_validar_unidade(unidade_id):
+    usuario = get_current_user()
+    unidade = Unidade.query.get_or_404(unidade_id)
+
+    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+        flash("Você não tem permissão para esta unidade.", "danger")
+        return redirect(url_for("sindico_dashboard"))
+
+    if unidade.status != StatusUnidade.PENDENTE:
+        flash("Apenas cadastros pendentes podem ser validados.", "warning")
+        return redirect(url_for("sindico_dashboard"))
+
+    motivos_validos = {
+        "Não é morador da unidade",
+        "Dados incorretos ou incompletos",
+        "Outros",
+    }
+    ids_reprovados = set()
+    for valor in request.form.getlist("pessoas_reprovadas"):
+        try:
+            ids_reprovados.add(int(valor))
+        except ValueError:
+            continue
+
+    moradores = unidade.pessoas.all()
+    moradores_aprovados = []
+    moradores_reprovados = []
+
+    for pessoa in moradores:
+        if pessoa.id not in ids_reprovados:
+            moradores_aprovados.append(pessoa)
+            continue
+
+        motivo = request.form.get(f"motivo_pessoa_{pessoa.id}", "").strip()
+        if motivo not in motivos_validos:
+            flash(
+                f"Informe um motivo válido para o morador {pessoa.nome_completo}.",
+                "danger",
+            )
+            return redirect(url_for("sindico_dashboard"))
+
+        moradores_reprovados.append({"nome": pessoa.nome_completo, "motivo": motivo})
+        _adicionar_notificacao_sindico(unidade, pessoa.nome_completo, motivo)
+        _registrar_auditoria(
+            usuario,
+            f"O síndico {usuario.username} reprovou/excluiu o morador "
+            f"'{pessoa.nome_completo}' da unidade '{unidade.identificador}'. "
+            f"Motivo: {motivo}",
+        )
+        db.session.delete(pessoa)
+
+    emails_aprovados = _emails_unicos(moradores_aprovados)
+    unidade_identificador = unidade.identificador
+    bloco = unidade.bloco
+    apartamento = unidade.apartamento
+
+    if moradores_aprovados:
+        unidade.status = StatusUnidade.APROVADA
+        _registrar_auditoria(
+            usuario,
+            f"O síndico {usuario.username} finalizou a validação da unidade "
+            f"'{unidade_identificador}' com {len(moradores_aprovados)} morador(es) aprovado(s).",
+        )
+    else:
+        db.session.delete(unidade)
+        _registrar_auditoria(
+            usuario,
+            f"O síndico {usuario.username} reprovou todos os moradores da unidade "
+            f"'{unidade_identificador}'. Cadastro removido e unidade voltou para "
+            "Aguardando Morador.",
+        )
+
+    db.session.commit()
+
+    if emails_aprovados:
+        for email in emails_aprovados:
+            try:
+                if moradores_reprovados:
+                    enviar_email_validacao_parcial(email, moradores_reprovados)
+                else:
+                    enviar_email_validacao_sucesso(email, bloco, apartamento)
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    f"Validação salva, mas houve falha no envio de e-mail para {email}.",
+                    "warning",
+                )
+
+    if not moradores_reprovados:
+        flash(f"Unidade {unidade_identificador} validada com sucesso.", "success")
+    elif moradores_aprovados:
+        flash(
+            f"Validação concluída na unidade {unidade_identificador} com reprovação parcial.",
+            "warning",
+        )
+    else:
+        flash(
+            f"Todos os moradores da unidade {unidade_identificador} foram reprovados. "
+            "A unidade voltou para Aguardando Morador.",
+            "info",
+        )
+
     return redirect(url_for("sindico_dashboard"))
 
 
@@ -742,6 +967,12 @@ def init_app(app):
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
     )
     app.add_url_rule(
+        "/limpar-notificacao-sindico",
+        "limpar_notificacao_sindico",
+        limpar_notificacao_sindico,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/salvar-cadastro", "salvar_cadastro", salvar_cadastro, methods=["POST"]
     )
 
@@ -764,6 +995,18 @@ def init_app(app):
         "/sindico/reprovar/<int:unidade_id>",
         "sindico_reprovar",
         sindico_reprovar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/sindico/reprovar-pessoa/<int:pessoa_id>",
+        "sindico_reprovar_pessoa",
+        sindico_reprovar_pessoa,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/sindico/validar-unidade/<int:unidade_id>",
+        "sindico_validar_unidade",
+        sindico_validar_unidade,
         methods=["POST"],
     )
 

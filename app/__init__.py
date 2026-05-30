@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import os
 
 from flask import Flask
@@ -7,6 +8,8 @@ from sqlalchemy import inspect, text
 db = SQLAlchemy()
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
+
+load_dotenv()
 
 
 def _garantir_colunas_unidades():
@@ -46,6 +49,8 @@ def _garantir_colunas_unidades():
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN proprietario_email VARCHAR(120)"
         )
+    if "notificacao_sindico" not in colunas:
+        alteracoes.append("ALTER TABLE unidades ADD COLUMN notificacao_sindico TEXT")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))

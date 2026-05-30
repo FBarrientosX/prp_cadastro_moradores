@@ -71,13 +71,6 @@
                             data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
                         Ver Detalhes
                     </button>
-                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="d-inline">
-                        <button type="submit" class="btn btn-success btn-sm">Aprovar</button>
-                    </form>
-                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="d-inline"
-                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
-                        <button type="submit" class="btn btn-danger btn-sm">Reprovar</button>
-                    </form>
                     {% else %}
                     <button type="button" class="btn btn-info btn-sm"
                             data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
@@ -108,6 +101,11 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
+                {% if unidade.status == 'Pendente' %}
+                <form method="post"
+                      action="{{ url_for('sindico_validar_unidade', unidade_id=unidade.id) }}"
+                      onsubmit="return confirm('Confirmar finalização da validação desta unidade?');">
+                {% endif %}
                 <section class="mb-4">
                     <h3 class="h6 text-uppercase text-muted">Unidade</h3>
                     <dl class="row mb-0">
@@ -148,6 +146,10 @@
                                     <th>Interfone</th>
                                     <th>Nascimento</th>
                                     <th>Responsável</th>
+                                    {% if unidade.status == 'Pendente' %}
+                                    <th class="text-center">Recusar</th>
+                                    <th>Motivo</th>
+                                    {% endif %}
                                 </tr>
                             </thead>
                             <tbody>
@@ -176,6 +178,26 @@
                                         <span class="badge bg-primary">Sim</span>
                                         {% else %}Não{% endif %}
                                     </td>
+                                    {% if unidade.status == 'Pendente' %}
+                                    <td class="text-center">
+                                        <input type="checkbox"
+                                               class="form-check-input js-recusa-checkbox"
+                                               name="pessoas_reprovadas"
+                                               value="{{ pessoa.id }}"
+                                               data-target="motivo_pessoa_{{ pessoa.id }}">
+                                    </td>
+                                    <td>
+                                            <select name="motivo_pessoa_{{ pessoa.id }}"
+                                                   id="motivo_pessoa_{{ pessoa.id }}"
+                                                   class="form-select form-select-sm"
+                                                   disabled>
+                                                <option value="" selected disabled>Selecione um motivo...</option>
+                                                <option value="Não é morador da unidade">Não é morador da unidade</option>
+                                                <option value="Dados incorretos ou incompletos">Dados incorretos ou incompletos</option>
+                                                <option value="Outros">Outros</option>
+                                            </select>
+                                    </td>
+                                    {% endif %}
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -253,19 +275,42 @@
             <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
                 <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
                 {% if unidade.status == 'Pendente' %}
-                <div class="d-flex gap-2 w-100 w-sm-auto justify-content-end order-1">
-                    <form method="post" action="{{ url_for('sindico_aprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
-                        <button type="submit" class="btn btn-success w-100">Aprovar</button>
-                    </form>
-                    <form method="post" action="{{ url_for('sindico_reprovar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0"
-                          onsubmit="return confirm('Reprovar e remover este cadastro?');">
-                        <button type="submit" class="btn btn-danger w-100">Reprovar</button>
-                    </form>
-                </div>
+                <button type="submit" class="btn btn-primary w-100 w-sm-auto order-1">
+                    Finalizar Validação da Unidade
+                </button>
                 {% endif %}
             </div>
+            {% if unidade.status == 'Pendente' %}
+            </form>
+            {% endif %}
         </div>
     </div>
 </div>
 {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll(".js-recusa-checkbox").forEach((checkbox) => {
+        const targetId = checkbox.dataset.target;
+        const selectMotivo = document.getElementById(targetId);
+        if (!selectMotivo) {
+            return;
+        }
+
+        const atualizarEstadoMotivo = () => {
+            if (checkbox.checked) {
+                selectMotivo.disabled = false;
+                selectMotivo.required = true;
+            } else {
+                selectMotivo.disabled = true;
+                selectMotivo.required = false;
+                selectMotivo.value = "";
+            }
+        };
+
+        checkbox.addEventListener("change", atualizarEstadoMotivo);
+        atualizarEstadoMotivo();
+    });
+</script>
 {% endblock %}
