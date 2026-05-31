@@ -11,6 +11,20 @@
     <div class="col-lg-10">
         <div class="card shadow-sm">
             <div class="card-body p-4">
+                {% if modo == 'atualizacao' and unidade and unidade.notificacao_sindico %}
+                <div class="alert alert-warning d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-start">
+                    <div>
+                        <strong>&#9888; Atenção:</strong> o síndico deixou uma observação sobre seu cadastro:
+                        <div class="mt-2 mb-0" style="white-space: pre-line;">{{ unidade.notificacao_sindico }}</div>
+                    </div>
+                    <form method="post" action="{{ url_for('limpar_notificacao_sindico') }}">
+                        <button type="submit" class="btn btn-sm btn-outline-dark">
+                            Limpar aviso
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+
                 <h1 class="h4 mb-1">
                     {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
                 </h1>

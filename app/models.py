@@ -91,6 +91,7 @@ class Unidade(db.Model):
     proprietario_cpf = db.Column(db.String(14), nullable=True)
     proprietario_telefone = db.Column(db.String(20), nullable=True)
     proprietario_email = db.Column(db.String(120), nullable=True)
+    notificacao_sindico = db.Column(db.Text, nullable=True)
 
     pessoas = db.relationship(
         "Pessoa",
@@ -157,3 +158,19 @@ class Veiculo(db.Model):
 
     def __repr__(self):
         return f"<Veiculo {self.placa}>"
+
+
+class LogAuditoria(db.Model):
+    __tablename__ = "logs_auditoria"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    mensagem = db.Column(db.Text, nullable=False)
+    data_criacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    usuario = db.relationship("Usuario")
+
+    def __repr__(self):
+        return f"<LogAuditoria {self.id}>"
