@@ -69,6 +69,18 @@ def admin_required(view):
     return wrapped
 
 
+def admin_or_assistente_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if not usuario or usuario.role not in (Role.ADMIN, Role.ASSISTENTE):
+            flash("Acesso restrito à administração.", "danger")
+            return redirect(url_for("admin_login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 def sindico_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
