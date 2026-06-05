@@ -8,7 +8,14 @@
         <h1 class="h3 mb-1">Painel do Administrador</h1>
         <p class="text-muted mb-0">Gerenciamento de todas as unidades do condomínio</p>
     </div>
-    <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+    <div class="d-flex gap-2">
+        {% if current_user and current_user.role == 'admin' %}
+        <a href="{{ url_for('admin_criar_usuario') }}" class="btn btn-outline-primary">
+            Criar Usuário
+        </a>
+        {% endif %}
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+    </div>
 </div>
 
 <ul class="nav nav-tabs" id="adminTabs" role="tablist">
@@ -33,6 +40,15 @@
             <span class="badge bg-secondary ms-1">{{ sindicos|length }}</span>
         </button>
     </li>
+    {% if current_user and current_user.role == 'admin' %}
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="equipe-tab" data-bs-toggle="tab"
+                data-bs-target="#equipe" type="button" role="tab">
+            Equipe e Acessos
+            <span class="badge bg-dark ms-1">{{ equipe_acessos|length }}</span>
+        </button>
+    </li>
+    {% endif %}
 </ul>
 
 <div class="tab-content pt-3" id="adminTabsContent">
@@ -82,10 +98,12 @@
                             <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
                                 <button type="submit" class="btn btn-success btn-sm">Marcar como Registrado</button>
                             </form>
+                            {% if current_user and current_user.role == 'admin' %}
                             <button type="button" class="btn btn-danger btn-sm"
                                     data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
                                 Resetar Senha
                             </button>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -140,10 +158,12 @@
                                     data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
                                 Ver Detalhes
                             </button>
+                            {% if current_user and current_user.role == 'admin' %}
                             <button type="button" class="btn btn-danger btn-sm"
                                     data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
                                 Resetar Senha
                             </button>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -195,6 +215,54 @@
         <div class="alert alert-info">Nenhum síndico cadastrado.</div>
         {% endif %}
     </div>
+
+    {% if current_user and current_user.role == 'admin' %}
+    <div class="tab-pane fade" id="equipe" role="tabpanel">
+        {% if equipe_acessos %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Login</th>
+                        <th>Tipo de Acesso</th>
+                        <th>Bloco Responsável</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for usuario in equipe_acessos %}
+                    <tr>
+                        <td>{{ usuario.username }}</td>
+                        <td>
+                            {% if usuario.role == 'assistente' %}
+                            Assistente Administrativo
+                            {% elif usuario.role == 'sindico' %}
+                            Síndico de Bloco
+                            {% else %}
+                            {{ usuario.role }}
+                            {% endif %}
+                        </td>
+                        <td>{{ usuario.bloco_responsavel or '—' }}</td>
+                        <td class="text-end">
+                            <form method="post"
+                                  action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Tem certeza que deseja excluir este acesso? Esta ação não poderá ser desfeita.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    Revogar Acesso
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info">Nenhum acesso de equipe cadastrado.</div>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 
 <!-- Modais de Detalhes -->
@@ -390,6 +458,7 @@
                         <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>
                     </form>
                     {% endif %}
+                    {% if current_user and current_user.role == 'admin' %}
                     <button type="button" class="btn btn-danger flex-fill flex-sm-grow-0"
                             data-bs-dismiss="modal"
                             onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modal-senha-{{ unidade.id }}')).show(), 300)">
@@ -403,6 +472,7 @@
                             Excluir/Resetar Cadastro
                         </button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -410,6 +480,7 @@
 </div>
 
 <!-- Modal Resetar Senha -->
+{% if current_user and current_user.role == 'admin' %}
 <div class="modal fade" id="modal-senha-{{ unidade.id }}" tabindex="-1"
      aria-labelledby="modal-senha-label-{{ unidade.id }}" aria-hidden="true">
     <div class="modal-dialog">
@@ -439,5 +510,6 @@
         </div>
     </div>
 </div>
+{% endif %}
 {% endfor %}
 {% endblock %}

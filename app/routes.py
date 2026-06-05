@@ -6,6 +6,7 @@ from flask import flash, redirect, render_template, request, session, url_for
 from app import db
 from app.auth import (
     admin_required,
+    admin_or_assistente_required,
     gerar_senha_aleatoria,
     get_current_user,
     get_unidade_logada,
@@ -23,6 +24,7 @@ from app.email_service import (
 from app.models import (
     LogAuditoria,
     Pessoa,
+    Role,
     StatusDocumento,
     StatusUnidade,
     Unidade,
@@ -736,14 +738,18 @@ def sindico_validar_unidade(unidade_id):
 
 
 def admin_login():
-    if get_current_user() and get_current_user().is_admin:
+    usuario_logado = get_current_user()
+    if usuario_logado and usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE):
         return redirect(url_for("admin_dashboard"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        usuario = Usuario.query.filter_by(username=username, role="admin").first()
+        usuario = Usuario.query.filter(
+            Usuario.username == username,
+            Usuario.role.in_([Role.ADMIN, Role.ASSISTENTE]),
+        ).first()
         if usuario and usuario.check_password(password):
             login_usuario(usuario)
             return redirect(url_for("admin_dashboard"))
@@ -759,8 +765,9 @@ def admin_logout():
     return redirect(url_for("admin_login"))
 
 
-@admin_required
+@admin_or_assistente_required
 def admin_dashboard():
+    usuario = get_current_user()
     aguardando_registro = (
         Unidade.query.filter_by(status=StatusUnidade.APROVADA)
         .order_by(Unidade.bloco, Unidade.apartamento)
@@ -776,16 +783,23 @@ def admin_dashboard():
         .order_by(Usuario.bloco_responsavel, Usuario.username)
         .all()
     )
+    equipe_acessos = (
+        Usuario.query.filter(Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO]))
+        .order_by(Usuario.role, Usuario.username)
+        .all()
+    )
 
     return render_template(
         "dashboard_admin.html",
         aguardando_registro=aguardando_registro,
         finalizados=finalizados,
         sindicos=sindicos,
+        equipe_acessos=equipe_acessos,
+        current_user=usuario,
     )
 
 
-@admin_required
+@admin_or_assistente_required
 def admin_registrar(unidade_id):
     unidade = Unidade.query.get_or_404(unidade_id)
 
@@ -799,8 +813,13 @@ def admin_registrar(unidade_id):
     return redirect(url_for("admin_dashboard"))
 
 
-@admin_required
+@admin_or_assistente_required
 def admin_resetar_senha(unidade_id):
+    usuario = get_current_user()
+    if usuario.role != Role.ADMIN:
+        flash("Acesso negado.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
     unidade = Unidade.query.get_or_404(unidade_id)
     nova_senha = request.form.get("nova_senha", "").strip()
 
@@ -820,8 +839,13 @@ def admin_resetar_senha(unidade_id):
     return redirect(url_for("admin_dashboard"))
 
 
-@admin_required
+@admin_or_assistente_required
 def admin_excluir_unidade(unidade_id):
+    usuario = get_current_user()
+    if usuario.role != Role.ADMIN:
+        flash("Acesso negado.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
     unidade = Unidade.query.get_or_404(unidade_id)
 
     db.session.delete(unidade)
@@ -955,6 +979,82 @@ def admin_salvar_proprietario(unidade_id):
     return redirect(url_for("admin_dashboard"))
 
 
+@admin_required
+def admin_criar_usuario():
+    blocos = [f"Bloco {indice}" for indice in range(1, 9)]
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        senha = request.form.get("senha", "")
+        tipo_acesso = request.form.get("tipo_acesso", "").strip()
+        bloco_responsavel = request.form.get("bloco_responsavel", "").strip()
+
+        if not username:
+            flash("Informe o login do usuário.", "danger")
+            return render_template("criar_usuario.html", blocos=blocos)
+        if len(senha) < 6:
+            flash("A senha deve ter ao menos 6 caracteres.", "danger")
+            return render_template("criar_usuario.html", blocos=blocos)
+
+        mapeamento_tipo = {
+            "assistente": Role.ASSISTENTE,
+            "sindico": Role.SINDICO,
+        }
+        role = mapeamento_tipo.get(tipo_acesso)
+        if not role:
+            flash("Tipo de acesso inválido.", "danger")
+            return render_template("criar_usuario.html", blocos=blocos)
+
+        if role == Role.SINDICO and bloco_responsavel not in blocos:
+            flash("Selecione um bloco válido para o síndico.", "danger")
+            return render_template("criar_usuario.html", blocos=blocos)
+
+        if Usuario.query.filter_by(username=username).first():
+            flash("Já existe um usuário com esse login.", "warning")
+            return render_template("criar_usuario.html", blocos=blocos)
+
+        novo_usuario = Usuario(
+            username=username,
+            role=role,
+            bloco_responsavel=bloco_responsavel if role == Role.SINDICO else None,
+        )
+        novo_usuario.set_password(senha)
+        db.session.add(novo_usuario)
+        db.session.commit()
+
+        flash("Usuário criado com sucesso.", "success")
+        return redirect(url_for("admin_dashboard"))
+
+    return render_template("criar_usuario.html", blocos=blocos)
+
+
+@admin_required
+def admin_excluir_usuario(usuario_id):
+    usuario_logado = get_current_user()
+    usuario_alvo = Usuario.query.get_or_404(usuario_id)
+
+    if usuario_alvo.id == usuario_logado.id:
+        flash("Você não pode excluir o próprio acesso.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO):
+        flash("Apenas acessos de assistente ou síndico podem ser revogados aqui.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    username_alvo = usuario_alvo.username
+    role_alvo = usuario_alvo.role
+    db.session.delete(usuario_alvo)
+    _registrar_auditoria(
+        usuario_logado,
+        f"Acesso do {role_alvo} '{username_alvo}' foi revogado por "
+        f"'{usuario_logado.username}'.",
+    )
+    db.session.commit()
+
+    flash(f"Acesso de '{username_alvo}' revogado com sucesso.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
 def init_app(app):
     app.add_url_rule("/", "index", index, methods=["GET"])
     app.add_url_rule(
@@ -1015,6 +1115,18 @@ def init_app(app):
     )
     app.add_url_rule("/admin/logout", "admin_logout", admin_logout, methods=["GET"])
     app.add_url_rule("/admin", "admin_dashboard", admin_dashboard, methods=["GET"])
+    app.add_url_rule(
+        "/admin/usuarios/novo",
+        "admin_criar_usuario",
+        admin_criar_usuario,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/admin/usuarios/excluir/<int:usuario_id>",
+        "admin_excluir_usuario",
+        admin_excluir_usuario,
+        methods=["POST"],
+    )
     app.add_url_rule(
         "/admin/registrar/<int:unidade_id>",
         "admin_registrar",

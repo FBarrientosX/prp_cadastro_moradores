@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Criar Usuário{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h1 class="h4 mb-0">Criar Novo Usuário</h1>
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+                        Voltar ao Painel
+                    </a>
+                </div>
+                <p class="text-muted mb-4">
+                    Cadastre um novo acesso para assistente administrativo ou síndico.
+                </p>
+
+                <form method="post" action="{{ url_for('admin_criar_usuario') }}">
+                    <div class="mb-3">
+                        <label class="form-label" for="username">Username (Login)</label>
+                        <input type="text" class="form-control" id="username" name="username" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="senha">Senha</label>
+                        <input type="password" class="form-control" id="senha" name="senha" minlength="6" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="tipo_acesso">Tipo de Acesso</label>
+                        <select class="form-select" id="tipo_acesso" name="tipo_acesso" required>
+                            <option value="" selected disabled>Selecione...</option>
+                            <option value="assistente">Assistente Administrativo</option>
+                            <option value="sindico">Síndico de Bloco</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label" for="bloco_responsavel">Bloco Responsável</label>
+                        <select class="form-select" id="bloco_responsavel" name="bloco_responsavel" disabled>
+                            <option value="" selected disabled>Selecione um bloco...</option>
+                            {% for bloco in blocos %}
+                            <option value="{{ bloco }}">{{ bloco }}</option>
+                            {% endfor %}
+                        </select>
+                        <small class="text-muted">Obrigatório apenas para Síndico.</small>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">
+                        Criar Usuário
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const tipoAcesso = document.getElementById("tipo_acesso");
+    const blocoResponsavel = document.getElementById("bloco_responsavel");
+
+    function atualizarCampoBloco() {
+        const sindicoSelecionado = tipoAcesso.value === "sindico";
+        blocoResponsavel.disabled = !sindicoSelecionado;
+        blocoResponsavel.required = sindicoSelecionado;
+        if (!sindicoSelecionado) {
+            blocoResponsavel.value = "";
+        }
+    }
+
+    tipoAcesso.addEventListener("change", atualizarCampoBloco);
+    atualizarCampoBloco();
+</script>
+{% endblock %}

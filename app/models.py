@@ -7,6 +7,7 @@ from app import db
 
 class Role:
     ADMIN = "admin"
+    ASSISTENTE = "assistente"
     SINDICO = "sindico"
 
 
@@ -54,6 +55,10 @@ class Usuario(db.Model):
     @property
     def is_sindico(self):
         return self.role == Role.SINDICO
+
+    @property
+    def is_assistente(self):
+        return self.role == Role.ASSISTENTE
 
     def __repr__(self):
         return f"<Usuario {self.username} ({self.role})>"
