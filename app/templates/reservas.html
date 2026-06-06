@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}Reservas{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">Áreas Comuns e Reservas</h1>
+
+<ul class="nav nav-tabs" id="reservasTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="fazer-reserva-tab" data-bs-toggle="tab"
+                data-bs-target="#fazer-reserva" type="button" role="tab">
+            Fazer Reserva
+        </button>
+    </li>
+    {% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="gestao-tab" data-bs-toggle="tab"
+                data-bs-target="#gestao-espacos" type="button" role="tab">
+            Meus Espaços / Gestão
+        </button>
+    </li>
+    {% endif %}
+</ul>
+
+<div class="tab-content pt-3">
+    <div class="tab-pane fade show active" id="fazer-reserva" role="tabpanel">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <div class="alert alert-warning mb-0">
+                    <strong>Módulo de reservas em construção.</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
+    <div class="tab-pane fade" id="gestao-espacos" role="tabpanel">
+        <div class="d-flex justify-content-end mb-3">
+            <button type="button" class="btn btn-success"
+                    data-bs-toggle="modal" data-bs-target="#modal-espaco"
+                    id="btn-novo-espaco">
+                + Novo Espaço
+            </button>
+        </div>
+
+        {% if espacos %}
+        <div class="row g-3">
+            {% for espaco in espacos %}
+            {% set dias_lista = espaco.dias_funcionamento.split(',') if espaco.dias_funcionamento else [] %}
+            <div class="col-12 col-md-6 col-xl-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column">
+                        <h2 class="h6 mb-2">{{ espaco.nome }}</h2>
+                        <p class="text-muted small mb-2">Tipo: {{ espaco.tipo }}</p>
+                        <p class="mb-2">
+                            <strong>Valor:</strong>
+                            R$ {{ '%.2f'|format(espaco.valor_reserva) }}
+                        </p>
+                        <p class="mb-2">
+                            <strong>Dias:</strong>
+                            {{ dias_lista|join(', ')|upper }}
+                        </p>
+                        {% if current_user.role == 'sindico' %}
+                        <p class="mb-3">
+                            <strong>Somente bloco:</strong>
+                            {{ 'Sim' if espaco.apenas_moradores_bloco else 'Não' }}
+                        </p>
+                        {% endif %}
+                        <button type="button" class="btn btn-outline-primary btn-sm mt-auto btn-editar-espaco"
+                                data-bs-toggle="modal" data-bs-target="#modal-espaco"
+                                data-espaco-id="{{ espaco.id }}"
+                                data-nome="{{ espaco.nome }}"
+                                data-valor="{{ '%.2f'|format(espaco.valor_reserva) }}"
+                                data-dias="{{ espaco.dias_funcionamento }}"
+                                data-apenas-bloco="{{ 'true' if espaco.apenas_moradores_bloco else 'false' }}">
+                            Editar
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="alert alert-info">Nenhum espaço cadastrado ainda.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+{% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
+{% set dias = [('seg', 'Seg'), ('ter', 'Ter'), ('qua', 'Qua'), ('qui', 'Qui'), ('sex', 'Sex'), ('sab', 'Sab'), ('dom', 'Dom')] %}
+<div class="modal fade" id="modal-espaco" tabindex="-1" aria-labelledby="modal-espaco-label" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('salvar_espaco_reserva') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modal-espaco-label">Novo Espaço</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="espaco_id" id="espaco_id">
+                    <div class="mb-3">
+                        <label class="form-label" for="nome">Nome do Espaço</label>
+                        <input type="text" class="form-control" id="nome" name="nome" required>
+                    </div>
+                    {% if current_user.role == 'sindico' %}
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox"
+                                   id="apenas_moradores_bloco" name="apenas_moradores_bloco">
+                            <label class="form-check-label" for="apenas_moradores_bloco">
+                                Apenas moradores do meu bloco podem reservar?
+                            </label>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="mb-3">
+                        <label class="form-label" for="valor_reserva">Valor da Reserva (R$)</label>
+                        <input type="number" class="form-control" id="valor_reserva" name="valor_reserva"
+                               step="0.01" min="0" value="0.00" required>
+                        <div class="form-text">
+                            Valor informativo que será cobrado no boleto do condomínio.
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <label class="form-label d-block">Dias de Funcionamento</label>
+                        {% for valor, rotulo in dias %}
+                        <div class="form-check form-check-inline me-3">
+                            <input class="form-check-input dia-funcionamento" type="checkbox"
+                                   id="dia_{{ valor }}" name="dias_funcionamento" value="{{ valor }}">
+                            <label class="form-check-label" for="dia_{{ valor }}">{{ rotulo }}</label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success">Salvar Espaço</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
+<script>
+    const modalEspaco = document.getElementById("modal-espaco");
+    if (modalEspaco) {
+        const tituloModal = document.getElementById("modal-espaco-label");
+        const campoId = document.getElementById("espaco_id");
+        const campoNome = document.getElementById("nome");
+        const campoValor = document.getElementById("valor_reserva");
+        const campoApenasBloco = document.getElementById("apenas_moradores_bloco");
+        const checkboxesDias = modalEspaco.querySelectorAll(".dia-funcionamento");
+
+        function resetarFormularioEspaco() {
+            tituloModal.textContent = "Novo Espaço";
+            campoId.value = "";
+            campoNome.value = "";
+            campoValor.value = "0.00";
+            if (campoApenasBloco) {
+                campoApenasBloco.checked = false;
+            }
+            checkboxesDias.forEach((checkbox) => {
+                checkbox.checked = false;
+            });
+        }
+
+        document.getElementById("btn-novo-espaco")?.addEventListener("click", () => {
+            resetarFormularioEspaco();
+        });
+
+        document.querySelectorAll(".btn-editar-espaco").forEach((botao) => {
+            botao.addEventListener("click", () => {
+                resetarFormularioEspaco();
+                tituloModal.textContent = "Editar Espaço";
+                campoId.value = botao.dataset.espacoId || "";
+                campoNome.value = botao.dataset.nome || "";
+                campoValor.value = botao.dataset.valor || "0.00";
+
+                if (campoApenasBloco) {
+                    campoApenasBloco.checked = botao.dataset.apenasBloco === "true";
+                }
+
+                const dias = (botao.dataset.dias || "")
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+                checkboxesDias.forEach((checkbox) => {
+                    checkbox.checked = dias.includes(checkbox.value);
+                });
+            });
+        });
+    }
+</script>
+{% endif %}
+{% endblock %}

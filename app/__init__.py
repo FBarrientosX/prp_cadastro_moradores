@@ -95,6 +95,15 @@ def create_app(config=None):
 
     db.init_app(app)
 
+    @app.context_processor
+    def inject_nav_context():
+        from app.auth import get_current_user, get_unidade_logada
+
+        return {
+            "sidebar_user": get_current_user(),
+            "sidebar_unidade": get_unidade_logada(),
+        }
+
     from app import routes
 
     routes.init_app(app)

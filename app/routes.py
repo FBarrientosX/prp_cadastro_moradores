@@ -1,4 +1,5 @@
 from datetime import datetime
+from functools import wraps
 import traceback
 
 from flask import flash, redirect, render_template, request, session, url_for
@@ -22,6 +23,7 @@ from app.email_service import (
     enviar_email_validacao_sucesso,
 )
 from app.models import (
+    EspacoComum,
     LogAuditoria,
     Pessoa,
     Role,
@@ -212,6 +214,32 @@ def _parse_proprietario_form(form):
     }
 
 
+def acesso_reservas_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if get_current_user() or get_unidade_logada():
+            return view(*args, **kwargs)
+        flash("Faça login para acessar o módulo de reservas.", "warning")
+        return redirect(url_for("index"))
+
+    return wrapped
+
+
+DIAS_FUNCIONAMENTO_VALIDOS = ("seg", "ter", "qua", "qui", "sex", "sab", "dom")
+
+
+def gestao_espacos_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if usuario and usuario.role in (Role.ADMIN, Role.ASSISTENTE, Role.SINDICO):
+            return view(*args, **kwargs)
+        flash("Acesso restrito para gestão de espaços.", "danger")
+        return redirect(url_for("reservas"))
+
+    return wrapped
+
+
 def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
     try:
         for pessoa in unidade.pessoas.all():
@@ -343,6 +371,97 @@ def atualizar_dados(unidade):
         veiculos=veiculos,
         unidade=unidade,
     )
+
+
+@acesso_reservas_required
+def reservas():
+    usuario = get_current_user()
+    espacos = []
+
+    if usuario:
+        if usuario.role == Role.SINDICO:
+            espacos = (
+                EspacoComum.query.filter_by(bloco_vinculado=usuario.bloco_responsavel)
+                .order_by(EspacoComum.nome)
+                .all()
+            )
+        elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
+            espacos = (
+                EspacoComum.query.filter_by(gerenciado_por="admin")
+                .order_by(EspacoComum.nome)
+                .all()
+            )
+
+    return render_template("reservas.html", current_user=usuario, espacos=espacos)
+
+
+@gestao_espacos_required
+def salvar_espaco_reserva():
+    usuario = get_current_user()
+    espaco_id = request.form.get("espaco_id", "").strip()
+    nome = request.form.get("nome", "").strip()
+    apenas_moradores_bloco = request.form.get("apenas_moradores_bloco") == "on"
+    valor_reserva_raw = request.form.get("valor_reserva", "").strip()
+    dias_selecionados = [
+        dia
+        for dia in request.form.getlist("dias_funcionamento")
+        if dia in DIAS_FUNCIONAMENTO_VALIDOS
+    ]
+
+    if not nome:
+        flash("Informe o nome do espaço.", "danger")
+        return redirect(url_for("reservas"))
+    if not dias_selecionados:
+        flash("Selecione ao menos um dia de funcionamento.", "danger")
+        return redirect(url_for("reservas"))
+
+    try:
+        valor_reserva = float(valor_reserva_raw or 0)
+    except ValueError:
+        flash("Valor de reserva inválido.", "danger")
+        return redirect(url_for("reservas"))
+
+    if valor_reserva < 0:
+        flash("O valor da reserva não pode ser negativo.", "danger")
+        return redirect(url_for("reservas"))
+
+    if espaco_id:
+        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        if usuario.role == Role.SINDICO:
+            if espaco.bloco_vinculado != usuario.bloco_responsavel:
+                flash("Você não tem permissão para editar este espaço.", "danger")
+                return redirect(url_for("reservas"))
+        elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
+            if espaco.gerenciado_por != "admin":
+                flash("Você só pode editar espaços gerenciados pela administração.", "danger")
+                return redirect(url_for("reservas"))
+    else:
+        espaco = EspacoComum(tipo="SALAO_FESTAS")
+        db.session.add(espaco)
+
+    espaco.nome = nome
+    espaco.valor_reserva = valor_reserva
+    espaco.dias_funcionamento = ",".join(dias_selecionados)
+
+    if usuario.role == Role.SINDICO:
+        espaco.gerenciado_por = "sindico"
+        espaco.bloco_vinculado = usuario.bloco_responsavel
+        espaco.apenas_moradores_bloco = apenas_moradores_bloco
+    else:
+        espaco.gerenciado_por = "admin"
+        espaco.bloco_vinculado = None
+        espaco.apenas_moradores_bloco = False
+
+    db.session.commit()
+    flash("Espaço salvo com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+def sair():
+    logout_unidade()
+    logout_usuario()
+    flash("Sessão encerrada.", "info")
+    return redirect(url_for("index"))
 
 
 @unidade_required
@@ -1066,6 +1185,14 @@ def init_app(app):
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
     )
+    app.add_url_rule("/reservas", "reservas", reservas, methods=["GET"])
+    app.add_url_rule(
+        "/reservas/espacos/salvar",
+        "salvar_espaco_reserva",
+        salvar_espaco_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule("/sair", "sair", sair, methods=["GET"])
     app.add_url_rule(
         "/limpar-notificacao-sindico",
         "limpar_notificacao_sindico",
