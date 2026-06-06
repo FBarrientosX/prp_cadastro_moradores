@@ -49,14 +49,29 @@
         <nav class="nav nav-pills flex-column gap-1">
             {% if sidebar_unidade and not sidebar_user %}
                 <a class="nav-link text-white" href="{{ url_for('atualizar_dados') }}">Meu Cadastro</a>
-                <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                    <span>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
             {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                 <a class="nav-link text-white" href="{{ url_for('sindico_dashboard') }}">Aprovação de Moradores</a>
-                <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                    <span>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
             {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
                 <a class="nav-link text-white" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
                 <a class="nav-link text-white" href="{{ url_for('admin_dashboard') }}#sindicos">Equipe e Acessos</a>
-                <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                    <span>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
             {% else %}
                 <a class="nav-link text-white" href="{{ url_for('index') }}">Início</a>
                 <a class="nav-link text-white" href="{{ url_for('sindico_login') }}">Síndico</a>
@@ -81,14 +96,29 @@
             <nav class="nav nav-pills flex-column gap-1">
                 {% if sidebar_unidade and not sidebar_user %}
                     <a class="nav-link text-white" href="{{ url_for('atualizar_dados') }}">Meu Cadastro</a>
-                    <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                        <span>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
                 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                     <a class="nav-link text-white" href="{{ url_for('sindico_dashboard') }}">Aprovação de Moradores</a>
-                    <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                        <span>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
                 {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
                     <a class="nav-link text-white" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
                     <a class="nav-link text-white" href="{{ url_for('admin_dashboard') }}#sindicos">Equipe e Acessos</a>
-                    <a class="nav-link text-white" href="{{ url_for('reservas') }}">Reservas</a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center" href="{{ url_for('reservas') }}">
+                        <span>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
                 {% else %}
                     <a class="nav-link text-white" href="{{ url_for('index') }}">Início</a>
                     <a class="nav-link text-white" href="{{ url_for('sindico_login') }}">Síndico</a>

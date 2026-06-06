@@ -1,5 +1,6 @@
 from datetime import datetime
 from functools import wraps
+import os
 import traceback
 
 from flask import flash, redirect, render_template, request, session, url_for
@@ -19,6 +20,9 @@ from app.auth import (
     unidade_required,
 )
 from app.email_service import (
+    enviar_email_nova_reserva,
+    enviar_email_reprovacao,
+    enviar_email_resposta_reserva,
     enviar_email_validacao_parcial,
     enviar_email_validacao_sucesso,
 )
@@ -26,6 +30,7 @@ from app.models import (
     EspacoComum,
     LogAuditoria,
     Pessoa,
+    Reserva,
     Role,
     StatusDocumento,
     StatusUnidade,
@@ -240,6 +245,29 @@ def gestao_espacos_required(view):
     return wrapped
 
 
+def _usuario_pode_gerenciar_espaco(usuario, espaco):
+    if not usuario:
+        return False
+    if usuario.role == Role.SINDICO:
+        return espaco.bloco_vinculado == usuario.bloco_responsavel
+    if usuario.role in (Role.ADMIN, Role.ASSISTENTE):
+        return espaco.gerenciado_por == "admin"
+    return False
+
+
+def _reservas_pendentes_por_jurisdicao(usuario):
+    if not usuario:
+        return []
+    query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
+    if usuario.role == Role.SINDICO:
+        query = query.filter(EspacoComum.bloco_vinculado == usuario.bloco_responsavel)
+    elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
+        query = query.filter(EspacoComum.gerenciado_por == "admin")
+    else:
+        return []
+    return query.order_by(Reserva.data_solicitacao.desc()).all()
+
+
 def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
     try:
         for pessoa in unidade.pessoas.all():
@@ -377,6 +405,7 @@ def atualizar_dados(unidade):
 def reservas():
     usuario = get_current_user()
     espacos = []
+    reservas_pendentes = []
 
     if usuario:
         if usuario.role == Role.SINDICO:
@@ -391,8 +420,114 @@ def reservas():
                 .order_by(EspacoComum.nome)
                 .all()
             )
+        reservas_pendentes = _reservas_pendentes_por_jurisdicao(usuario)
 
-    return render_template("reservas.html", current_user=usuario, espacos=espacos)
+    return render_template(
+        "reservas.html",
+        current_user=usuario,
+        espacos=espacos,
+        reservas_pendentes=reservas_pendentes,
+    )
+
+
+@unidade_required
+def solicitar_reserva(unidade):
+    espaco_id = request.form.get("espaco_id", "").strip()
+    data_reserva_str = request.form.get("data_reserva", "").strip()
+
+    if not espaco_id or not data_reserva_str:
+        flash("Informe o espaço e a data desejada para reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    try:
+        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        data_reserva = datetime.strptime(data_reserva_str, "%Y-%m-%d").date()
+    except ValueError:
+        flash("Data de reserva inválida.", "danger")
+        return redirect(url_for("reservas"))
+
+    if espaco.apenas_moradores_bloco and espaco.bloco_vinculado != unidade.bloco:
+        flash("Este espaço aceita reservas apenas de moradores do bloco vinculado.", "danger")
+        return redirect(url_for("reservas"))
+
+    if Reserva.query.filter_by(espaco_id=espaco.id, data_reserva=data_reserva).filter(
+        Reserva.status.in_(["Pendente", "Aprovada"])
+    ).first():
+        flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
+        return redirect(url_for("reservas"))
+
+    reserva = Reserva(
+        espaco_id=espaco.id,
+        unidade_id=unidade.id,
+        data_reserva=data_reserva,
+        status="Pendente",
+    )
+    db.session.add(reserva)
+    db.session.commit()
+
+    email_sistema = os.environ.get("MAIL_USERNAME")
+    if email_sistema:
+        try:
+            enviar_email_nova_reserva(
+                email_destino=email_sistema,
+                nome_espaco=espaco.nome,
+                bloco=unidade.bloco,
+                apartamento=unidade.apartamento,
+                data_reserva=data_reserva.strftime("%d/%m/%Y"),
+            )
+        except Exception:
+            traceback.print_exc()
+            flash(
+                "Reserva enviada, mas não foi possível notificar a administração por e-mail.",
+                "warning",
+            )
+
+    flash("Solicitação de reserva enviada com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
+def responder_reserva(reserva_id):
+    usuario = get_current_user()
+    reserva = Reserva.query.get_or_404(reserva_id)
+    acao = request.form.get("acao", "").strip().lower()
+
+    if not _usuario_pode_gerenciar_espaco(usuario, reserva.espaco):
+        flash("Você não tem permissão para responder esta reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    if reserva.status != "Pendente":
+        flash("Esta reserva já foi respondida.", "warning")
+        return redirect(url_for("reservas"))
+
+    if acao == "aprovar":
+        reserva.status = "Aprovada"
+    elif acao == "recusar":
+        reserva.status = "Recusada"
+    else:
+        flash("Ação inválida para resposta da reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    db.session.commit()
+
+    emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
+    for email in emails_moradores:
+        try:
+            enviar_email_resposta_reserva(
+                email_destino=email,
+                nome_espaco=reserva.espaco.nome,
+                data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
+                status=reserva.status,
+            )
+        except Exception:
+            traceback.print_exc()
+            flash(
+                f"Reserva atualizada, mas houve falha ao notificar {email}.",
+                "warning",
+            )
+
+    flash(f"Reserva {reserva.status.lower()} com sucesso.", "success")
+    return redirect(url_for("reservas"))
 
 
 @gestao_espacos_required
@@ -1186,6 +1321,18 @@ def init_app(app):
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
     )
     app.add_url_rule("/reservas", "reservas", reservas, methods=["GET"])
+    app.add_url_rule(
+        "/reservas/solicitar",
+        "solicitar_reserva",
+        solicitar_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/<int:reserva_id>/responder",
+        "responder_reserva",
+        responder_reserva,
+        methods=["POST"],
+    )
     app.add_url_rule(
         "/reservas/espacos/salvar",
         "salvar_espaco_reserva",

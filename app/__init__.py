@@ -98,10 +98,26 @@ def create_app(config=None):
     @app.context_processor
     def inject_nav_context():
         from app.auth import get_current_user, get_unidade_logada
+        from app.models import Reserva
+
+        usuario = get_current_user()
+        reservas_pendentes_count = 0
+
+        if usuario:
+            query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
+            if usuario.role == "sindico":
+                reservas_pendentes_count = query.filter(
+                    Reserva.espaco.has(bloco_vinculado=usuario.bloco_responsavel)
+                ).count()
+            elif usuario.role in ("admin", "assistente"):
+                reservas_pendentes_count = query.filter(
+                    Reserva.espaco.has(gerenciado_por="admin")
+                ).count()
 
         return {
-            "sidebar_user": get_current_user(),
+            "sidebar_user": usuario,
             "sidebar_unidade": get_unidade_logada(),
+            "reservas_pendentes_count": reservas_pendentes_count,
         }
 
     from app import routes

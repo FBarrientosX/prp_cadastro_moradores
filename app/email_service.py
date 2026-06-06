@@ -62,3 +62,27 @@ def enviar_email_validacao_parcial(email_destino, moradores_recusados):
         "procurar o síndico do bloco para orientações."
     )
     _enviar_email(email_destino, assunto, corpo)
+
+
+def enviar_email_nova_reserva(email_destino, nome_espaco, bloco, apartamento, data_reserva):
+    assunto = "PRP Condomínio - Nova Solicitação de Reserva"
+    corpo = (
+        "Uma nova solicitação de reserva foi registrada no sistema.\n\n"
+        f"Espaço: {nome_espaco}\n"
+        f"Unidade solicitante: Bloco {bloco}, Apto {apartamento}\n"
+        f"Data desejada: {data_reserva}\n\n"
+        "Acesse o módulo de reservas para aprovar ou recusar a solicitação."
+    )
+    _enviar_email(email_destino, assunto, corpo)
+
+
+def enviar_email_resposta_reserva(email_destino, nome_espaco, data_reserva, status):
+    assunto = "PRP Condomínio - Atualização da sua Reserva"
+    corpo = (
+        "Sua solicitação de reserva foi atualizada.\n\n"
+        f"Espaço: {nome_espaco}\n"
+        f"Data solicitada: {data_reserva}\n"
+        f"Status final: {status}\n\n"
+        "Em caso de dúvidas, procure a administração do condomínio."
+    )
+    _enviar_email(email_destino, assunto, corpo)
