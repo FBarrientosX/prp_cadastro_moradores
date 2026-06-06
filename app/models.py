@@ -164,6 +164,7 @@ class Reserva(db.Model):
     )
     data_reserva = db.Column(db.Date, nullable=False, index=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
+    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
     data_solicitacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     espaco = db.relationship("EspacoComum", back_populates="reservas")

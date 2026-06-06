@@ -77,6 +77,25 @@ def _garantir_colunas_pessoas():
         db.session.commit()
 
 
+def _garantir_colunas_reservas():
+    inspetor = inspect(db.engine)
+    if "reservas" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("reservas")}
+    alteracoes = []
+
+    if "valor_pago" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE reservas ADD COLUMN valor_pago FLOAT NOT NULL DEFAULT 0"
+        )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -130,5 +149,6 @@ def create_app(config=None):
         db.create_all()
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
+        _garantir_colunas_reservas()
 
     return app
