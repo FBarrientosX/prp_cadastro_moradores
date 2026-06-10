@@ -77,6 +77,25 @@ def _garantir_colunas_pessoas():
         db.session.commit()
 
 
+def _garantir_colunas_reservas():
+    inspetor = inspect(db.engine)
+    if "reservas" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("reservas")}
+    alteracoes = []
+
+    if "valor_pago" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE reservas ADD COLUMN valor_pago FLOAT NOT NULL DEFAULT 0"
+        )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -95,6 +114,31 @@ def create_app(config=None):
 
     db.init_app(app)
 
+    @app.context_processor
+    def inject_nav_context():
+        from app.auth import get_current_user, get_unidade_logada
+        from app.models import Reserva
+
+        usuario = get_current_user()
+        reservas_pendentes_count = 0
+
+        if usuario:
+            query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
+            if usuario.role == "sindico":
+                reservas_pendentes_count = query.filter(
+                    Reserva.espaco.has(bloco_vinculado=usuario.bloco_responsavel)
+                ).count()
+            elif usuario.role in ("admin", "assistente"):
+                reservas_pendentes_count = query.filter(
+                    Reserva.espaco.has(gerenciado_por="admin")
+                ).count()
+
+        return {
+            "sidebar_user": usuario,
+            "sidebar_unidade": get_unidade_logada(),
+            "reservas_pendentes_count": reservas_pendentes_count,
+        }
+
     from app import routes
 
     routes.init_app(app)
@@ -105,5 +149,6 @@ def create_app(config=None):
         db.create_all()
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
+        _garantir_colunas_reservas()
 
     return app

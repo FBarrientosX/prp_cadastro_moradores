@@ -5,26 +5,177 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Cadastro de Moradores{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <style>
+        :root {
+            --sidebar-width: 260px;
+        }
+
+        .app-sidebar {
+            width: var(--sidebar-width);
+        }
+
+        .app-main {
+            min-height: 100vh;
+        }
+
+        .nav-pills .nav-link.active {
+            background-color: rgba(255, 255, 255, 0.2) !important;
+            font-weight: bold;
+            border-radius: 0.375rem;
+        }
+
+        @media (min-width: 992px) {
+            .app-sidebar {
+                position: fixed;
+                inset: 0 auto 0 0;
+                z-index: 1030;
+            }
+
+            .app-main {
+                margin-left: var(--sidebar-width);
+            }
+        }
+    </style>
 </head>
 <body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">PRP Condomínio</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
-                    data-bs-target="#navbarNav" aria-controls="navbarNav"
-                    aria-expanded="false" aria-label="Abrir menu">
-                <span class="navbar-toggler-icon"></span>
+
+    <header class="d-lg-none sticky-top bg-primary shadow-sm">
+        <div class="d-flex align-items-center justify-content-between px-3 py-2 text-white">
+            <button class="btn btn-outline-light btn-sm" type="button" data-bs-toggle="offcanvas"
+                    data-bs-target="#mobileSidebar" aria-controls="mobileSidebar">
+                Menu
             </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <div class="navbar-nav ms-auto">
-                    <a class="nav-link" href="{{ url_for('sindico_login') }}">Síndico</a>
-                    <a class="nav-link" href="{{ url_for('admin_login') }}">Admin</a>
-                </div>
+            <span class="fw-semibold">PRP Condomínio</span>
+            <span></span>
+        </div>
+    </header>
+
+    <aside class="app-sidebar d-none d-lg-flex flex-column bg-primary text-white p-3">
+        <h1 class="h5 mb-4">PRP Condomínio</h1>
+        <nav class="nav nav-pills flex-column gap-1">
+            {% if sidebar_unidade and not sidebar_user %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'atualizar_dados' %}active{% endif %}" href="{{ url_for('atualizar_dados') }}">
+                    <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
+                </a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                    <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
+            {% elif sidebar_user and sidebar_user.role == 'sindico' %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
+                    <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
+                </a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                    <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
+            {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
+                    <i class="bi bi-speedometer2 me-2"></i>Dashboard
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
+                    <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                </a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                    <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                    {% if reservas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
+            {% else %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                    <i class="bi bi-house-door me-2"></i>Início
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login') }}">
+                    <i class="bi bi-building me-2"></i>Síndico
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_login' %}active{% endif %}" href="{{ url_for('admin_login') }}">
+                    <i class="bi bi-briefcase me-2"></i>Administração
+                </a>
+            {% endif %}
+        </nav>
+
+        <div class="mt-auto pt-3">
+            {% if sidebar_unidade or sidebar_user %}
+                <a class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center" href="{{ url_for('sair') }}">
+                    <i class="bi bi-box-arrow-left me-2"></i>Sair
+                </a>
+            {% endif %}
+        </div>
+    </aside>
+
+    <div class="offcanvas offcanvas-start text-bg-primary" tabindex="-1" id="mobileSidebar"
+         aria-labelledby="mobileSidebarLabel">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="mobileSidebarLabel">PRP Condomínio</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Fechar"></button>
+        </div>
+        <div class="offcanvas-body d-flex flex-column">
+            <nav class="nav nav-pills flex-column gap-1">
+                {% if sidebar_unidade and not sidebar_user %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'atualizar_dados' %}active{% endif %}" href="{{ url_for('atualizar_dados') }}">
+                        <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
+                    </a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                        <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
+                {% elif sidebar_user and sidebar_user.role == 'sindico' %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
+                        <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
+                    </a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                        <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
+                {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
+                        <i class="bi bi-speedometer2 me-2"></i>Dashboard
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
+                        <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                    </a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
+                        <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
+                        {% if reservas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
+                        {% endif %}
+                    </a>
+                {% else %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                        <i class="bi bi-house-door me-2"></i>Início
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login') }}">
+                        <i class="bi bi-building me-2"></i>Síndico
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_login' %}active{% endif %}" href="{{ url_for('admin_login') }}">
+                        <i class="bi bi-briefcase me-2"></i>Administração
+                    </a>
+                {% endif %}
+            </nav>
+
+            <div class="mt-auto pt-3">
+                {% if sidebar_unidade or sidebar_user %}
+                    <a class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center" href="{{ url_for('sair') }}">
+                        <i class="bi bi-box-arrow-left me-2"></i>Sair
+                    </a>
+                {% endif %}
             </div>
         </div>
-    </nav>
+    </div>
 
-    <main class="container pb-5">
+    <main class="app-main">
+        <div class="container-fluid py-4">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -37,9 +188,13 @@
         {% endwith %}
 
         {% block content %}{% endblock %}
+        </div>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -125,6 +125,55 @@ class Unidade(db.Model):
         return f"<Unidade {self.identificador} ({self.status})>"
 
 
+class EspacoComum(db.Model):
+    __tablename__ = "espacos_comuns"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(150), nullable=False)
+    tipo = db.Column(db.String(40), nullable=False, default="SALAO_FESTAS")
+    gerenciado_por = db.Column(db.String(20), nullable=False)
+    bloco_vinculado = db.Column(db.String(50), nullable=True)
+    apenas_moradores_bloco = db.Column(db.Boolean, nullable=False, default=False)
+    dias_funcionamento = db.Column(
+        db.String(80),
+        nullable=False,
+        default="seg,ter,qua,qui,sex,sab,dom",
+    )
+    valor_reserva = db.Column(db.Float, nullable=False, default=0.0)
+
+    reservas = db.relationship(
+        "Reserva",
+        back_populates="espaco",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<EspacoComum {self.nome}>"
+
+
+class Reserva(db.Model):
+    __tablename__ = "reservas"
+
+    id = db.Column(db.Integer, primary_key=True)
+    espaco_id = db.Column(
+        db.Integer, db.ForeignKey("espacos_comuns.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    data_reserva = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(db.String(20), nullable=False, default="Pendente")
+    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
+    data_solicitacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    espaco = db.relationship("EspacoComum", back_populates="reservas")
+    unidade = db.relationship("Unidade")
+
+    def __repr__(self):
+        return f"<Reserva {self.id} ({self.status})>"
+
+
 class Pessoa(db.Model):
     __tablename__ = "pessoas"
 

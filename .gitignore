@@ -6,3 +6,4 @@ credentials.json
 client_secret.json
 token.json
 *.db
+seed.py
