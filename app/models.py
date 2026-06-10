@@ -160,10 +160,11 @@ class Reserva(db.Model):
         db.Integer, db.ForeignKey("espacos_comuns.id"), nullable=False, index=True
     )
     unidade_id = db.Column(
-        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+        db.Integer, db.ForeignKey("unidades.id"), nullable=True, index=True
     )
     data_reserva = db.Column(db.Date, nullable=False, index=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
+    motivo_reserva = db.Column(db.String(255), nullable=True)
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
     data_solicitacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
