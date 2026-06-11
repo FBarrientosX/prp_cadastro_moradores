@@ -110,6 +110,7 @@ class Unidade(db.Model):
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
+    cupons_resgatados = db.relationship("ResgateCupom", backref="unidade", lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -173,6 +174,57 @@ class Reserva(db.Model):
 
     def __repr__(self):
         return f"<Reserva {self.id} ({self.status})>"
+
+
+class Parceiro(db.Model):
+    __tablename__ = "parceiro"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome_empresa = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    senha_hash = db.Column(db.String(256), nullable=False)
+    telefone = db.Column(db.String(20), nullable=True)
+    categoria = db.Column(db.String(50), nullable=False)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+    status = db.Column(db.String(20), nullable=False, default="Pendente")
+    data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    cupons = db.relationship("Cupom", backref="parceiro", lazy=True)
+
+    def __repr__(self):
+        return f"<Parceiro {self.nome_empresa}>"
+
+
+class Cupom(db.Model):
+    __tablename__ = "cupom"
+
+    id = db.Column(db.Integer, primary_key=True)
+    parceiro_id = db.Column(db.Integer, db.ForeignKey("parceiro.id"), nullable=False)
+    titulo = db.Column(db.String(100), nullable=False)
+    descricao = db.Column(db.Text, nullable=False)
+    codigo_prefixo = db.Column(db.String(10), nullable=False)
+    data_validade = db.Column(db.Date, nullable=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    resgates = db.relationship("ResgateCupom", backref="cupom", lazy=True)
+
+    def __repr__(self):
+        return f"<Cupom {self.titulo}>"
+
+
+class ResgateCupom(db.Model):
+    __tablename__ = "resgate_cupom"
+
+    id = db.Column(db.Integer, primary_key=True)
+    cupom_id = db.Column(db.Integer, db.ForeignKey("cupom.id"), nullable=False)
+    unidade_id = db.Column(db.Integer, db.ForeignKey("unidades.id"), nullable=False)
+    codigo_unico = db.Column(db.String(50), unique=True, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="Ativo")
+    data_resgate = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    data_utilizacao = db.Column(db.DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<ResgateCupom {self.codigo_unico}>"
 
 
 class Pessoa(db.Model):

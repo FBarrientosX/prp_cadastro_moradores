@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Clube de Vantagens{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">Clube de Vantagens</h1>
+<p class="text-muted mb-4">
+    Descubra ofertas exclusivas dos parceiros do condomínio e resgate seu código em poucos cliques.
+</p>
+
+{% if parceiros %}
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
+    {% for parceiro in parceiros %}
+        {% for cupom in parceiro.cupons %}
+            {% if cupom.ativo %}
+                {% set resgate = resgates_por_cupom.get(cupom.id) %}
+                <div class="col">
+                    <div class="card h-100 shadow-sm border-0">
+                        <div class="card-header bg-white border-0 pb-0">
+                            <h2 class="h6 mb-1">{{ parceiro.nome_empresa }}</h2>
+                            <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
+                        </div>
+                        <div class="card-body">
+                            <h3 class="h6 fw-bold mb-2">{{ cupom.titulo }}</h3>
+                            <p class="text-muted small mb-0">{{ cupom.descricao }}</p>
+                        </div>
+                        <div class="card-footer bg-white border-0 pt-0">
+                            {% if resgate %}
+                            <div class="alert alert-success p-2 text-center fw-bold mb-0">
+                                Seu código: {{ resgate.codigo_unico }}
+                            </div>
+                            {% else %}
+                            <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
+                                <button type="submit" class="btn btn-primary w-100">
+                                    Resgatar Cupom
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-info">
+    Nenhum parceiro com cupons ativos no momento. Volte em breve para novas vantagens.
+</div>
+{% endif %}
+{% endblock %}

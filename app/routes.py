@@ -1,10 +1,13 @@
 from datetime import datetime
 from functools import wraps
 import os
+import random
+import string
 import traceback
 
 from flask import flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import and_, or_
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app import db
 from app.auth import (
@@ -28,10 +31,13 @@ from app.email_service import (
     enviar_email_validacao_sucesso,
 )
 from app.models import (
+    Cupom,
     EspacoComum,
     LogAuditoria,
+    Parceiro,
     Pessoa,
     Reserva,
+    ResgateCupom,
     Role,
     StatusDocumento,
     StatusUnidade,
@@ -246,6 +252,17 @@ def gestao_espacos_required(view):
     return wrapped
 
 
+def parceiro_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if session.get("parceiro_id"):
+            return view(*args, **kwargs)
+        flash("Faça login para acessar o Portal do Parceiro.", "warning")
+        return redirect(url_for("parceiro_login"))
+
+    return wrapped
+
+
 def _usuario_pode_gerenciar_espaco(usuario, espaco):
     if not usuario:
         return False
@@ -400,6 +417,234 @@ def atualizar_dados(unidade):
         veiculos=veiculos,
         unidade=unidade,
     )
+
+
+def _buscar_parceiro_logado():
+    parceiro_id = session.get("parceiro_id")
+    if not parceiro_id:
+        return None
+    return Parceiro.query.get(parceiro_id)
+
+
+@unidade_required
+def clube_vantagens(unidade):
+    parceiros = (
+        Parceiro.query.join(Cupom)
+        .filter(Parceiro.status == "Ativo", Cupom.ativo.is_(True))
+        .order_by(Parceiro.nome_empresa)
+        .distinct()
+        .all()
+    )
+    resgates = ResgateCupom.query.filter_by(unidade_id=unidade.id, status="Ativo").all()
+    resgates_por_cupom = {resgate.cupom_id: resgate for resgate in resgates}
+
+    return render_template(
+        "clube_vantagens.html",
+        parceiros=parceiros,
+        resgates_por_cupom=resgates_por_cupom,
+    )
+
+
+@unidade_required
+def clube_vantagens_resgatar(unidade, cupom_id):
+    cupom = Cupom.query.get_or_404(cupom_id)
+
+    if not cupom.ativo or not cupom.parceiro.ativo:
+        flash("Este cupom não está disponível no momento.", "warning")
+        return redirect(url_for("clube_vantagens"))
+
+    resgate_existente = ResgateCupom.query.filter_by(
+        cupom_id=cupom.id,
+        unidade_id=unidade.id,
+        status="Ativo",
+    ).first()
+    if resgate_existente:
+        flash(
+            f"Você já resgatou este cupom. Código ativo: {resgate_existente.codigo_unico}",
+            "info",
+        )
+        return redirect(url_for("clube_vantagens"))
+
+    bloco = "".join(ch for ch in str(unidade.bloco or "") if ch.isalnum()).upper()
+    apartamento = "".join(ch for ch in str(unidade.apartamento or "") if ch.isalnum()).upper()
+    prefixo = "".join(ch for ch in (cupom.codigo_prefixo or "") if ch.isalnum()).upper()
+    sufixo_chars = string.ascii_uppercase + string.digits
+
+    codigo_unico = None
+    for _ in range(20):
+        sufixo = "".join(random.choices(sufixo_chars, k=4))
+        candidato = f"PRP-{bloco}{apartamento}-{prefixo}-{sufixo}"
+        if not ResgateCupom.query.filter_by(codigo_unico=candidato).first():
+            codigo_unico = candidato
+            break
+    if not codigo_unico:
+        flash("Não foi possível gerar um código único. Tente novamente.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    db.session.add(
+        ResgateCupom(
+            cupom_id=cupom.id,
+            unidade_id=unidade.id,
+            codigo_unico=codigo_unico,
+            status="Ativo",
+        )
+    )
+    db.session.commit()
+    flash(f"Cupom resgatado com sucesso! Código: {codigo_unico}", "success")
+    return redirect(url_for("clube_vantagens"))
+
+
+def parceiro_login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        senha = request.form.get("senha", "")
+
+        parceiro = Parceiro.query.filter_by(email=email).first()
+        if parceiro and check_password_hash(parceiro.senha_hash, senha):
+            if parceiro.status == "Bloqueado":
+                flash("Seu cadastro está bloqueado. Fale com a administração.", "danger")
+                return render_template("parceiro_login.html")
+            session["parceiro_id"] = parceiro.id
+            flash("Login realizado com sucesso.", "success")
+            return redirect(url_for("parceiro_dashboard"))
+
+        flash("E-mail ou senha inválidos.", "danger")
+
+    return render_template("parceiro_login.html")
+
+
+def parceiro_logout():
+    session.pop("parceiro_id", None)
+    flash("Sessão do parceiro encerrada.", "info")
+    return redirect(url_for("parceiro_login"))
+
+
+@parceiro_required
+def parceiro_dashboard():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+
+    historico_resgates = (
+        ResgateCupom.query.join(Cupom)
+        .filter(Cupom.parceiro_id == parceiro.id)
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
+    cupons = Cupom.query.filter_by(parceiro_id=parceiro.id).order_by(Cupom.id.desc()).all()
+    return render_template(
+        "parceiro_dashboard.html",
+        parceiro=parceiro,
+        historico_resgates=historico_resgates,
+        cupons=cupons,
+        parceiro_pendente=parceiro.status == "Pendente",
+    )
+
+
+@parceiro_required
+def parceiro_validar_codigo():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para validar cupons.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+
+    codigo_unico = request.form.get("codigo_unico", "").strip().upper()
+    if not codigo_unico:
+        flash("Informe um código para validação.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    resgate = ResgateCupom.query.filter_by(codigo_unico=codigo_unico).first()
+    if not resgate:
+        flash("Código inválido. Verifique e tente novamente.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    if resgate.cupom.parceiro_id != parceiro.id:
+        flash("Este código pertence a outro parceiro.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    if resgate.status != "Ativo":
+        flash("Este código já foi utilizado ou está indisponível.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+
+    resgate.status = "Utilizado"
+    resgate.data_utilizacao = datetime.utcnow()
+    db.session.commit()
+
+    unidade_texto = (
+        f"Bloco {resgate.unidade.bloco}, Apto {resgate.unidade.apartamento}"
+        if resgate.unidade
+        else "Unidade não identificada"
+    )
+    flash(f"Cupom validado! Unidade: {unidade_texto}.", "success")
+    return redirect(url_for("parceiro_dashboard"))
+
+
+@parceiro_required
+def parceiro_aprovar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+
+    if parceiro.status == "Bloqueado":
+        flash("Seu cadastro está bloqueado. Fale com a administração.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    parceiro.status = "Ativo"
+    parceiro.ativo = True
+    db.session.commit()
+    flash("Cadastro aprovado e ativado com sucesso!", "success")
+    return redirect(url_for("parceiro_dashboard"))
+
+
+@parceiro_required
+def parceiro_cupons_criar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para criar cupons.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+
+    titulo = request.form.get("titulo", "").strip()
+    descricao = request.form.get("descricao", "").strip()
+    codigo_prefixo = request.form.get("codigo_prefixo", "").strip().upper()
+    data_validade_str = request.form.get("data_validade", "").strip()
+
+    if not titulo or not descricao or not codigo_prefixo:
+        flash("Preencha título, descrição e código prefixo.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    data_validade = None
+    if data_validade_str:
+        try:
+            data_validade = datetime.strptime(data_validade_str, "%Y-%m-%d").date()
+        except ValueError:
+            flash("Data de validade inválida.", "danger")
+            return redirect(url_for("parceiro_dashboard"))
+
+    db.session.add(
+        Cupom(
+            parceiro_id=parceiro.id,
+            titulo=titulo,
+            descricao=descricao,
+            codigo_prefixo=codigo_prefixo,
+            data_validade=data_validade,
+            ativo=True,
+        )
+    )
+    db.session.commit()
+    flash("Cupom criado com sucesso.", "success")
+    return redirect(url_for("parceiro_dashboard"))
 
 
 @acesso_reservas_required
@@ -1273,6 +1518,12 @@ def admin_dashboard():
         .order_by(Usuario.role, Usuario.username)
         .all()
     )
+    parceiros_clube = Parceiro.query.order_by(Parceiro.data_cadastro.desc()).all()
+    auditoria_cupons = (
+        ResgateCupom.query.join(Cupom).join(Parceiro).join(Unidade)
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
 
     return render_template(
         "dashboard_admin.html",
@@ -1280,8 +1531,40 @@ def admin_dashboard():
         finalizados=finalizados,
         sindicos=sindicos,
         equipe_acessos=equipe_acessos,
+        parceiros_clube=parceiros_clube,
+        auditoria_cupons=auditoria_cupons,
         current_user=usuario,
     )
+
+
+@admin_or_assistente_required
+def admin_parceiros_criar():
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+
+    if not nome_empresa or not email or not categoria:
+        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    if Parceiro.query.filter_by(email=email).first():
+        flash("Já existe parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    parceiro = Parceiro(
+        nome_empresa=nome_empresa,
+        email=email,
+        senha_hash=generate_password_hash("senha123"),
+        telefone=telefone,
+        categoria=categoria,
+        ativo=True,
+        status="Pendente",
+    )
+    db.session.add(parceiro)
+    db.session.commit()
+    flash("Parceiro cadastrado com sucesso. Status inicial: Pendente.", "success")
+    return redirect(url_for("admin_dashboard"))
 
 
 @admin_or_assistente_required
@@ -1551,6 +1834,55 @@ def init_app(app):
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
     )
+    app.add_url_rule(
+        "/parceiro",
+        "parceiro_login",
+        parceiro_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/login",
+        "parceiro_login_alt",
+        parceiro_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule("/parceiro/logout", "parceiro_logout", parceiro_logout, methods=["GET"])
+    app.add_url_rule(
+        "/parceiro/dashboard",
+        "parceiro_dashboard",
+        parceiro_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/validar_codigo",
+        "parceiro_validar_codigo",
+        parceiro_validar_codigo,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/aprovar",
+        "parceiro_aprovar",
+        parceiro_aprovar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons/criar",
+        "parceiro_cupons_criar",
+        parceiro_cupons_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/clube_vantagens",
+        "clube_vantagens",
+        clube_vantagens,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/clube_vantagens/resgatar/<int:cupom_id>",
+        "clube_vantagens_resgatar",
+        clube_vantagens_resgatar,
+        methods=["POST"],
+    )
     app.add_url_rule("/reservas", "reservas", reservas, methods=["GET"])
     app.add_url_rule(
         "/reservas/solicitar",
@@ -1708,5 +2040,11 @@ def init_app(app):
         "/admin/alterar-senha-sindico",
         "admin_alterar_senha_sindico",
         admin_alterar_senha_sindico,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/criar",
+        "admin_parceiros_criar",
+        admin_parceiros_criar,
         methods=["POST"],
     )

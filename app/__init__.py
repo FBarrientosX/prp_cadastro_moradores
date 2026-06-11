@@ -163,6 +163,42 @@ def _garantir_colunas_reservas():
         db.session.commit()
 
 
+def _garantir_tabelas_parceiros(app):
+    with app.app_context():
+        db.create_all()
+
+
+def _garantir_colunas_parceiros():
+    inspetor = inspect(db.engine)
+    if "parceiro" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("parceiro")}
+    alteracoes = []
+    if "status" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
+        )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+        db.session.execute(
+            text(
+                """
+                UPDATE parceiro
+                SET status = CASE
+                    WHEN ativo = 1 THEN 'Ativo'
+                    ELSE 'Bloqueado'
+                END
+                WHERE status IS NULL OR status = 'Pendente'
+                """
+            )
+        )
+        db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -217,5 +253,8 @@ def create_app(config=None):
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
+        _garantir_colunas_parceiros()
+
+    _garantir_tabelas_parceiros(app)
 
     return app

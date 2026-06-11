@@ -65,6 +65,9 @@
                     <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                     {% endif %}
                 </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                    <i class="bi bi-gift me-2"></i>Clube de Vantagens
+                </a>
             {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
                     <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
@@ -127,6 +130,9 @@
                         {% if reservas_pendentes_count > 0 %}
                         <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                         {% endif %}
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                        <i class="bi bi-gift me-2"></i>Clube de Vantagens
                     </a>
                 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">

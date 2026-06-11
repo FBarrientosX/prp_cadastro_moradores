@@ -49,6 +49,13 @@
         </button>
     </li>
     {% endif %}
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="clube-tab" data-bs-toggle="tab"
+                data-bs-target="#clube-vantagens" type="button" role="tab">
+            Clube de Vantagens
+            <span class="badge bg-success ms-1">{{ parceiros_clube|length }}</span>
+        </button>
+    </li>
 </ul>
 
 <div class="tab-content pt-3" id="adminTabsContent">
@@ -263,6 +270,131 @@
         {% endif %}
     </div>
     {% endif %}
+
+    <div class="tab-pane fade" id="clube-vantagens" role="tabpanel">
+        <div class="d-flex justify-content-end mb-3">
+            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modal-parceiro">
+                + Novo Parceiro
+            </button>
+        </div>
+
+        <div class="card shadow-sm mb-3">
+            <div class="card-body p-3">
+                <h3 class="h6 mb-3">Parceiros Cadastrados</h3>
+                {% if parceiros_clube %}
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Empresa</th>
+                                <th>E-mail</th>
+                                <th>Categoria</th>
+                                <th>Telefone</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for parceiro in parceiros_clube %}
+                            <tr>
+                                <td>{{ parceiro.nome_empresa }}</td>
+                                <td>{{ parceiro.email }}</td>
+                                <td>{{ parceiro.categoria }}</td>
+                                <td>{{ parceiro.telefone or '—' }}</td>
+                                <td>
+                                    {% if parceiro.status == 'Ativo' %}
+                                    <span class="badge bg-success">Ativo</span>
+                                    {% elif parceiro.status == 'Bloqueado' %}
+                                    <span class="badge bg-danger">Bloqueado</span>
+                                    {% else %}
+                                    <span class="badge bg-warning text-dark">Pendente</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info mb-0">Nenhum parceiro cadastrado.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-3">
+                <h3 class="h6 mb-3">Auditoria de Cupons</h3>
+                {% if auditoria_cupons %}
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Parceiro</th>
+                                <th>Cupom/Oferta</th>
+                                <th>Morador (Bloco/Apto)</th>
+                                <th>Data Gerado</th>
+                                <th>Data Validado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for resgate in auditoria_cupons %}
+                            <tr>
+                                <td>{{ resgate.cupom.parceiro.nome_empresa }}</td>
+                                <td>{{ resgate.cupom.titulo }}</td>
+                                <td>Bloco {{ resgate.unidade.bloco }} / Apto {{ resgate.unidade.apartamento }}</td>
+                                <td>{{ resgate.data_resgate.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td>
+                                    {% if resgate.data_utilizacao %}
+                                    {{ resgate.data_utilizacao.strftime('%d/%m/%Y %H:%M') }}
+                                    {% else %}
+                                    <span class="text-muted">Aguardando Uso</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info mb-0">Nenhum resgate registrado ainda.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modal-parceiro" tabindex="-1" aria-labelledby="modal-parceiro-label" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_parceiros_criar') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modal-parceiro-label">Novo Parceiro</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" name="nome_empresa" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">E-mail</label>
+                        <input type="email" class="form-control" name="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Telefone</label>
+                        <input type="text" class="form-control" name="telefone">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label">Categoria</label>
+                        <input type="text" class="form-control" name="categoria" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success">Cadastrar Parceiro</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <!-- Modais de Detalhes -->
