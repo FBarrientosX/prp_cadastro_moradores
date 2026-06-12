@@ -199,6 +199,42 @@ def _garantir_colunas_parceiros():
         db.session.commit()
 
 
+def _garantir_colunas_cupom():
+    inspetor = inspect(db.engine)
+    if "cupom" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("cupom")}
+    alteracoes = []
+    atualizacoes = []
+
+    if "limite_total" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN limite_total INTEGER")
+    if "limite_por_unidade" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE cupom ADD COLUMN limite_por_unidade INTEGER NOT NULL DEFAULT 1"
+        )
+    if "data_criacao" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_criacao DATETIME")
+        atualizacoes.append(
+            "UPDATE cupom SET data_criacao = datetime('now') WHERE data_criacao IS NULL"
+        )
+    if "data_update" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_update DATETIME")
+        atualizacoes.append(
+            "UPDATE cupom SET data_update = datetime('now') WHERE data_update IS NULL"
+        )
+    if "data_desativacao" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_desativacao DATETIME")
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    for atualizacao in atualizacoes:
+        db.session.execute(text(atualizacao))
+    if alteracoes or atualizacoes:
+        db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -254,6 +290,7 @@ def create_app(config=None):
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
         _garantir_colunas_parceiros()
+        _garantir_colunas_cupom()
 
     _garantir_tabelas_parceiros(app)
 

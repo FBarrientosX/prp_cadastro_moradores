@@ -205,6 +205,16 @@ class Cupom(db.Model):
     codigo_prefixo = db.Column(db.String(10), nullable=False)
     data_validade = db.Column(db.Date, nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
+    limite_total = db.Column(db.Integer, nullable=True)
+    limite_por_unidade = db.Column(db.Integer, nullable=False, default=1)
+    data_criacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    data_update = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    data_desativacao = db.Column(db.DateTime, nullable=True)
 
     resgates = db.relationship("ResgateCupom", backref="cupom", lazy=True)
 

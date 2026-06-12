@@ -592,6 +592,41 @@ def _buscar_parceiro_logado():
     return Parceiro.query.get(parceiro_id)
 
 
+def _parse_limite_total_form(valor):
+    if valor is None:
+        return None
+    valor = str(valor).strip()
+    if not valor:
+        return None
+    try:
+        limite = int(valor)
+    except ValueError:
+        return None
+    return limite if limite > 0 else None
+
+
+def _parse_limite_por_unidade_form(valor, padrao=1):
+    if valor is None or not str(valor).strip():
+        return padrao
+    try:
+        limite = int(str(valor).strip())
+    except ValueError:
+        return padrao
+    return limite if limite > 0 else padrao
+
+
+def _contagem_resgates_por_cupom(cupom_ids):
+    if not cupom_ids:
+        return {}
+    rows = (
+        db.session.query(ResgateCupom.cupom_id, func.count(ResgateCupom.id))
+        .filter(ResgateCupom.cupom_id.in_(cupom_ids))
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    return {cupom_id: total for cupom_id, total in rows}
+
+
 @unidade_required
 def clube_vantagens(unidade):
     parceiros = (
@@ -619,16 +654,17 @@ def clube_vantagens_resgatar(unidade, cupom_id):
         flash("Este cupom não está disponível no momento.", "warning")
         return redirect(url_for("clube_vantagens"))
 
-    resgate_existente = ResgateCupom.query.filter_by(
+    total_resgates = ResgateCupom.query.filter_by(cupom_id=cupom.id).count()
+    if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
+        flash("Oferta esgotada.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    resgates_unidade = ResgateCupom.query.filter_by(
         cupom_id=cupom.id,
         unidade_id=unidade.id,
-        status="Ativo",
-    ).first()
-    if resgate_existente:
-        flash(
-            f"Você já resgatou este cupom. Código ativo: {resgate_existente.codigo_unico}",
-            "info",
-        )
+    ).count()
+    if resgates_unidade >= cupom.limite_por_unidade:
+        flash("Você atingiu o limite de resgates para esta oferta.", "danger")
         return redirect(url_for("clube_vantagens"))
 
     bloco = "".join(ch for ch in str(unidade.bloco or "") if ch.isalnum()).upper()
@@ -741,7 +777,12 @@ def parceiro_validacao():
         flash("Seu acesso está indisponível no momento.", "danger")
         return redirect(url_for("parceiro_dashboard"))
 
-    return render_template("parceiro_validacao.html", parceiro=parceiro)
+    codigo_url = request.args.get("codigo", "").strip().upper()
+    return render_template(
+        "parceiro_validacao.html",
+        parceiro=parceiro,
+        codigo_url=codigo_url,
+    )
 
 
 @parceiro_required
@@ -759,7 +800,13 @@ def parceiro_cupons():
         return redirect(url_for("parceiro_dashboard"))
 
     cupons = Cupom.query.filter_by(parceiro_id=parceiro.id).order_by(Cupom.id.desc()).all()
-    return render_template("parceiro_cupons.html", parceiro=parceiro, cupons=cupons)
+    resgates_por_cupom = _contagem_resgates_por_cupom([cupom.id for cupom in cupons])
+    return render_template(
+        "parceiro_cupons.html",
+        parceiro=parceiro,
+        cupons=cupons,
+        resgates_por_cupom=resgates_por_cupom,
+    )
 
 
 @parceiro_required
@@ -842,6 +889,10 @@ def parceiro_cupons_criar():
     descricao = request.form.get("descricao", "").strip()
     codigo_prefixo = request.form.get("codigo_prefixo", "").strip().upper()
     data_validade_str = request.form.get("data_validade", "").strip()
+    limite_total = _parse_limite_total_form(request.form.get("limite_total"))
+    limite_por_unidade = _parse_limite_por_unidade_form(
+        request.form.get("limite_por_unidade"), padrao=1
+    )
 
     if not titulo or not descricao or not codigo_prefixo:
         flash("Preencha título, descrição e código prefixo.", "danger")
@@ -863,10 +914,71 @@ def parceiro_cupons_criar():
             codigo_prefixo=codigo_prefixo,
             data_validade=data_validade,
             ativo=True,
+            limite_total=limite_total,
+            limite_por_unidade=limite_por_unidade,
         )
     )
     db.session.commit()
     flash("Cupom criado com sucesso.", "success")
+    return redirect(url_for("parceiro_cupons"))
+
+
+@parceiro_required
+def parceiro_cupons_desativar(cupom_id):
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para gerenciar cupons.", "warning")
+        return redirect(url_for("parceiro_cupons"))
+
+    cupom = Cupom.query.filter_by(id=cupom_id, parceiro_id=parceiro.id).first_or_404()
+    if not cupom.ativo:
+        flash("Este cupom já está inativo.", "info")
+        return redirect(url_for("parceiro_cupons"))
+
+    cupom.ativo = False
+    cupom.data_desativacao = datetime.utcnow()
+    db.session.commit()
+    flash("Cupom desativado com sucesso.", "warning")
+    return redirect(url_for("parceiro_cupons"))
+
+
+@parceiro_required
+def parceiro_cupons_reativar(cupom_id):
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para gerenciar cupons.", "warning")
+        return redirect(url_for("parceiro_cupons"))
+
+    cupom_antigo = Cupom.query.filter_by(id=cupom_id, parceiro_id=parceiro.id).first_or_404()
+    if cupom_antigo.ativo:
+        flash("Este cupom já está ativo.", "info")
+        return redirect(url_for("parceiro_cupons"))
+
+    novo_cupom = Cupom(
+        parceiro_id=parceiro.id,
+        titulo=cupom_antigo.titulo,
+        descricao=cupom_antigo.descricao,
+        codigo_prefixo=cupom_antigo.codigo_prefixo,
+        data_validade=cupom_antigo.data_validade,
+        ativo=True,
+        limite_total=cupom_antigo.limite_total,
+        limite_por_unidade=cupom_antigo.limite_por_unidade,
+    )
+    db.session.add(novo_cupom)
+    db.session.commit()
+    flash(
+        f"Nova versão do cupom criada com sucesso (ID #{novo_cupom.id}). "
+        "A versão anterior permanece inativa para preservar o histórico.",
+        "success",
+    )
     return redirect(url_for("parceiro_cupons"))
 
 
@@ -2167,6 +2279,18 @@ def init_app(app):
         "/parceiro/cupons/criar",
         "parceiro_cupons_criar",
         parceiro_cupons_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons/<int:cupom_id>/desativar",
+        "parceiro_cupons_desativar",
+        parceiro_cupons_desativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons/<int:cupom_id>/reativar",
+        "parceiro_cupons_reativar",
+        parceiro_cupons_reativar,
         methods=["POST"],
     )
     app.add_url_rule(

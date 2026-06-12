@@ -26,8 +26,15 @@
                         </div>
                         <div class="card-footer bg-white border-0 pt-0">
                             {% if resgate %}
-                            <div class="alert alert-success p-2 text-center fw-bold mb-0">
-                                Seu código: {{ resgate.codigo_unico }}
+                            <div class="alert alert-success p-3 text-center mb-0">
+                                <p class="small text-muted mb-1">Seu código</p>
+                                <p class="fw-bold fs-5 mb-0">{{ resgate.codigo_unico }}</p>
+                                <div class="qrcode-container mt-3 mx-auto d-flex justify-content-center"
+                                     style="width: 128px;"
+                                     data-url="{{ url_for('parceiro_validacao', codigo=resgate.codigo_unico, _external=True) }}"></div>
+                                <p class="small text-muted mt-2 mb-0">
+                                    Apresente este QR Code no estabelecimento parceiro para validação rápida.
+                                </p>
                             </div>
                             {% else %}
                             <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
@@ -48,4 +55,27 @@
     Nenhum parceiro com cupons ativos no momento. Volte em breve para novas vantagens.
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var qrContainers = document.querySelectorAll('.qrcode-container');
+    qrContainers.forEach(function(container) {
+        var url = container.getAttribute('data-url');
+        if (!url) {
+            return;
+        }
+        new QRCode(container, {
+            text: url,
+            width: 128,
+            height: 128,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    });
+});
+</script>
 {% endblock %}

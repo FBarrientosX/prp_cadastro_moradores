@@ -28,6 +28,15 @@
                 <label class="form-label">Data de Validade</label>
                 <input type="date" class="form-control" name="data_validade">
             </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Limite Total de Resgates</label>
+                <input type="number" class="form-control" name="limite_total" min="1"
+                       placeholder="Deixe em branco para ilimitado">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Limite por Unidade</label>
+                <input type="number" class="form-control" name="limite_por_unidade" min="1" value="1" required>
+            </div>
             <div class="col-12">
                 <button type="submit" class="btn btn-primary">Salvar Cupom</button>
             </div>
@@ -43,15 +52,21 @@
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
+                        <th>ID</th>
                         <th>Título</th>
                         <th>Prefixo</th>
                         <th>Validade</th>
+                        <th>Limite Total</th>
+                        <th>Resgatados</th>
                         <th>Status</th>
+                        <th class="text-end">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for cupom in cupons %}
+                    {% set total_resgatados = resgates_por_cupom.get(cupom.id, 0) %}
                     <tr>
+                        <td class="text-muted">#{{ cupom.id }}</td>
                         <td>{{ cupom.titulo }}</td>
                         <td>{{ cupom.codigo_prefixo }}</td>
                         <td>
@@ -62,10 +77,44 @@
                             {% endif %}
                         </td>
                         <td>
+                            {% if cupom.limite_total %}
+                            {{ cupom.limite_total }}
+                            {% else %}
+                            Ilimitado
+                            {% endif %}
+                        </td>
+                        <td>{{ total_resgatados }}</td>
+                        <td>
                             {% if cupom.ativo %}
                             <span class="badge text-bg-success">Ativo</span>
                             {% else %}
                             <span class="badge text-bg-secondary">Inativo</span>
+                            {% if cupom.data_desativacao %}
+                            <span class="d-block small text-muted mt-1">
+                                Desativado em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
+                            </span>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            {% if cupom.ativo %}
+                            <form method="post"
+                                  action="{{ url_for('parceiro_cupons_desativar', cupom_id=cupom.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Deseja desativar este cupom? Ele sairá da vitrine dos moradores.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    Desativar
+                                </button>
+                            </form>
+                            {% else %}
+                            <form method="post"
+                                  action="{{ url_for('parceiro_cupons_reativar', cupom_id=cupom.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Será criada uma nova versão deste cupom. A versão atual permanecerá inativa no histórico. Continuar?');">
+                                <button type="submit" class="btn btn-sm btn-outline-success">
+                                    Reativar
+                                </button>
+                            </form>
                             {% endif %}
                         </td>
                     </tr>
