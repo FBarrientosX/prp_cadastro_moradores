@@ -1,0 +1,83 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Meus Cupons — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Meus Cupons</h1>
+    <p class="text-muted mb-0">Crie e gerencie as ofertas do Clube de Vantagens</p>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-4">
+        <h2 class="h6 mb-3">+ Criar Novo Cupom</h2>
+        <form method="post" action="{{ url_for('parceiro_cupons_criar') }}" class="row g-3">
+            <div class="col-12 col-md-6">
+                <label class="form-label">Título</label>
+                <input type="text" class="form-control" name="titulo" required>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label">Código Prefixo</label>
+                <input type="text" class="form-control" name="codigo_prefixo" maxlength="10" required>
+            </div>
+            <div class="col-12">
+                <label class="form-label">Descrição</label>
+                <textarea class="form-control" name="descricao" rows="2" required></textarea>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Data de Validade</label>
+                <input type="date" class="form-control" name="data_validade">
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Salvar Cupom</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-3">
+        <h2 class="h6 mb-3">Cupons Cadastrados</h2>
+        {% if cupons %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Título</th>
+                        <th>Prefixo</th>
+                        <th>Validade</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cupom in cupons %}
+                    <tr>
+                        <td>{{ cupom.titulo }}</td>
+                        <td>{{ cupom.codigo_prefixo }}</td>
+                        <td>
+                            {% if cupom.data_validade %}
+                            {{ cupom.data_validade.strftime('%d/%m/%Y') }}
+                            {% else %}
+                            Sem validade
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cupom.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativo</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">
+            Nenhum cupom criado ainda.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

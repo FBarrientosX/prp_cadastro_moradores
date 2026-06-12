@@ -82,6 +82,11 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
                     <i class="bi bi-speedometer2 me-2"></i>Dashboard
                 </a>
+                {% if sidebar_user.role == 'admin' %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics'] %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
+                    <i class="bi bi-shop me-2"></i>Clube de Vantagens
+                </a>
+                {% endif %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
                     <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
                 </a>
@@ -148,6 +153,11 @@
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
                         <i class="bi bi-speedometer2 me-2"></i>Dashboard
                     </a>
+                    {% if sidebar_user.role == 'admin' %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics'] %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
+                        <i class="bi bi-shop me-2"></i>Clube de Vantagens
+                    </a>
+                    {% endif %}
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
                         <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
                     </a>

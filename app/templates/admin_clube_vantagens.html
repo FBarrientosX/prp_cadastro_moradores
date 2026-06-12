@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+
+{% block title %}Clube de Vantagens — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Gestão do Clube de Vantagens</h1>
+        <p class="text-muted mb-0">
+            {% if active_tab == 'analytics' %}
+            Visão analítica de adesão e desempenho das parcerias
+            {% else %}
+            Parceiros, cupons e auditoria de resgates
+            {% endif %}
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        {% if active_tab == 'gestao' %}
+        <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modal-parceiro">
+            + Novo Parceiro
+        </button>
+        {% endif %}
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-4" role="tablist">
+    <li class="nav-item" role="presentation">
+        <a class="nav-link {% if active_tab == 'gestao' %}active{% endif %}"
+           href="{{ url_for('admin_clube_vantagens') }}">
+            Gestão
+        </a>
+    </li>
+    <li class="nav-item" role="presentation">
+        <a class="nav-link {% if active_tab == 'analytics' %}active{% endif %}"
+           href="{{ url_for('admin_clube_vantagens_analytics') }}">
+            Dashboard Analytics
+        </a>
+    </li>
+</ul>
+
+{% if active_tab == 'gestao' %}
+<div class="card shadow-sm mb-4">
+    <div class="card-body p-3">
+        <h2 class="h6 mb-3">Parceiros Cadastrados</h2>
+        {% if parceiros_clube %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Empresa</th>
+                        <th>E-mail</th>
+                        <th>Categoria</th>
+                        <th>Telefone</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for parceiro in parceiros_clube %}
+                    <tr>
+                        <td>{{ parceiro.nome_empresa }}</td>
+                        <td>{{ parceiro.email }}</td>
+                        <td>{{ parceiro.categoria }}</td>
+                        <td>{{ parceiro.telefone or '—' }}</td>
+                        <td>
+                            {% if parceiro.status == 'Ativo' %}
+                            <span class="badge bg-success">Ativo</span>
+                            {% elif parceiro.status == 'Bloqueado' %}
+                            <span class="badge bg-danger">Bloqueado</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            {% if current_user and current_user.role == 'admin' %}
+                                {% if parceiro.status in ['Ativo', 'Pendente'] %}
+                                <form method="post"
+                                      action="{{ url_for('admin_parceiro_bloquear', parceiro_id=parceiro.id) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Tem certeza que deseja bloquear este parceiro? Os cupons dele sairão imediatamente da vitrine.');">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                        Bloquear
+                                    </button>
+                                </form>
+                                {% elif parceiro.status == 'Bloqueado' %}
+                                <form method="post"
+                                      action="{{ url_for('admin_parceiro_ativar', parceiro_id=parceiro.id) }}"
+                                      class="d-inline">
+                                    <button type="submit" class="btn btn-sm btn-outline-success">
+                                        Reativar
+                                    </button>
+                                </form>
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">Nenhum parceiro cadastrado.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-3">
+        <h2 class="h6 mb-3">Auditoria de Cupons</h2>
+        {% if auditoria_cupons %}
+        <div class="table-responsive">
+            <table class="table table-striped align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Parceiro</th>
+                        <th>Cupom/Oferta</th>
+                        <th>Morador (Bloco/Apto)</th>
+                        <th>Data Gerado</th>
+                        <th>Data Validado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for resgate in auditoria_cupons %}
+                    <tr>
+                        <td>{{ resgate.cupom.parceiro.nome_empresa }}</td>
+                        <td>{{ resgate.cupom.titulo }}</td>
+                        <td>Bloco {{ resgate.unidade.bloco }} / Apto {{ resgate.unidade.apartamento }}</td>
+                        <td>{{ resgate.data_resgate.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if resgate.data_utilizacao %}
+                            {{ resgate.data_utilizacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            <span class="text-muted">Aguardando Uso</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">Nenhum resgate registrado ainda.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="modal-parceiro" tabindex="-1" aria-labelledby="modal-parceiro-label" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_parceiros_criar') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modal-parceiro-label">Novo Parceiro</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" name="nome_empresa" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">E-mail</label>
+                        <input type="email" class="form-control" name="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Telefone</label>
+                        <input type="text" class="form-control" name="telefone">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label">Categoria</label>
+                        <input type="text" class="form-control" name="categoria" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success">Cadastrar Parceiro</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% else %}
+<div class="row g-3 mb-4">
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Cupons Ativos</p>
+                <p class="h3 mb-0 text-primary">{{ analytics.metricas.total_cupons_ativos }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Resgates Realizados</p>
+                <p class="h3 mb-0 text-success">{{ analytics.metricas.total_resgates }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Parceiro Mais Popular</p>
+                <p class="h6 mb-1">{{ analytics.metricas.parceiro_popular }}</p>
+                <span class="badge bg-info text-dark">{{ analytics.metricas.parceiro_popular_count }} resgates</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Unidade Mais Engajada</p>
+                <p class="h6 mb-1">{{ analytics.metricas.unidade_engajada }}</p>
+                <span class="badge bg-warning text-dark">{{ analytics.metricas.unidade_engajada_count }} resgates</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h6 mb-3">Cupons por Parceiro</h2>
+                <canvas id="chartCuponsParceiro" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h6 mb-3">Resgates por Bloco</h2>
+                <canvas id="chartResgatesBloco" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <h2 class="h6 mb-0">Evolução de Resgates por Data</h2>
+                    <span class="badge bg-secondary">
+                        Taxa de conversão geral: {{ analytics.status_resgates.taxa_conversao }}%
+                        ({{ analytics.status_resgates.utilizado }} utilizados / {{ analytics.metricas.total_resgates }} resgates)
+                    </span>
+                </div>
+                <canvas id="chartEvolucaoResgates" height="100"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-3">
+                <h2 class="h6 mb-3">Top 5 Unidades Mais Ativas</h2>
+                {% if analytics.top5_unidades %}
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Bloco</th>
+                                <th>Apartamento</th>
+                                <th class="text-end">Resgates</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for unidade in analytics.top5_unidades %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>{{ unidade.bloco }}</td>
+                                <td>{{ unidade.apartamento }}</td>
+                                <td class="text-end">{{ unidade.total }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info mb-0">Nenhum resgate registrado ainda.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-3">
+                <h2 class="h6 mb-3">Cupons com Maior Taxa de Conversão</h2>
+                {% if analytics.cupons_conversao %}
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Cupom</th>
+                                <th>Parceiro</th>
+                                <th class="text-end">Resgates</th>
+                                <th class="text-end">Utilizados</th>
+                                <th class="text-end">Taxa</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cupom in analytics.cupons_conversao %}
+                            <tr>
+                                <td>{{ cupom.titulo }}</td>
+                                <td>{{ cupom.parceiro }}</td>
+                                <td class="text-end">{{ cupom.resgates }}</td>
+                                <td class="text-end">{{ cupom.utilizados }}</td>
+                                <td class="text-end">
+                                    <span class="badge {% if cupom.taxa >= 50 %}bg-success{% elif cupom.taxa > 0 %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                                        {{ cupom.taxa }}%
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info mb-0">Nenhum cupom com resgates registrados.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if active_tab == 'analytics' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+    const chartData = {{ analytics.charts | tojson }};
+
+    new Chart(document.getElementById('chartCuponsParceiro'), {
+        type: 'bar',
+        data: {
+            labels: chartData.cupons_por_parceiro.labels,
+            datasets: [{
+                label: 'Cupons cadastrados',
+                data: chartData.cupons_por_parceiro.values,
+                backgroundColor: 'rgba(13, 110, 253, 0.7)',
+                borderColor: 'rgba(13, 110, 253, 1)',
+                borderWidth: 1,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+        },
+    });
+
+    new Chart(document.getElementById('chartResgatesBloco'), {
+        type: 'doughnut',
+        data: {
+            labels: chartData.resgates_por_bloco.labels,
+            datasets: [{
+                data: chartData.resgates_por_bloco.values,
+                backgroundColor: [
+                    '#0d6efd', '#198754', '#ffc107', '#dc3545', '#6f42c1',
+                    '#20c997', '#fd7e14', '#0dcaf0', '#6610f2', '#adb5bd',
+                ],
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom' } },
+        },
+    });
+
+    new Chart(document.getElementById('chartEvolucaoResgates'), {
+        type: 'line',
+        data: {
+            labels: chartData.evolucao_resgates.labels,
+            datasets: [{
+                label: 'Resgates',
+                data: chartData.evolucao_resgates.values,
+                fill: true,
+                tension: 0.3,
+                backgroundColor: 'rgba(25, 135, 84, 0.15)',
+                borderColor: 'rgba(25, 135, 84, 1)',
+                pointBackgroundColor: 'rgba(25, 135, 84, 1)',
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+        },
+    });
+</script>
+{% endif %}
+{% endblock %}
