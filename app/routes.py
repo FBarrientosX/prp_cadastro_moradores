@@ -1072,6 +1072,7 @@ def parceiro_perfil_editar():
     nome_empresa = request.form.get("nome_empresa", "").strip()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
     if not nome_empresa or not categoria:
@@ -1081,6 +1082,7 @@ def parceiro_perfil_editar():
     parceiro.nome_empresa = nome_empresa
     parceiro.telefone = telefone
     parceiro.categoria = categoria
+    parceiro.endereco = endereco
     parceiro.descricao = descricao
     db.session.commit()
     flash("Perfil comercial atualizado com sucesso.", "success")
@@ -2007,6 +2009,7 @@ def admin_parceiros_criar():
     email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
     if not nome_empresa or not email or not categoria:
@@ -2023,6 +2026,7 @@ def admin_parceiros_criar():
         senha_hash=generate_password_hash("senha123"),
         telefone=telefone,
         categoria=categoria,
+        endereco=endereco,
         descricao=descricao,
         ativo=True,
         status="Pendente",
@@ -2040,6 +2044,7 @@ def admin_parceiro_editar(parceiro_id):
     email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
     if not nome_empresa or not email or not categoria:
@@ -2058,6 +2063,7 @@ def admin_parceiro_editar(parceiro_id):
     parceiro.email = email
     parceiro.telefone = telefone
     parceiro.categoria = categoria
+    parceiro.endereco = endereco
     parceiro.descricao = descricao
     db.session.commit()
     flash("Parceiro atualizado com sucesso.", "success")

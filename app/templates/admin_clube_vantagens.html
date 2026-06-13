@@ -185,6 +185,12 @@
                                value="{{ parceiro.telefone or '' }}">
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">Endereço Completo</label>
+                        <input type="text" class="form-control" name="endereco"
+                               value="{{ parceiro.endereco or '' }}"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">Categoria</label>
                         <input type="text" class="form-control" name="categoria"
                                value="{{ parceiro.categoria }}" required>
@@ -224,6 +230,11 @@
                     <div class="mb-3">
                         <label class="form-label">Telefone</label>
                         <input type="text" class="form-control" name="telefone">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Endereço Completo</label>
+                        <input type="text" class="form-control" name="endereco"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Categoria</label>

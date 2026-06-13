@@ -181,6 +181,8 @@ def _garantir_colunas_parceiros():
         )
     if "descricao" not in colunas:
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN descricao TEXT")
+    if "endereco" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN endereco VARCHAR(255)")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))

@@ -33,6 +33,12 @@
                                placeholder="Ex: (11) 99999-9999">
                     </div>
                     <div class="mb-3">
+                        <label for="endereco" class="form-label">Endereço</label>
+                        <input type="text" class="form-control" id="endereco" name="endereco"
+                               value="{{ parceiro.endereco or '' }}"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
                         <label for="categoria" class="form-label">Categoria</label>
                         <input type="text" class="form-control" id="categoria" name="categoria"
                                value="{{ parceiro.categoria }}" required

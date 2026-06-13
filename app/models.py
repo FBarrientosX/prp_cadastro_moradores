@@ -185,6 +185,7 @@ class Parceiro(db.Model):
     senha_hash = db.Column(db.String(256), nullable=False)
     telefone = db.Column(db.String(20), nullable=True)
     categoria = db.Column(db.String(50), nullable=False)
+    endereco = db.Column(db.String(255), nullable=True)
     descricao = db.Column(db.Text, nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
