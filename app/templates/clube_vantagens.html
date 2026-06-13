@@ -19,6 +19,15 @@
         </button>
     </li>
     <li class="nav-item" role="presentation">
+        <button class="nav-link" id="guia-tab" data-bs-toggle="tab"
+                data-bs-target="#guia-parceiros" type="button" role="tab">
+            Guia de Parceiros
+            {% if parceiros_ativos %}
+            <span class="badge bg-info text-dark ms-1">{{ parceiros_ativos|length }}</span>
+            {% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
         <button class="nav-link" id="resgates-tab" data-bs-toggle="tab"
                 data-bs-target="#resgates" type="button" role="tab">
             Cupons para Usar
@@ -66,6 +75,76 @@
         </div>
         {% else %}
         <p class="text-muted mt-3 mb-0">Nenhum cupom nesta categoria.</p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="guia-parceiros" role="tabpanel">
+        {% if parceiros_ativos %}
+        <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
+            {% for parceiro in parceiros_ativos %}
+            {% set ns = namespace(descricao='') %}
+            {% for cupom in parceiro.cupons %}
+                {% if cupom.ativo and (not cupom.data_validade or cupom.data_validade >= data_atual) and not ns.descricao %}
+                    {% set ns.descricao = cupom.descricao %}
+                {% endif %}
+            {% endfor %}
+            {% set telefone_limpo = parceiro.telefone|replace(' ', '')|replace('(', '')|replace(')', '')|replace('-', '')|replace('+', '') if parceiro.telefone else '' %}
+            {% if telefone_limpo %}
+                {% if telefone_limpo.startswith('55') %}
+                    {% set whatsapp_numero = telefone_limpo %}
+                {% else %}
+                    {% set whatsapp_numero = '55' ~ telefone_limpo %}
+                {% endif %}
+            {% endif %}
+            <div class="col">
+                <div class="card h-100 shadow-sm border-0">
+                    <div class="card-header bg-white border-0 pb-0">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <h2 class="h6 mb-1">{{ parceiro.nome_empresa }}</h2>
+                            {% if parceiro.id in parceiros_com_cupons_ativos %}
+                            <span class="badge bg-success">Possui cupons ativos!</span>
+                            {% endif %}
+                        </div>
+                        <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-0">
+                            {% if ns.descricao %}
+                            {{ ns.descricao }}
+                            {% else %}
+                            Parceiro credenciado na categoria {{ parceiro.categoria }}.
+                            Entre em contato para conhecer os serviços disponíveis.
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="card-footer bg-white border-0 pt-0">
+                        <p class="small text-muted mb-2">Contatos</p>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% if parceiro.telefone %}
+                            <a href="https://wa.me/{{ whatsapp_numero }}"
+                               class="btn btn-sm btn-outline-success"
+                               target="_blank"
+                               rel="noopener noreferrer">
+                                <i class="bi bi-whatsapp me-1"></i>{{ parceiro.telefone }}
+                            </a>
+                            {% endif %}
+                            {% if parceiro.email %}
+                            <a href="mailto:{{ parceiro.email }}"
+                               class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-envelope me-1"></i>{{ parceiro.email }}
+                            </a>
+                            {% endif %}
+                            {% if not parceiro.telefone and not parceiro.email %}
+                            <span class="small text-muted">Contatos não informados.</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mt-3 mb-0">Nenhum parceiro cadastrado no guia comercial.</p>
         {% endif %}
     </div>
 

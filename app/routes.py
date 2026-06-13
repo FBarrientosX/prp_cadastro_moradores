@@ -704,11 +704,32 @@ def clube_vantagens(unidade):
         .all()
     )
 
+    parceiros_ativos = (
+        Parceiro.query.filter_by(status="Ativo")
+        .order_by(Parceiro.nome_empresa)
+        .all()
+    )
+    parceiros_com_cupons_ativos = {
+        parceiro_id
+        for (parceiro_id,) in db.session.query(Cupom.parceiro_id)
+        .join(Parceiro)
+        .filter(
+            Parceiro.status == "Ativo",
+            Cupom.ativo.is_(True),
+            or_(Cupom.data_validade.is_(None), Cupom.data_validade >= data_atual),
+        )
+        .distinct()
+        .all()
+    }
+
     return render_template(
         "clube_vantagens.html",
         cupons_disponiveis=cupons_disponiveis,
         resgates_ativos=resgates_ativos,
         resgates_utilizados=resgates_utilizados,
+        parceiros_ativos=parceiros_ativos,
+        parceiros_com_cupons_ativos=parceiros_com_cupons_ativos,
+        data_atual=data_atual,
     )
 
 
