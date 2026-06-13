@@ -74,6 +74,13 @@
                         </td>
                         <td class="text-end text-nowrap">
                             {% if current_user and current_user.role == 'admin' %}
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-warning"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalEditarParceiro{{ parceiro.id }}"
+                                        title="Editar parceiro">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
                                 {% if parceiro.status in ['Ativo', 'Pendente'] %}
                                 <form method="post"
                                       action="{{ url_for('admin_parceiro_bloquear', parceiro_id=parceiro.id) }}"
@@ -148,6 +155,54 @@
         {% endif %}
     </div>
 </div>
+
+{% for parceiro in parceiros_clube %}
+<div class="modal fade" id="modalEditarParceiro{{ parceiro.id }}" tabindex="-1"
+     aria-labelledby="modalEditarParceiroLabel{{ parceiro.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_parceiro_editar', parceiro_id=parceiro.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEditarParceiroLabel{{ parceiro.id }}">
+                        Editar Parceiro
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" name="nome_empresa"
+                               value="{{ parceiro.nome_empresa }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">E-mail</label>
+                        <input type="email" class="form-control" name="email"
+                               value="{{ parceiro.email }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Telefone</label>
+                        <input type="text" class="form-control" name="telefone"
+                               value="{{ parceiro.telefone or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Categoria</label>
+                        <input type="text" class="form-control" name="categoria"
+                               value="{{ parceiro.categoria }}" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label">Descrição da Empresa</label>
+                        <textarea class="form-control" name="descricao" rows="3">{{ parceiro.descricao or '' }}</textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-warning">Salvar Alterações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
 
 <div class="modal fade" id="modal-parceiro" tabindex="-1" aria-labelledby="modal-parceiro-label" aria-hidden="true">
     <div class="modal-dialog">

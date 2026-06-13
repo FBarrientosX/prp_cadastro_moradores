@@ -73,6 +73,10 @@
                href="{{ url_for('parceiro_cupons') }}">
                 <i class="bi bi-tags me-2"></i>Meus Cupons
             </a>
+            <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'parceiro_perfil' %}active{% endif %}"
+               href="{{ url_for('parceiro_perfil') }}">
+                <i class="bi bi-person-badge me-2"></i>Meu Perfil
+            </a>
         </nav>
         <div class="mt-auto pt-3">
             <a class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center"
@@ -102,6 +106,10 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'parceiro_cupons' %}active{% endif %}"
                    href="{{ url_for('parceiro_cupons') }}">
                     <i class="bi bi-tags me-2"></i>Meus Cupons
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'parceiro_perfil' %}active{% endif %}"
+                   href="{{ url_for('parceiro_perfil') }}">
+                    <i class="bi bi-person-badge me-2"></i>Meu Perfil
                 </a>
             </nav>
             <div class="mt-auto pt-3">

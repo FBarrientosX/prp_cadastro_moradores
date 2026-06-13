@@ -1036,6 +1036,57 @@ def parceiro_cupons_desativar(cupom_id):
     return redirect(url_for("parceiro_cupons"))
 
 
+@parceiro_required
+def parceiro_perfil():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Bloqueado":
+        flash(
+            "Sua conta foi suspensa pela administração do condomínio. "
+            "Entre em contato para mais detalhes.",
+            "danger",
+        )
+        return redirect(url_for("parceiro_login"))
+
+    return render_template("parceiro_perfil.html", parceiro=parceiro)
+
+
+@parceiro_required
+def parceiro_perfil_editar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Bloqueado":
+        flash(
+            "Sua conta foi suspensa pela administração do condomínio. "
+            "Entre em contato para mais detalhes.",
+            "danger",
+        )
+        return redirect(url_for("parceiro_login"))
+
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not categoria:
+        flash("Preencha nome da empresa e categoria.", "danger")
+        return redirect(url_for("parceiro_perfil"))
+
+    parceiro.nome_empresa = nome_empresa
+    parceiro.telefone = telefone
+    parceiro.categoria = categoria
+    parceiro.descricao = descricao
+    db.session.commit()
+    flash("Perfil comercial atualizado com sucesso.", "success")
+    return redirect(url_for("parceiro_perfil"))
+
+
 @acesso_reservas_required
 def reservas():
     usuario = get_current_user()
@@ -1983,6 +2034,37 @@ def admin_parceiros_criar():
 
 
 @admin_required
+def admin_parceiro_editar(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not email or not categoria:
+        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro_existente = Parceiro.query.filter(
+        Parceiro.email == email,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_existente:
+        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro.nome_empresa = nome_empresa
+    parceiro.email = email
+    parceiro.telefone = telefone
+    parceiro.categoria = categoria
+    parceiro.descricao = descricao
+    db.session.commit()
+    flash("Parceiro atualizado com sucesso.", "success")
+    return redirect(url_for("admin_clube_vantagens"))
+
+
+@admin_required
 def admin_parceiro_bloquear(parceiro_id):
     parceiro = Parceiro.query.get_or_404(parceiro_id)
     usuario = get_current_user()
@@ -2320,6 +2402,18 @@ def init_app(app):
         methods=["GET"],
     )
     app.add_url_rule(
+        "/parceiro/perfil",
+        "parceiro_perfil",
+        parceiro_perfil,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/perfil/editar",
+        "parceiro_perfil_editar",
+        parceiro_perfil_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/parceiro/validar_codigo",
         "parceiro_validar_codigo",
         parceiro_validar_codigo,
@@ -2530,6 +2624,12 @@ def init_app(app):
         "/admin/parceiros/criar",
         "admin_parceiros_criar",
         admin_parceiros_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/<int:parceiro_id>/editar",
+        "admin_parceiro_editar",
+        admin_parceiro_editar,
         methods=["POST"],
     )
     app.add_url_rule(
