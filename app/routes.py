@@ -655,9 +655,14 @@ def _metricas_resgates_por_cupom(cupom_ids):
 
 @unidade_required
 def clube_vantagens(unidade):
+    data_atual = datetime.utcnow().date()
     cupons_ativos = (
         Cupom.query.join(Parceiro)
-        .filter(Parceiro.status == "Ativo", Cupom.ativo.is_(True))
+        .filter(
+            Parceiro.status == "Ativo",
+            Cupom.ativo.is_(True),
+            or_(Cupom.data_validade.is_(None), Cupom.data_validade >= data_atual),
+        )
         .order_by(Parceiro.nome_empresa, Cupom.titulo)
         .all()
     )
@@ -713,6 +718,10 @@ def clube_vantagens_resgatar(unidade, cupom_id):
 
     if not cupom.ativo or not cupom.parceiro.ativo:
         flash("Este cupom não está disponível no momento.", "warning")
+        return redirect(url_for("clube_vantagens"))
+
+    if cupom.data_validade and cupom.data_validade < datetime.utcnow().date():
+        flash("Este cupom expirou.", "warning")
         return redirect(url_for("clube_vantagens"))
 
     total_resgates = ResgateCupom.query.filter_by(cupom_id=cupom.id).count()
@@ -1003,43 +1012,7 @@ def parceiro_cupons_desativar(cupom_id):
     cupom.ativo = False
     cupom.data_desativacao = datetime.utcnow()
     db.session.commit()
-    flash("Cupom desativado com sucesso.", "warning")
-    return redirect(url_for("parceiro_cupons"))
-
-
-@parceiro_required
-def parceiro_cupons_reativar(cupom_id):
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status != "Ativo":
-        flash("Ative seu cadastro para gerenciar cupons.", "warning")
-        return redirect(url_for("parceiro_cupons"))
-
-    cupom_antigo = Cupom.query.filter_by(id=cupom_id, parceiro_id=parceiro.id).first_or_404()
-    if cupom_antigo.ativo:
-        flash("Este cupom já está ativo.", "info")
-        return redirect(url_for("parceiro_cupons"))
-
-    novo_cupom = Cupom(
-        parceiro_id=parceiro.id,
-        titulo=cupom_antigo.titulo,
-        descricao=cupom_antigo.descricao,
-        codigo_prefixo=cupom_antigo.codigo_prefixo,
-        data_validade=cupom_antigo.data_validade,
-        ativo=True,
-        limite_total=cupom_antigo.limite_total,
-        limite_por_unidade=cupom_antigo.limite_por_unidade,
-    )
-    db.session.add(novo_cupom)
-    db.session.commit()
-    flash(
-        f"Nova versão do cupom criada com sucesso (ID #{novo_cupom.id}). "
-        "A versão anterior permanece inativa para preservar o histórico.",
-        "success",
-    )
+    flash("Cupom desativado permanentemente.", "warning")
     return redirect(url_for("parceiro_cupons"))
 
 
@@ -2346,12 +2319,6 @@ def init_app(app):
         "/parceiro/cupons/<int:cupom_id>/desativar",
         "parceiro_cupons_desativar",
         parceiro_cupons_desativar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/cupons/<int:cupom_id>/reativar",
-        "parceiro_cupons_reativar",
-        parceiro_cupons_reativar,
         methods=["POST"],
     )
     app.add_url_rule(

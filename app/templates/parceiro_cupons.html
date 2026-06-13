@@ -94,10 +94,10 @@
                             {% if cupom.ativo %}
                             <span class="badge text-bg-success">Ativo</span>
                             {% else %}
-                            <span class="badge text-bg-secondary">Inativo</span>
+                            <span class="badge text-bg-secondary">Encerrado</span>
                             {% if cupom.data_desativacao %}
-                            <span class="d-block small text-muted mt-1">
-                                Desativado em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
+                            <span class="badge text-bg-dark mt-1">
+                                Encerrado manualmente em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
                             </span>
                             {% endif %}
                             {% endif %}
@@ -114,18 +114,9 @@
                             <form method="post"
                                   action="{{ url_for('parceiro_cupons_desativar', cupom_id=cupom.id) }}"
                                   class="d-inline"
-                                  onsubmit="return confirm('Deseja desativar este cupom? Ele sairá da vitrine dos moradores.');">
+                                  onsubmit="return confirm('Deseja encerrar este cupom permanentemente? Esta ação não pode ser desfeita e ele sairá da vitrine dos moradores.');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">
                                     Desativar
-                                </button>
-                            </form>
-                            {% else %}
-                            <form method="post"
-                                  action="{{ url_for('parceiro_cupons_reativar', cupom_id=cupom.id) }}"
-                                  class="d-inline"
-                                  onsubmit="return confirm('Será criada uma nova versão deste cupom. A versão atual permanecerá inativa no histórico. Continuar?');">
-                                <button type="submit" class="btn btn-sm btn-outline-success">
-                                    Reativar
                                 </button>
                             </form>
                             {% endif %}
@@ -165,21 +156,44 @@
                 </section>
 
                 <section class="mb-4">
-                    <h3 class="h6 text-uppercase text-muted mb-3">Regras</h3>
+                    <h3 class="h6 text-uppercase text-muted mb-3">Vigência</h3>
                     <div class="row g-3">
-                        <div class="col-12 col-md-4">
+                        <div class="col-12 col-md-6">
                             <div class="border rounded p-3 h-100 bg-light">
-                                <p class="small text-muted mb-1">Data de Validade</p>
+                                <p class="small text-muted mb-1">Data de Validade (prevista na criação)</p>
                                 <p class="mb-0 fw-semibold">
                                     {% if cupom.data_validade %}
                                     {{ cupom.data_validade.strftime('%d/%m/%Y') }}
                                     {% else %}
-                                    Sem validade
+                                    Sem validade definida
                                     {% endif %}
                                 </p>
                             </div>
                         </div>
-                        <div class="col-12 col-md-4">
+                        <div class="col-12 col-md-6">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <p class="small text-muted mb-1">Encerramento</p>
+                                {% if cupom.data_desativacao %}
+                                <span class="badge text-bg-dark">
+                                    Encerrado manualmente em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
+                                </span>
+                                <p class="small text-muted mb-0 mt-2">
+                                    Horário: {{ cupom.data_desativacao.strftime('%H:%M') }}
+                                </p>
+                                {% elif cupom.ativo %}
+                                <p class="mb-0 fw-semibold text-success">Cupom ainda ativo na vitrine</p>
+                                {% else %}
+                                <p class="mb-0 text-muted">—</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted mb-3">Regras de Resgate</h3>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
                             <div class="border rounded p-3 h-100 bg-light">
                                 <p class="small text-muted mb-1">Limite Total de Ofertas</p>
                                 <p class="mb-0 fw-semibold">
@@ -191,7 +205,7 @@
                                 </p>
                             </div>
                         </div>
-                        <div class="col-12 col-md-4">
+                        <div class="col-12 col-md-6">
                             <div class="border rounded p-3 h-100 bg-light">
                                 <p class="small text-muted mb-1">Limite por Unidade</p>
                                 <p class="mb-0 fw-semibold">{{ cupom.limite_por_unidade }}</p>
@@ -236,7 +250,7 @@
                             {% if cupom.ativo %}
                             <span class="badge text-bg-success">Ativo</span>
                             {% else %}
-                            <span class="badge text-bg-secondary">Inativo</span>
+                            <span class="badge text-bg-secondary">Encerrado permanentemente</span>
                             {% endif %}
                         </li>
                         <li class="mb-2">
