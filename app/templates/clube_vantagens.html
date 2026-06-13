@@ -8,53 +8,136 @@
     Descubra ofertas exclusivas dos parceiros do condomínio e resgate seu código em poucos cliques.
 </p>
 
-{% if parceiros %}
-<div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
-    {% for parceiro in parceiros %}
-        {% for cupom in parceiro.cupons %}
-            {% if cupom.ativo %}
-                {% set resgate = resgates_por_cupom.get(cupom.id) %}
-                <div class="col">
-                    <div class="card h-100 shadow-sm border-0">
-                        <div class="card-header bg-white border-0 pb-0">
-                            <h2 class="h6 mb-1">{{ parceiro.nome_empresa }}</h2>
-                            <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
-                        </div>
-                        <div class="card-body">
-                            <h3 class="h6 fw-bold mb-2">{{ cupom.titulo }}</h3>
-                            <p class="text-muted small mb-0">{{ cupom.descricao }}</p>
-                        </div>
-                        <div class="card-footer bg-white border-0 pt-0">
-                            {% if resgate %}
-                            <div class="alert alert-success p-3 text-center mb-0">
-                                <p class="small text-muted mb-1">Seu código</p>
-                                <p class="fw-bold fs-5 mb-0">{{ resgate.codigo_unico }}</p>
-                                <div class="qrcode-container mt-3 mx-auto d-flex justify-content-center"
-                                     style="width: 128px;"
-                                     data-url="{{ url_for('parceiro_validacao', codigo=resgate.codigo_unico, _external=True) }}"></div>
-                                <p class="small text-muted mt-2 mb-0">
-                                    Apresente este QR Code no estabelecimento parceiro para validação rápida.
-                                </p>
-                            </div>
-                            {% else %}
-                            <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
-                                <button type="submit" class="btn btn-primary w-100">
-                                    Resgatar Cupom
-                                </button>
-                            </form>
-                            {% endif %}
+<ul class="nav nav-tabs" id="clubeTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="disponiveis-tab" data-bs-toggle="tab"
+                data-bs-target="#disponiveis" type="button" role="tab">
+            Ofertas Disponíveis
+            {% if cupons_disponiveis %}
+            <span class="badge bg-primary ms-1">{{ cupons_disponiveis|length }}</span>
+            {% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="resgates-tab" data-bs-toggle="tab"
+                data-bs-target="#resgates" type="button" role="tab">
+            Cupons para Usar
+            {% if resgates_ativos %}
+            <span class="badge bg-success ms-1">{{ resgates_ativos|length }}</span>
+            {% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="historico-tab" data-bs-toggle="tab"
+                data-bs-target="#historico" type="button" role="tab">
+            Histórico
+            {% if resgates_utilizados %}
+            <span class="badge bg-secondary ms-1">{{ resgates_utilizados|length }}</span>
+            {% endif %}
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content pt-4" id="clubeTabsContent">
+    <div class="tab-pane fade show active" id="disponiveis" role="tabpanel">
+        {% if cupons_disponiveis %}
+        <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
+            {% for cupom in cupons_disponiveis %}
+            <div class="col">
+                <div class="card h-100 shadow-sm border-0">
+                    <div class="card-header bg-white border-0 pb-0">
+                        <h2 class="h6 mb-1">{{ cupom.parceiro.nome_empresa }}</h2>
+                        <span class="badge text-bg-primary">{{ cupom.parceiro.categoria }}</span>
+                    </div>
+                    <div class="card-body">
+                        <h3 class="h6 fw-bold mb-2">{{ cupom.titulo }}</h3>
+                        <p class="text-muted small mb-0">{{ cupom.descricao }}</p>
+                    </div>
+                    <div class="card-footer bg-white border-0 pt-0">
+                        <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
+                            <button type="submit" class="btn btn-primary w-100">
+                                Resgatar Cupom
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mt-3 mb-0">Nenhum cupom nesta categoria.</p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="resgates" role="tabpanel">
+        {% if resgates_ativos %}
+        <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
+            {% for resgate in resgates_ativos %}
+            <div class="col">
+                <div class="card h-100 shadow-sm border-0">
+                    <div class="card-header bg-white border-0 pb-0">
+                        <h2 class="h6 mb-1">{{ resgate.cupom.parceiro.nome_empresa }}</h2>
+                        <span class="badge text-bg-success">Aguardando uso</span>
+                    </div>
+                    <div class="card-body">
+                        <h3 class="h6 fw-bold mb-2">{{ resgate.cupom.titulo }}</h3>
+                        <p class="text-muted small mb-0">
+                            Resgatado em {{ resgate.data_resgate.strftime('%d/%m/%Y %H:%M') }}
+                        </p>
+                    </div>
+                    <div class="card-footer bg-white border-0 pt-0">
+                        <div class="alert alert-success p-3 text-center mb-0">
+                            <p class="small text-muted mb-1">Seu código</p>
+                            <p class="fw-bold fs-5 mb-0">{{ resgate.codigo_unico }}</p>
+                            <div class="qrcode-container mt-3 mx-auto d-flex justify-content-center"
+                                 style="width: 128px;"
+                                 data-url="{{ url_for('parceiro_validacao', codigo=resgate.codigo_unico, _external=True) }}"></div>
+                            <p class="small text-muted mt-2 mb-0">
+                                Apresente este QR Code no estabelecimento parceiro para validação rápida.
+                            </p>
                         </div>
                     </div>
                 </div>
-            {% endif %}
-        {% endfor %}
-    {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mt-3 mb-0">Nenhum cupom nesta categoria.</p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="historico" role="tabpanel">
+        {% if resgates_utilizados %}
+        <div class="row row-cols-1 row-cols-md-2 g-3">
+            {% for resgate in resgates_utilizados %}
+            <div class="col">
+                <div class="card border-0 bg-light text-muted">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div>
+                                <h3 class="h6 mb-1 text-body-secondary">{{ resgate.cupom.titulo }}</h3>
+                                <p class="small mb-0">{{ resgate.cupom.parceiro.nome_empresa }}</p>
+                            </div>
+                            <span class="badge text-bg-secondary">Utilizado</span>
+                        </div>
+                        <p class="small mb-0 mt-2">
+                            Validado em
+                            {% if resgate.data_utilizacao %}
+                            {{ resgate.data_utilizacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mt-3 mb-0">Nenhum cupom nesta categoria.</p>
+        {% endif %}
+    </div>
 </div>
-{% else %}
-<div class="alert alert-info">
-    Nenhum parceiro com cupons ativos no momento. Volte em breve para novas vantagens.
-</div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}

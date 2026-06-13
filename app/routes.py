@@ -629,20 +629,55 @@ def _contagem_resgates_por_cupom(cupom_ids):
 
 @unidade_required
 def clube_vantagens(unidade):
-    parceiros = (
-        Parceiro.query.join(Cupom)
+    cupons_ativos = (
+        Cupom.query.join(Parceiro)
         .filter(Parceiro.status == "Ativo", Cupom.ativo.is_(True))
-        .order_by(Parceiro.nome_empresa)
-        .distinct()
+        .order_by(Parceiro.nome_empresa, Cupom.titulo)
         .all()
     )
-    resgates = ResgateCupom.query.filter_by(unidade_id=unidade.id, status="Ativo").all()
-    resgates_por_cupom = {resgate.cupom_id: resgate for resgate in resgates}
+    cupom_ids = [cupom.id for cupom in cupons_ativos]
+    resgates_por_cupom = _contagem_resgates_por_cupom(cupom_ids)
+
+    resgates_unidade_rows = (
+        db.session.query(ResgateCupom.cupom_id, func.count(ResgateCupom.id))
+        .filter(ResgateCupom.unidade_id == unidade.id)
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    resgates_unidade_por_cupom = {
+        cupom_id: total for cupom_id, total in resgates_unidade_rows
+    }
+
+    cupons_disponiveis = []
+    for cupom in cupons_ativos:
+        total_resgates = resgates_por_cupom.get(cupom.id, 0)
+        if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
+            continue
+        resgates_unidade = resgates_unidade_por_cupom.get(cupom.id, 0)
+        if resgates_unidade >= cupom.limite_por_unidade:
+            continue
+        cupons_disponiveis.append(cupom)
+
+    resgates_ativos = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(ResgateCupom.unidade_id == unidade.id, ResgateCupom.status == "Ativo")
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
+    resgates_utilizados = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(ResgateCupom.unidade_id == unidade.id, ResgateCupom.status == "Utilizado")
+        .order_by(ResgateCupom.data_utilizacao.desc())
+        .all()
+    )
 
     return render_template(
         "clube_vantagens.html",
-        parceiros=parceiros,
-        resgates_por_cupom=resgates_por_cupom,
+        cupons_disponiveis=cupons_disponiveis,
+        resgates_ativos=resgates_ativos,
+        resgates_utilizados=resgates_utilizados,
     )
 
 
