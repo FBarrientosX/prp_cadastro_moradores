@@ -627,6 +627,32 @@ def _contagem_resgates_por_cupom(cupom_ids):
     return {cupom_id: total for cupom_id, total in rows}
 
 
+def _metricas_resgates_por_cupom(cupom_ids):
+    if not cupom_ids:
+        return {}
+    rows = (
+        db.session.query(
+            ResgateCupom.cupom_id,
+            func.count(ResgateCupom.id).label("total_resgatados"),
+            func.sum(
+                case((ResgateCupom.status == "Utilizado", 1), else_=0)
+            ).label("total_validados"),
+        )
+        .filter(ResgateCupom.cupom_id.in_(cupom_ids))
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    metricas = {
+        cupom_id: {"total_resgatados": 0, "total_validados": 0} for cupom_id in cupom_ids
+    }
+    for cupom_id, total_resgatados, total_validados in rows:
+        metricas[cupom_id] = {
+            "total_resgatados": total_resgatados,
+            "total_validados": int(total_validados or 0),
+        }
+    return metricas
+
+
 @unidade_required
 def clube_vantagens(unidade):
     cupons_ativos = (
@@ -835,12 +861,12 @@ def parceiro_cupons():
         return redirect(url_for("parceiro_dashboard"))
 
     cupons = Cupom.query.filter_by(parceiro_id=parceiro.id).order_by(Cupom.id.desc()).all()
-    resgates_por_cupom = _contagem_resgates_por_cupom([cupom.id for cupom in cupons])
+    metricas_cupons = _metricas_resgates_por_cupom([cupom.id for cupom in cupons])
     return render_template(
         "parceiro_cupons.html",
         parceiro=parceiro,
         cupons=cupons,
-        resgates_por_cupom=resgates_por_cupom,
+        metricas_cupons=metricas_cupons,
     )
 
 
