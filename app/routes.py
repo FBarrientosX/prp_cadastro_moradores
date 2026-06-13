@@ -729,7 +729,6 @@ def clube_vantagens(unidade):
         resgates_utilizados=resgates_utilizados,
         parceiros_ativos=parceiros_ativos,
         parceiros_com_cupons_ativos=parceiros_com_cupons_ativos,
-        data_atual=data_atual,
     )
 
 
@@ -1957,6 +1956,7 @@ def admin_parceiros_criar():
     email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
+    descricao = request.form.get("descricao", "").strip() or None
 
     if not nome_empresa or not email or not categoria:
         flash("Preencha nome da empresa, e-mail e categoria.", "danger")
@@ -1972,6 +1972,7 @@ def admin_parceiros_criar():
         senha_hash=generate_password_hash("senha123"),
         telefone=telefone,
         categoria=categoria,
+        descricao=descricao,
         ativo=True,
         status="Pendente",
     )

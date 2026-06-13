@@ -82,12 +82,6 @@
         {% if parceiros_ativos %}
         <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
             {% for parceiro in parceiros_ativos %}
-            {% set ns = namespace(descricao='') %}
-            {% for cupom in parceiro.cupons %}
-                {% if cupom.ativo and (not cupom.data_validade or cupom.data_validade >= data_atual) and not ns.descricao %}
-                    {% set ns.descricao = cupom.descricao %}
-                {% endif %}
-            {% endfor %}
             {% set telefone_limpo = parceiro.telefone|replace(' ', '')|replace('(', '')|replace(')', '')|replace('-', '')|replace('+', '') if parceiro.telefone else '' %}
             {% if telefone_limpo %}
                 {% if telefone_limpo.startswith('55') %}
@@ -108,14 +102,11 @@
                         <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
                     </div>
                     <div class="card-body">
-                        <p class="text-muted small mb-0">
-                            {% if ns.descricao %}
-                            {{ ns.descricao }}
-                            {% else %}
-                            Parceiro credenciado na categoria {{ parceiro.categoria }}.
-                            Entre em contato para conhecer os serviços disponíveis.
-                            {% endif %}
-                        </p>
+                        {% if parceiro.descricao %}
+                        <p class="text-muted small mb-0">{{ parceiro.descricao }}</p>
+                        {% else %}
+                        <p class="text-muted mb-0">Nenhuma descrição informada.</p>
+                        {% endif %}
                     </div>
                     <div class="card-footer bg-white border-0 pt-0">
                         <p class="small text-muted mb-2">Contatos</p>

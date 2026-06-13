@@ -179,6 +179,8 @@ def _garantir_colunas_parceiros():
         alteracoes.append(
             "ALTER TABLE parceiro ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
         )
+    if "descricao" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN descricao TEXT")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
