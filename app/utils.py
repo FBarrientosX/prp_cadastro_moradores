@@ -1,5 +1,11 @@
 """Utilitários de validação e estrutura do condomínio."""
 
+from flask import current_app
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+SALT_RECUPERACAO_MORADOR = "recuperacao-morador"
+SALT_RECUPERACAO_PARCEIRO = "recuperacao-parceiro"
+
 BLOCOS_ANDARES = {
     "1": 7,
     "2": 7,
@@ -66,3 +72,21 @@ def validar_unidade(bloco, apartamento):
     if bloco not in BLOCOS_ANDARES:
         return False
     return apartamento in get_apartamentos_bloco(bloco)
+
+
+def _get_token_serializer():
+    secret_key = current_app.config["SECRET_KEY"]
+    return URLSafeTimedSerializer(secret_key)
+
+
+def gerar_token_redefinicao(email, salt):
+    email_normalizado = str(email).strip().lower()
+    return _get_token_serializer().dumps(email_normalizado, salt=salt)
+
+
+def verificar_token_redefinicao(token, salt, max_age=3600):
+    try:
+        email = _get_token_serializer().loads(token, salt=salt, max_age=max_age)
+        return str(email).strip().lower() if email else None
+    except (BadSignature, SignatureExpired):
+        return None

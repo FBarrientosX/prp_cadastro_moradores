@@ -26,6 +26,24 @@ def _enviar_email(email_destino, assunto, corpo):
         servidor.sendmail(username, [email_destino], mensagem.as_string())
 
 
+def enviar_email_redefinicao_senha(email_destino, link_redefinicao, perfil="morador"):
+    if perfil == "parceiro":
+        assunto = "PRP Condomínio - Redefinição de Senha do Parceiro"
+        corpo = (
+            "Recebemos uma solicitação para redefinir a senha do seu acesso ao Portal do Parceiro.\n\n"
+            f"Acesse o link abaixo para criar uma nova senha (válido por 1 hora):\n{link_redefinicao}\n\n"
+            "Se você não solicitou esta alteração, ignore este e-mail."
+        )
+    else:
+        assunto = "PRP Condomínio - Redefinição de Senha da Unidade"
+        corpo = (
+            "Recebemos uma solicitação para redefinir a senha de acesso da sua unidade no cadastro de moradores.\n\n"
+            f"Acesse o link abaixo para criar uma nova senha (válido por 1 hora):\n{link_redefinicao}\n\n"
+            "Se você não solicitou esta alteração, ignore este e-mail."
+        )
+    _enviar_email(email_destino, assunto, corpo)
+
+
 def enviar_email_reprovacao(email_destino, bloco, apartamento, nome_morador, motivo):
     assunto = (
         f"Atualização do cadastro de moradores - Bloco {bloco}, Apartamento {apartamento}"

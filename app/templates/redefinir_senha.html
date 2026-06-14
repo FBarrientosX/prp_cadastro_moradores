@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Redefinir senha{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-3">Redefinir senha da unidade</h1>
+                <p class="text-muted">Crie uma nova senha de acesso para sua unidade.</p>
+
+                <form method="post" action="{{ url_for('redefinir_senha', token=token) }}">
+                    <div class="mb-3">
+                        <label for="senha" class="form-label">Nova senha</label>
+                        <input type="password" class="form-control" id="senha" name="senha"
+                               minlength="6" required autocomplete="new-password">
+                    </div>
+                    <div class="mb-4">
+                        <label for="confirmacao_senha" class="form-label">Confirmar nova senha</label>
+                        <input type="password" class="form-control" id="confirmacao_senha" name="confirmacao_senha"
+                               minlength="6" required autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Salvar nova senha</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

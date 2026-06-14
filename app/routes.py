@@ -25,6 +25,7 @@ from app.auth import (
 )
 from app.email_service import (
     enviar_email_nova_reserva,
+    enviar_email_redefinicao_senha,
     enviar_email_reprovacao,
     enviar_email_resposta_reserva,
     enviar_email_validacao_parcial,
@@ -47,12 +48,16 @@ from app.models import (
     VinculoPessoa,
 )
 from app.utils import (
+    SALT_RECUPERACAO_MORADOR,
+    SALT_RECUPERACAO_PARCEIRO,
     blocos_equivalentes,
+    gerar_token_redefinicao,
     get_apartamentos_bloco,
     get_condominio_estrutura,
     normalizar_bloco_apartamento,
     normalizar_bloco_codigo,
     validar_unidade,
+    verificar_token_redefinicao,
 )
 
 
@@ -68,6 +73,26 @@ def _contexto_index(**extra):
 
 def _buscar_unidade(bloco, apartamento):
     return Unidade.query.filter_by(bloco=bloco, apartamento=apartamento).first()
+
+
+def _buscar_unidade_por_email_principal(email):
+    email = email.strip().lower()
+    if not email:
+        return None
+
+    unidade = Unidade.query.filter(
+        func.lower(Unidade.proprietario_email) == email
+    ).first()
+    if unidade:
+        return unidade
+
+    return (
+        db.session.query(Unidade)
+        .join(Pessoa)
+        .filter(Pessoa.is_responsavel.is_(True))
+        .filter(func.lower(Pessoa.email) == email)
+        .first()
+    )
 
 
 def _registrar_auditoria(usuario, mensagem):
@@ -543,6 +568,66 @@ def verificar_unidade():
     return redirect(url_for("atualizar_dados"))
 
 
+def esqueci_senha():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        mensagem_generica = (
+            "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
+        )
+
+        unidade = _buscar_unidade_por_email_principal(email)
+        if unidade:
+            try:
+                token = gerar_token_redefinicao(email, SALT_RECUPERACAO_MORADOR)
+                link = url_for("redefinir_senha", token=token, _external=True)
+                enviar_email_redefinicao_senha(email, link, perfil="morador")
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    "Não foi possível enviar o e-mail. Tente novamente mais tarde.",
+                    "danger",
+                )
+                return redirect(url_for("esqueci_senha"))
+
+        flash(mensagem_generica, "info")
+        return redirect(url_for("index"))
+
+    return render_template("esqueci_senha.html")
+
+
+def redefinir_senha(token):
+    email = verificar_token_redefinicao(token, SALT_RECUPERACAO_MORADOR)
+    if not email:
+        flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
+        return redirect(url_for("esqueci_senha"))
+
+    unidade = _buscar_unidade_por_email_principal(email)
+    if not unidade:
+        flash("Unidade não encontrada para este e-mail.", "danger")
+        return redirect(url_for("esqueci_senha"))
+
+    if request.method == "POST":
+        senha = request.form.get("senha", "").strip()
+        confirmacao = request.form.get("confirmacao_senha", "").strip()
+
+        if len(senha) < 6:
+            flash("A senha deve ter ao menos 6 caracteres.", "danger")
+            return render_template("redefinir_senha.html", token=token)
+        if senha != confirmacao:
+            flash("As senhas não coincidem.", "danger")
+            return render_template("redefinir_senha.html", token=token)
+
+        unidade.set_password(senha)
+        db.session.commit()
+        flash(
+            "Senha redefinida com sucesso. Acesse com bloco, apartamento e a nova senha.",
+            "success",
+        )
+        return redirect(url_for("index"))
+
+    return render_template("redefinir_senha.html", token=token)
+
+
 def cadastro_inicial():
     bloco = session.get("cadastro_bloco")
     apartamento = session.get("cadastro_apartamento")
@@ -807,6 +892,63 @@ def parceiro_login():
         flash("E-mail ou senha inválidos.", "danger")
 
     return render_template("parceiro_login.html")
+
+
+def parceiro_esqueci_senha():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        mensagem_generica = (
+            "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
+        )
+
+        parceiro = Parceiro.query.filter(func.lower(Parceiro.email) == email).first()
+        if parceiro:
+            try:
+                token = gerar_token_redefinicao(email, SALT_RECUPERACAO_PARCEIRO)
+                link = url_for("parceiro_redefinir_senha", token=token, _external=True)
+                enviar_email_redefinicao_senha(email, link, perfil="parceiro")
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    "Não foi possível enviar o e-mail. Tente novamente mais tarde.",
+                    "danger",
+                )
+                return redirect(url_for("parceiro_esqueci_senha"))
+
+        flash(mensagem_generica, "info")
+        return redirect(url_for("parceiro_login"))
+
+    return render_template("parceiro_esqueci_senha.html")
+
+
+def parceiro_redefinir_senha(token):
+    email = verificar_token_redefinicao(token, SALT_RECUPERACAO_PARCEIRO)
+    if not email:
+        flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
+        return redirect(url_for("parceiro_esqueci_senha"))
+
+    parceiro = Parceiro.query.filter(func.lower(Parceiro.email) == email).first()
+    if not parceiro:
+        flash("Parceiro não encontrado para este e-mail.", "danger")
+        return redirect(url_for("parceiro_esqueci_senha"))
+
+    if request.method == "POST":
+        senha = request.form.get("senha", "").strip()
+        confirmacao = request.form.get("confirmacao_senha", "").strip()
+
+        if len(senha) < 6:
+            flash("A senha deve ter ao menos 6 caracteres.", "danger")
+            return render_template("parceiro_redefinir_senha.html", token=token)
+        if senha != confirmacao:
+            flash("As senhas não coincidem.", "danger")
+            return render_template("parceiro_redefinir_senha.html", token=token)
+
+        parceiro.senha_hash = generate_password_hash(senha)
+        db.session.commit()
+        flash("Senha redefinida com sucesso. Faça login com a nova senha.", "success")
+        return redirect(url_for("parceiro_login"))
+
+    return render_template("parceiro_redefinir_senha.html", token=token)
 
 
 def parceiro_logout():
@@ -2217,28 +2359,20 @@ def admin_registrar(unidade_id):
 
 
 @admin_or_assistente_required
-def admin_resetar_senha(unidade_id):
-    usuario = get_current_user()
-    if usuario.role != Role.ADMIN:
-        flash("Acesso negado.", "danger")
-        return redirect(url_for("admin_index"))
-
+def admin_unidade_alterar_senha(unidade_id):
     unidade = Unidade.query.get_or_404(unidade_id)
     nova_senha = request.form.get("nova_senha", "").strip()
 
     if not nova_senha:
-        nova_senha = gerar_senha_aleatoria()
-
+        flash("Informe a nova senha.", "danger")
+        return redirect(url_for("admin_index"))
     if len(nova_senha) < 6:
         flash("A senha deve ter ao menos 6 caracteres.", "danger")
         return redirect(url_for("admin_index"))
 
     unidade.set_password(nova_senha)
     db.session.commit()
-    flash(
-        f"Senha da unidade {unidade.identificador} redefinida: {nova_senha}",
-        "success",
-    )
+    flash(f"Senha da unidade {unidade.identificador} alterada com sucesso.", "success")
     return redirect(url_for("admin_index"))
 
 
@@ -2464,6 +2598,15 @@ def init_app(app):
         "/verificar-unidade", "verificar_unidade", verificar_unidade, methods=["POST"]
     )
     app.add_url_rule(
+        "/esqueci_senha", "esqueci_senha", esqueci_senha, methods=["GET", "POST"]
+    )
+    app.add_url_rule(
+        "/redefinir_senha/<token>",
+        "redefinir_senha",
+        redefinir_senha,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
         "/cadastro-inicial", "cadastro_inicial", cadastro_inicial, methods=["GET"]
     )
     app.add_url_rule(
@@ -2482,6 +2625,18 @@ def init_app(app):
         methods=["GET", "POST"],
     )
     app.add_url_rule("/parceiro/logout", "parceiro_logout", parceiro_logout, methods=["GET"])
+    app.add_url_rule(
+        "/parceiro/esqueci_senha",
+        "parceiro_esqueci_senha",
+        parceiro_esqueci_senha,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/redefinir_senha/<token>",
+        "parceiro_redefinir_senha",
+        parceiro_redefinir_senha,
+        methods=["GET", "POST"],
+    )
     app.add_url_rule(
         "/parceiro/dashboard",
         "parceiro_dashboard",
@@ -2675,9 +2830,9 @@ def init_app(app):
         methods=["POST"],
     )
     app.add_url_rule(
-        "/admin/resetar-senha/<int:unidade_id>",
-        "admin_resetar_senha",
-        admin_resetar_senha,
+        "/admin/unidades/<int:unidade_id>/alterar_senha",
+        "admin_unidade_alterar_senha",
+        admin_unidade_alterar_senha,
         methods=["POST"],
     )
     app.add_url_rule(
