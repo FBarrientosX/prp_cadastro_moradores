@@ -382,8 +382,17 @@ def _parse_pessoas_form(form):
                     f"E-mail é obrigatório para o responsável {nome} (maior de idade)."
                 )
 
+        pessoa_id = None
+        pessoa_id_raw = form.get(f"pessoa_{indice}_id", "").strip()
+        if pessoa_id_raw:
+            try:
+                pessoa_id = int(pessoa_id_raw)
+            except ValueError:
+                raise ValueError(f"Identificador inválido para o morador {nome}.")
+
         pessoas.append(
             {
+                "id": pessoa_id,
                 "nome_completo": nome,
                 "cpf": cpf or "",
                 "vinculo": vinculo,
@@ -440,6 +449,127 @@ def _parse_proprietario_form(form):
         "proprietario_telefone": form.get("proprietario_telefone", "").strip() or None,
         "proprietario_email": form.get("proprietario_email", "").strip() or None,
     }
+
+
+def _normalizar_texto_comparacao(valor):
+    if not valor:
+        return ""
+    return " ".join(str(valor).strip().lower().split())
+
+
+def _normalizar_placa(placa):
+    return "".join(ch for ch in str(placa or "").upper() if ch.isalnum())
+
+
+def _somente_digitos(valor):
+    return "".join(ch for ch in str(valor or "") if ch.isdigit())
+
+
+def _responsavel_dados_pessoas(pessoas_data):
+    return next((p for p in pessoas_data if p["is_responsavel"]), None)
+
+
+def _responsavel_pessoa_unidade(unidade):
+    return next((p for p in unidade.pessoas.all() if p.is_responsavel), None)
+
+
+def _validar_ids_pessoas_unidade(unidade, pessoas_data):
+    ids_validos = {pessoa.id for pessoa in unidade.pessoas.all()}
+    for pessoa in pessoas_data:
+        pessoa_id = pessoa.get("id")
+        if pessoa_id is not None and pessoa_id not in ids_validos:
+            raise ValueError("Morador inválido informado no formulário.")
+
+
+def _encontrar_par_pessoa_morador(pessoa_atual, candidatos):
+    cpf_atual = _somente_digitos(pessoa_atual.cpf)
+    if cpf_atual:
+        for candidato in candidatos:
+            if _somente_digitos(candidato.get("cpf", "")) == cpf_atual:
+                return candidato
+
+    nome_atual = _normalizar_texto_comparacao(pessoa_atual.nome_completo)
+    nascimento_atual = pessoa_atual.data_nascimento
+    for candidato in candidatos:
+        if (
+            _normalizar_texto_comparacao(candidato["nome_completo"]) == nome_atual
+            and candidato.get("data_nascimento") == nascimento_atual
+        ):
+            return candidato
+    return None
+
+
+def _houve_add_remove_pessoas(unidade, pessoas_data):
+    pessoas_atuais = unidade.pessoas.all()
+    ids_informados = {p["id"] for p in pessoas_data if p.get("id") is not None}
+
+    if ids_informados:
+        ids_atuais = {pessoa.id for pessoa in pessoas_atuais}
+        if ids_informados != ids_atuais:
+            return True
+        if any(p.get("id") is None for p in pessoas_data):
+            return True
+        return False
+
+    if len(pessoas_atuais) != len(pessoas_data):
+        return True
+
+    candidatos = list(pessoas_data)
+    for pessoa_atual in pessoas_atuais:
+        par = _encontrar_par_pessoa_morador(pessoa_atual, candidatos)
+        if not par:
+            return True
+        candidatos.remove(par)
+    return False
+
+
+def _houve_add_remove_veiculos(unidade, veiculos_data):
+    placas_atuais = {_normalizar_placa(veiculo.placa) for veiculo in unidade.veiculos.all()}
+    placas_novas = {_normalizar_placa(veiculo["placa"]) for veiculo in veiculos_data}
+    return placas_atuais != placas_novas
+
+
+def _houve_mudanca_proprietario_ou_responsavel(unidade, pessoas_data, dados_proprietario):
+    responsavel_atual = _responsavel_pessoa_unidade(unidade)
+    responsavel_novo = _responsavel_dados_pessoas(pessoas_data)
+
+    era_locatario = _responsavel_e_locatario(
+        [{"is_responsavel": True, "vinculo": responsavel_atual.vinculo}]
+        if responsavel_atual
+        else []
+    )
+    sera_locatario = _responsavel_e_locatario(pessoas_data)
+
+    if era_locatario != sera_locatario:
+        return True
+
+    if responsavel_atual and responsavel_novo:
+        if responsavel_novo.get("id") != responsavel_atual.id:
+            return True
+        if responsavel_novo["vinculo"] != responsavel_atual.vinculo:
+            return True
+    elif bool(responsavel_atual) != bool(responsavel_novo):
+        return True
+
+    if sera_locatario:
+        nome_atual = _normalizar_texto_comparacao(unidade.proprietario_nome)
+        nome_novo = _normalizar_texto_comparacao(dados_proprietario.get("proprietario_nome"))
+        if nome_atual != nome_novo:
+            return True
+
+    return False
+
+
+def _requer_nova_aprovacao_sindico(unidade, pessoas_data, veiculos_data, dados_proprietario):
+    if _houve_add_remove_pessoas(unidade, pessoas_data):
+        return True
+    if _houve_add_remove_veiculos(unidade, veiculos_data):
+        return True
+    if _houve_mudanca_proprietario_ou_responsavel(
+        unidade, pessoas_data, dados_proprietario
+    ):
+        return True
+    return False
 
 
 def acesso_reservas_required(view):
@@ -510,7 +640,8 @@ def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
             db.session.delete(veiculo)
 
         for dados in pessoas_data:
-            db.session.add(Pessoa(unidade_id=unidade.id, **dados))
+            campos_pessoa = {k: v for k, v in dados.items() if k != "id"}
+            db.session.add(Pessoa(unidade_id=unidade.id, **campos_pessoa))
 
         for dados in veiculos_data:
             db.session.add(Veiculo(unidade_id=unidade.id, **dados))
@@ -1725,6 +1856,8 @@ def salvar_cadastro():
             if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
                 raise ValueError("Esta unidade não pode ser atualizada.")
 
+            _validar_ids_pessoas_unidade(unidade, pessoas_data)
+
             if senha:
                 if senha != confirmar_senha:
                     raise ValueError("As senhas não conferem.")
@@ -1750,6 +1883,13 @@ def salvar_cadastro():
             db.session.add(unidade)
             db.session.flush()
 
+        dados_proprietario = _parse_proprietario_form(request.form)
+        requer_nova_aprovacao = False
+        if modo_atualizacao:
+            requer_nova_aprovacao = _requer_nova_aprovacao_sindico(
+                unidade, pessoas_data, veiculos_data, dados_proprietario
+            )
+
         _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data)
 
         if _responsavel_e_locatario(pessoas_data):
@@ -1758,7 +1898,6 @@ def salvar_cadastro():
             elif unidade.contrato_locacao_status == StatusDocumento.NAO_APLICAVEL:
                 unidade.contrato_locacao_status = StatusDocumento.PENDENTE
 
-            dados_proprietario = _parse_proprietario_form(request.form)
             unidade.proprietario_nome = dados_proprietario["proprietario_nome"]
             unidade.proprietario_telefone = dados_proprietario["proprietario_telefone"]
             unidade.proprietario_email = dados_proprietario["proprietario_email"]
@@ -1776,16 +1915,20 @@ def salvar_cadastro():
             unidade.contrato_locacao_url = None
 
         if modo_atualizacao:
-            unidade.status = StatusUnidade.PENDENTE
             unidade.data_alteracao = datetime.utcnow()
+            if requer_nova_aprovacao:
+                unidade.status = StatusUnidade.PENDENTE
 
         db.session.commit()
 
         if modo_atualizacao:
-            flash(
-                "Dados atualizados e cadastro reenviado para nova aprovação do síndico.",
-                "success",
-            )
+            if requer_nova_aprovacao:
+                flash(
+                    "Dados atualizados e cadastro reenviado para nova aprovação do síndico.",
+                    "success",
+                )
+            else:
+                flash("Dados atualizados com sucesso.", "success")
             return redirect(url_for("atualizar_dados"))
 
         session.pop("cadastro_bloco", None)
