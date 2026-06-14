@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Dashboard Estratégico</h1>
+        <p class="text-muted mb-0">Visão geral dos cadastros e pendências do condomínio</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('admin_index') }}" class="btn btn-outline-primary">
+            <i class="bi bi-people me-1"></i>Gestão de Cadastros
+        </a>
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="text-muted small text-uppercase mb-1">Total Aprovados</p>
+                        <p class="display-6 fw-bold text-primary mb-0">{{ total_aprovados }}</p>
+                        <p class="text-muted small mb-0">Cadastros finalizados</p>
+                    </div>
+                    <span class="rounded-circle bg-primary bg-opacity-10 p-3">
+                        <i class="bi bi-check-circle-fill text-primary fs-4"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="text-muted small text-uppercase mb-1">Aguardando Registro</p>
+                        <p class="display-6 fw-bold text-warning mb-0">{{ aguardando_registro }}</p>
+                        <p class="text-muted small mb-0">Aprovados pelo síndico</p>
+                    </div>
+                    <span class="rounded-circle bg-warning bg-opacity-10 p-3">
+                        <i class="bi bi-hourglass-split text-warning fs-4"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="text-muted small text-uppercase mb-1">Documentos Pendentes</p>
+                        <p class="display-6 fw-bold text-danger mb-0">{{ documentos_pendentes }}</p>
+                        <p class="text-muted small mb-0">Unidades com doc. em falta</p>
+                    </div>
+                    <span class="rounded-circle bg-danger bg-opacity-10 p-3">
+                        <i class="bi bi-file-earmark-x text-danger fs-4"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Cadastros por Bloco</h2>
+                <p class="text-muted small mb-0">Unidades aprovadas ou registradas</p>
+            </div>
+            <div class="card-body">
+                <canvas id="chartBlocos" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Proporção de Status</h2>
+                <p class="text-muted small mb-0">Distribuição atual dos cadastros</p>
+            </div>
+            <div class="card-body d-flex align-items-center justify-content-center">
+                <canvas id="chartStatus" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Evolução de Cadastros</h2>
+                <p class="text-muted small mb-0">Novos cadastros nos últimos 30 dias</p>
+            </div>
+            <div class="card-body">
+                <canvas id="chartEvolucao" height="80"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    const blocosLabels = {{ cadastros_por_bloco | map(attribute='bloco') | list | tojson }};
+    const blocosTotais = {{ cadastros_por_bloco | map(attribute='total') | list | tojson }};
+
+    const datasLabels = {{ cadastros_por_data | map(attribute='data') | list | tojson }};
+    const datasTotais = {{ cadastros_por_data | map(attribute='total') | list | tojson }};
+
+    const statusLabels = ['Finalizados', 'Aguardando Registro', 'Pendentes (Síndico)', 'Doc. Pendente'];
+    const statusTotais = [
+        {{ total_aprovados }},
+        {{ aguardando_registro }},
+        {{ pendentes_validacao }},
+        {{ documentos_pendentes }}
+    ];
+
+    new Chart(document.getElementById('chartBlocos'), {
+        type: 'bar',
+        data: {
+            labels: blocosLabels.map(function (b) { return 'Bloco ' + b; }),
+            datasets: [{
+                label: 'Cadastros',
+                data: blocosTotais,
+                backgroundColor: 'rgba(13, 110, 253, 0.7)',
+                borderColor: 'rgb(13, 110, 253)',
+                borderWidth: 1,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { stepSize: 1 }
+                }
+            }
+        }
+    });
+
+    new Chart(document.getElementById('chartStatus'), {
+        type: 'doughnut',
+        data: {
+            labels: statusLabels,
+            datasets: [{
+                data: statusTotais,
+                backgroundColor: [
+                    'rgba(13, 110, 253, 0.85)',
+                    'rgba(255, 193, 7, 0.85)',
+                    'rgba(108, 117, 125, 0.85)',
+                    'rgba(220, 53, 69, 0.85)'
+                ],
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+
+    new Chart(document.getElementById('chartEvolucao'), {
+        type: 'line',
+        data: {
+            labels: datasLabels,
+            datasets: [{
+                label: 'Novos cadastros',
+                data: datasTotais,
+                fill: true,
+                tension: 0.3,
+                backgroundColor: 'rgba(13, 110, 253, 0.15)',
+                borderColor: 'rgb(13, 110, 253)',
+                pointBackgroundColor: 'rgb(13, 110, 253)'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { stepSize: 1 }
+                }
+            }
+        }
+    });
+})();
+</script>
+{% endblock %}

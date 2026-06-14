@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import os
 import random
@@ -1909,10 +1909,16 @@ def sindico_validar_unidade(unidade_id):
     return redirect(url_for("sindico_dashboard"))
 
 
+def _redirect_pos_login_admin(usuario):
+    if usuario.role == Role.ADMIN:
+        return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
+
+
 def admin_login():
     usuario_logado = get_current_user()
     if usuario_logado and usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE):
-        return redirect(url_for("admin_dashboard"))
+        return _redirect_pos_login_admin(usuario_logado)
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -1924,7 +1930,7 @@ def admin_login():
         ).first()
         if usuario and usuario.check_password(password):
             login_usuario(usuario)
-            return redirect(url_for("admin_dashboard"))
+            return _redirect_pos_login_admin(usuario)
 
         flash("Usuário ou senha inválidos.", "danger")
 
@@ -1937,8 +1943,84 @@ def admin_logout():
     return redirect(url_for("admin_login"))
 
 
-@admin_or_assistente_required
+@admin_required
 def admin_dashboard():
+    usuario = get_current_user()
+    inicio_janela = datetime.utcnow() - timedelta(days=30)
+
+    total_aprovados = Unidade.query.filter_by(
+        status=StatusUnidade.REGISTRADA
+    ).count()
+
+    aguardando_registro = Unidade.query.filter_by(
+        status=StatusUnidade.APROVADA
+    ).count()
+
+    documentos_pendentes = Unidade.query.filter(
+        or_(
+            Unidade.documento_status.in_(
+                [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
+            ),
+            and_(
+                Unidade.pessoas.any(
+                    and_(
+                        Pessoa.is_responsavel.is_(True),
+                        Pessoa.vinculo == VinculoPessoa.LOCATARIO,
+                    )
+                ),
+                Unidade.contrato_locacao_status.in_(
+                    [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
+                ),
+            ),
+        )
+    ).count()
+
+    cadastros_por_bloco_rows = (
+        db.session.query(Unidade.bloco, func.count(Unidade.id).label("total"))
+        .filter(
+            Unidade.status.in_([StatusUnidade.APROVADA, StatusUnidade.REGISTRADA])
+        )
+        .group_by(Unidade.bloco)
+        .order_by(Unidade.bloco)
+        .all()
+    )
+    cadastros_por_bloco = [
+        {"bloco": row.bloco, "total": row.total} for row in cadastros_por_bloco_rows
+    ]
+
+    cadastros_por_data_rows = (
+        db.session.query(
+            func.date(Unidade.data_criacao).label("data"),
+            func.count(Unidade.id).label("total"),
+        )
+        .filter(Unidade.data_criacao >= inicio_janela)
+        .group_by(func.date(Unidade.data_criacao))
+        .order_by(func.date(Unidade.data_criacao))
+        .all()
+    )
+    cadastros_por_data = [
+        {"data": row.data.isoformat(), "total": row.total}
+        for row in cadastros_por_data_rows
+    ]
+
+    pendentes_validacao = Unidade.query.filter_by(
+        status=StatusUnidade.PENDENTE
+    ).count()
+
+    return render_template(
+        "admin_dashboard.html",
+        total_aprovados=total_aprovados,
+        aguardando_registro=aguardando_registro,
+        documentos_pendentes=documentos_pendentes,
+        cadastros_por_bloco=cadastros_por_bloco,
+        cadastros_por_data=cadastros_por_data,
+        pendentes_validacao=pendentes_validacao,
+        current_user=usuario,
+    )
+
+
+@admin_or_assistente_required
+def admin_index():
     usuario = get_current_user()
     aguardando_registro = (
         Unidade.query.filter_by(status=StatusUnidade.APROVADA)
@@ -2115,12 +2197,12 @@ def admin_registrar(unidade_id):
 
     if unidade.status != StatusUnidade.APROVADA:
         flash("Apenas unidades aprovadas podem ser registradas.", "warning")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     unidade.status = StatusUnidade.REGISTRADA
     db.session.commit()
     flash(f"Unidade {unidade.identificador} marcada como registrada.", "success")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_or_assistente_required
@@ -2128,7 +2210,7 @@ def admin_resetar_senha(unidade_id):
     usuario = get_current_user()
     if usuario.role != Role.ADMIN:
         flash("Acesso negado.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     unidade = Unidade.query.get_or_404(unidade_id)
     nova_senha = request.form.get("nova_senha", "").strip()
@@ -2138,7 +2220,7 @@ def admin_resetar_senha(unidade_id):
 
     if len(nova_senha) < 6:
         flash("A senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     unidade.set_password(nova_senha)
     db.session.commit()
@@ -2146,7 +2228,7 @@ def admin_resetar_senha(unidade_id):
         f"Senha da unidade {unidade.identificador} redefinida: {nova_senha}",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_or_assistente_required
@@ -2154,7 +2236,7 @@ def admin_excluir_unidade(unidade_id):
     usuario = get_current_user()
     if usuario.role != Role.ADMIN:
         flash("Acesso negado.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     unidade = Unidade.query.get_or_404(unidade_id)
 
@@ -2165,7 +2247,7 @@ def admin_excluir_unidade(unidade_id):
         "Cadastro da unidade apagado com sucesso. Ela está livre para novo registro.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2178,7 +2260,7 @@ def admin_validar_documento(unidade_id):
         f"marcado como entregue/validado.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2191,7 +2273,7 @@ def admin_validar_contrato_locacao(unidade_id):
             f"Apto {unidade.apartamento}.",
             "warning",
         )
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
     db.session.commit()
@@ -2200,7 +2282,7 @@ def admin_validar_contrato_locacao(unidade_id):
         f"Apto {unidade.apartamento} marcado como entregue/validado.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2216,7 +2298,7 @@ def admin_validar_documentos(unidade_id):
         f"marcados como entregues/validados.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2241,7 +2323,7 @@ def admin_atualizar_status_documentos(unidade_id):
         f"Apto {unidade.apartamento} atualizados.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2251,16 +2333,16 @@ def admin_alterar_senha_sindico():
 
     if not username or not nova_senha:
         flash("Informe o síndico e a nova senha.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     if len(nova_senha) < 6:
         flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     sindico = Usuario.query.filter_by(username=username, role="sindico").first()
     if not sindico:
         flash("Síndico não encontrado.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     sindico.set_password(nova_senha)
     db.session.commit()
@@ -2268,7 +2350,7 @@ def admin_alterar_senha_sindico():
         f"Senha do síndico do {sindico.bloco_responsavel} atualizada com sucesso.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2286,7 +2368,7 @@ def admin_salvar_proprietario(unidade_id):
         f"Apto {unidade.apartamento} salvos com sucesso.",
         "success",
     )
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 @admin_required
@@ -2333,7 +2415,7 @@ def admin_criar_usuario():
         db.session.commit()
 
         flash("Usuário criado com sucesso.", "success")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     return render_template("criar_usuario.html", blocos=blocos)
 
@@ -2345,11 +2427,11 @@ def admin_excluir_usuario(usuario_id):
 
     if usuario_alvo.id == usuario_logado.id:
         flash("Você não pode excluir o próprio acesso.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO):
         flash("Apenas acessos de assistente ou síndico podem ser revogados aqui.", "warning")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_index"))
 
     username_alvo = usuario_alvo.username
     role_alvo = usuario_alvo.role
@@ -2362,7 +2444,7 @@ def admin_excluir_usuario(usuario_id):
     db.session.commit()
 
     flash(f"Acesso de '{username_alvo}' revogado com sucesso.", "success")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_index"))
 
 
 def init_app(app):
@@ -2547,7 +2629,10 @@ def init_app(app):
         "/admin/login", "admin_login", admin_login, methods=["GET", "POST"]
     )
     app.add_url_rule("/admin/logout", "admin_logout", admin_logout, methods=["GET"])
-    app.add_url_rule("/admin", "admin_dashboard", admin_dashboard, methods=["GET"])
+    app.add_url_rule(
+        "/admin/dashboard", "admin_dashboard", admin_dashboard, methods=["GET"]
+    )
+    app.add_url_rule("/admin", "admin_index", admin_index, methods=["GET"])
     app.add_url_rule(
         "/admin/clube_vantagens",
         "admin_clube_vantagens",
