@@ -24,8 +24,9 @@
 
                 <form method="post" action="{{ url_for('parceiro_login') }}">
                     <div class="mb-3">
-                        <label for="email" class="form-label">E-mail</label>
-                        <input type="email" class="form-control" id="email" name="email" required>
+                        <label for="usuario_login" class="form-label">Usuário de Acesso</label>
+                        <input type="text" class="form-control" id="usuario_login" name="usuario_login"
+                               autocomplete="username" required>
                     </div>
                     <div class="mb-4">
                         <label for="senha" class="form-label">Senha</label>

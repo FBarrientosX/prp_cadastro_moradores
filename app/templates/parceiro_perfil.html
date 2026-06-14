@@ -21,10 +21,16 @@
                                value="{{ parceiro.nome_empresa }}" required>
                     </div>
                     <div class="mb-3">
-                        <label for="email" class="form-label">E-mail de Login</label>
+                        <label for="usuario_login" class="form-label">Usuário de Acesso</label>
+                        <input type="text" class="form-control" id="usuario_login" name="usuario_login"
+                               value="{{ parceiro.usuario_login or '' }}" disabled>
+                        <div class="form-text">O usuário de acesso só pode ser alterado pela administração.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="email" class="form-label">E-mail de Contato</label>
                         <input type="email" class="form-control" id="email" name="email"
-                               value="{{ parceiro.email }}" disabled>
-                        <div class="form-text">O e-mail de acesso não pode ser alterado por aqui.</div>
+                               value="{{ parceiro.email }}" required>
+                        <div class="form-text">Usado para comunicação e recuperação de senha.</div>
                     </div>
                     <div class="mb-3">
                         <label for="telefone" class="form-label">Telefone para Contato</label>

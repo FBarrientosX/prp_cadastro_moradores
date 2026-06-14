@@ -175,6 +175,14 @@
                                value="{{ parceiro.nome_empresa }}" required>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">Usuário de Login</label>
+                        <input type="text" class="form-control" name="usuario_login"
+                               value="{{ parceiro.usuario_login or '' }}"
+                               pattern="[^\s]+" title="Sem espaços; use letras minúsculas"
+                               autocomplete="off" required>
+                        <div class="form-text">Identificador de acesso ao portal (sem espaços, minúsculo).</div>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">E-mail</label>
                         <input type="email" class="form-control" name="email"
                                value="{{ parceiro.email }}" required>
@@ -222,6 +230,13 @@
                     <div class="mb-3">
                         <label class="form-label">Nome da Empresa</label>
                         <input type="text" class="form-control" name="nome_empresa" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Usuário de Login</label>
+                        <input type="text" class="form-control" name="usuario_login"
+                               pattern="[^\s]+" title="Sem espaços; use letras minúsculas"
+                               autocomplete="off" required>
+                        <div class="form-text">Identificador de acesso ao portal (sem espaços, minúsculo).</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">E-mail</label>

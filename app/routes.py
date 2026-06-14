@@ -1029,10 +1029,13 @@ def clube_vantagens_resgatar(unidade, cupom_id):
 
 def parceiro_login():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        usuario_digitado = request.form.get("usuario_login", "").strip().lower()
         senha = request.form.get("senha", "")
 
-        parceiro = Parceiro.query.filter_by(email=email).first()
+        parceiro = Parceiro.query.filter_by(usuario_login=usuario_digitado).first()
+        if not parceiro:
+            parceiro = Parceiro.query.filter_by(email=usuario_digitado).first()
+
         if parceiro and check_password_hash(parceiro.senha_hash, senha):
             if parceiro.status == "Bloqueado":
                 flash(
@@ -1041,11 +1044,14 @@ def parceiro_login():
                     "danger",
                 )
                 return render_template("parceiro_login.html")
+            if not parceiro.usuario_login:
+                parceiro.usuario_login = parceiro.email
+                db.session.commit()
             session["parceiro_id"] = parceiro.id
             flash("Login realizado com sucesso.", "success")
             return redirect(url_for("parceiro_dashboard"))
 
-        flash("E-mail ou senha inválidos.", "danger")
+        flash("Usuário ou senha inválidos.", "danger")
 
     return render_template("parceiro_login.html")
 
@@ -1368,16 +1374,26 @@ def parceiro_perfil_editar():
         return redirect(url_for("parceiro_login"))
 
     nome_empresa = request.form.get("nome_empresa", "").strip()
+    email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
-    if not nome_empresa or not categoria:
-        flash("Preencha nome da empresa e categoria.", "danger")
+    if not nome_empresa or not email or not categoria:
+        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+        return redirect(url_for("parceiro_perfil"))
+
+    parceiro_existente = Parceiro.query.filter(
+        Parceiro.email == email,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_existente:
+        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
         return redirect(url_for("parceiro_perfil"))
 
     parceiro.nome_empresa = nome_empresa
+    parceiro.email = email
     parceiro.telefone = telefone
     parceiro.categoria = categoria
     parceiro.endereco = endereco
@@ -2409,14 +2425,23 @@ def admin_clube_vantagens_analytics():
 @admin_or_assistente_required
 def admin_parceiros_criar():
     nome_empresa = request.form.get("nome_empresa", "").strip()
+    usuario_login = request.form.get("usuario_login", "").strip().lower()
     email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
-    if not nome_empresa or not email or not categoria:
-        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+    if not nome_empresa or not usuario_login or not email or not categoria:
+        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    if " " in usuario_login:
+        flash("O usuário de login não pode conter espaços.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    if Parceiro.query.filter_by(usuario_login=usuario_login).first():
+        flash("Já existe parceiro cadastrado com este usuário de login.", "warning")
         return redirect(url_for("admin_clube_vantagens"))
 
     if Parceiro.query.filter_by(email=email).first():
@@ -2425,6 +2450,7 @@ def admin_parceiros_criar():
 
     parceiro = Parceiro(
         nome_empresa=nome_empresa,
+        usuario_login=usuario_login,
         email=email,
         senha_hash=generate_password_hash("senha123"),
         telefone=telefone,
@@ -2444,14 +2470,27 @@ def admin_parceiros_criar():
 def admin_parceiro_editar(parceiro_id):
     parceiro = Parceiro.query.get_or_404(parceiro_id)
     nome_empresa = request.form.get("nome_empresa", "").strip()
+    usuario_login = request.form.get("usuario_login", "").strip().lower()
     email = request.form.get("email", "").strip().lower()
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
     descricao = request.form.get("descricao", "").strip() or None
 
-    if not nome_empresa or not email or not categoria:
-        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+    if not nome_empresa or not usuario_login or not email or not categoria:
+        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    if " " in usuario_login:
+        flash("O usuário de login não pode conter espaços.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro_login_existente = Parceiro.query.filter(
+        Parceiro.usuario_login == usuario_login,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_login_existente:
+        flash("Já existe outro parceiro cadastrado com este usuário de login.", "warning")
         return redirect(url_for("admin_clube_vantagens"))
 
     parceiro_existente = Parceiro.query.filter(
@@ -2463,6 +2502,7 @@ def admin_parceiro_editar(parceiro_id):
         return redirect(url_for("admin_clube_vantagens"))
 
     parceiro.nome_empresa = nome_empresa
+    parceiro.usuario_login = usuario_login
     parceiro.email = email
     parceiro.telefone = telefone
     parceiro.categoria = categoria

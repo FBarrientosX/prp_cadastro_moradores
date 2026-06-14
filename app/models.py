@@ -181,6 +181,7 @@ class Parceiro(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     nome_empresa = db.Column(db.String(100), nullable=False)
+    usuario_login = db.Column(db.String(80), unique=True, nullable=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     senha_hash = db.Column(db.String(256), nullable=False)
     telefone = db.Column(db.String(20), nullable=True)
