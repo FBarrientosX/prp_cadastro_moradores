@@ -1,0 +1,62 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Meu Perfil — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-12 col-lg-8 col-xl-7">
+        <div class="mb-4">
+            <h1 class="h3 mb-1">Meu Perfil Comercial</h1>
+            <p class="text-muted mb-0">
+                Atualize as informações exibidas no Guia de Parceiros do condomínio.
+            </p>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-4">
+                <form method="post" action="{{ url_for('parceiro_perfil_editar') }}">
+                    <div class="mb-3">
+                        <label for="nome_empresa" class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" id="nome_empresa" name="nome_empresa"
+                               value="{{ parceiro.nome_empresa }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="email" class="form-label">E-mail de Login</label>
+                        <input type="email" class="form-control" id="email" name="email"
+                               value="{{ parceiro.email }}" disabled>
+                        <div class="form-text">O e-mail de acesso não pode ser alterado por aqui.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="telefone" class="form-label">Telefone para Contato</label>
+                        <input type="text" class="form-control" id="telefone" name="telefone"
+                               value="{{ parceiro.telefone or '' }}"
+                               placeholder="Ex: (11) 99999-9999">
+                    </div>
+                    <div class="mb-3">
+                        <label for="endereco" class="form-label">Endereço</label>
+                        <input type="text" class="form-control" id="endereco" name="endereco"
+                               value="{{ parceiro.endereco or '' }}"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
+                        <label for="categoria" class="form-label">Categoria</label>
+                        <input type="text" class="form-control" id="categoria" name="categoria"
+                               value="{{ parceiro.categoria }}" required
+                               placeholder="Ex: Alimentação, Saúde, Serviços">
+                    </div>
+                    <div class="mb-4">
+                        <label for="descricao" class="form-label">Descrição do Negócio</label>
+                        <textarea class="form-control" id="descricao" name="descricao" rows="4"
+                                  placeholder="Descreva brevemente sua empresa e o que oferece aos moradores.">{{ parceiro.descricao or '' }}</textarea>
+                    </div>
+                    <div class="d-flex justify-content-end">
+                        <button type="submit" class="btn btn-success">
+                            Salvar Alterações
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

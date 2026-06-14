@@ -1,0 +1,282 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Meus Cupons — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Meus Cupons</h1>
+    <p class="text-muted mb-0">Crie e gerencie as ofertas do Clube de Vantagens</p>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-4">
+        <h2 class="h6 mb-3">+ Criar Novo Cupom</h2>
+        <form method="post" action="{{ url_for('parceiro_cupons_criar') }}" class="row g-3">
+            <div class="col-12 col-md-6">
+                <label class="form-label">Título</label>
+                <input type="text" class="form-control" name="titulo" required>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label">Código Prefixo</label>
+                <input type="text" class="form-control" name="codigo_prefixo" maxlength="10" required>
+            </div>
+            <div class="col-12">
+                <label class="form-label">Descrição</label>
+                <textarea class="form-control" name="descricao" rows="2" required></textarea>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Data de Validade</label>
+                <input type="date" class="form-control" name="data_validade">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Limite Total de Resgates</label>
+                <input type="number" class="form-control" name="limite_total" min="1"
+                       placeholder="Deixe em branco para ilimitado">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Limite por Unidade</label>
+                <input type="number" class="form-control" name="limite_por_unidade" min="1" value="1" required>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Salvar Cupom</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-3">
+        <h2 class="h6 mb-3">Cupons Cadastrados</h2>
+        {% if cupons %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Título</th>
+                        <th>Prefixo</th>
+                        <th>Validade</th>
+                        <th>Limite Total</th>
+                        <th>Limite/Unidade</th>
+                        <th>Resgatados</th>
+                        <th>Validados</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cupom in cupons %}
+                    {% set metricas = metricas_cupons.get(cupom.id, {'total_resgatados': 0, 'total_validados': 0}) %}
+                    {% set total_resgatados = metricas.total_resgatados %}
+                    {% set total_validados = metricas.total_validados %}
+                    <tr>
+                        <td class="text-muted">#{{ cupom.id }}</td>
+                        <td>{{ cupom.titulo }}</td>
+                        <td>{{ cupom.codigo_prefixo }}</td>
+                        <td>
+                            {% if cupom.data_validade %}
+                            {{ cupom.data_validade.strftime('%d/%m/%Y') }}
+                            {% else %}
+                            Sem validade
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cupom.limite_total %}
+                            {{ cupom.limite_total }}
+                            {% else %}
+                            Ilimitado
+                            {% endif %}
+                        </td>
+                        <td>{{ cupom.limite_por_unidade }}</td>
+                        <td>{{ total_resgatados }}</td>
+                        <td>{{ total_validados }}</td>
+                        <td>
+                            {% if cupom.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Encerrado</span>
+                            {% if cupom.data_desativacao %}
+                            <span class="badge text-bg-dark mt-1">
+                                Encerrado manualmente em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
+                            </span>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-info"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalDetalhes{{ cupom.id }}"
+                                    title="Ver detalhes">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                            {% if cupom.ativo %}
+                            <form method="post"
+                                  action="{{ url_for('parceiro_cupons_desativar', cupom_id=cupom.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Deseja encerrar este cupom permanentemente? Esta ação não pode ser desfeita e ele sairá da vitrine dos moradores.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    Desativar
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">
+            Nenhum cupom criado ainda.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% for cupom in cupons %}
+{% set metricas = metricas_cupons.get(cupom.id, {'total_resgatados': 0, 'total_validados': 0}) %}
+{% set total_resgatados = metricas.total_resgatados %}
+{% set total_validados = metricas.total_validados %}
+{% set total_pendentes = total_resgatados - total_validados %}
+<div class="modal fade" id="modalDetalhes{{ cupom.id }}" tabindex="-1"
+     aria-labelledby="modalDetalhesLabel{{ cupom.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalDetalhesLabel{{ cupom.id }}">
+                    {{ cupom.titulo }}
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted mb-2">Descrição</h3>
+                    <p class="mb-0">{{ cupom.descricao }}</p>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted mb-3">Vigência</h3>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <p class="small text-muted mb-1">Data de Validade (prevista na criação)</p>
+                                <p class="mb-0 fw-semibold">
+                                    {% if cupom.data_validade %}
+                                    {{ cupom.data_validade.strftime('%d/%m/%Y') }}
+                                    {% else %}
+                                    Sem validade definida
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <p class="small text-muted mb-1">Encerramento</p>
+                                {% if cupom.data_desativacao %}
+                                <span class="badge text-bg-dark">
+                                    Encerrado manualmente em {{ cupom.data_desativacao.strftime('%d/%m/%Y') }}
+                                </span>
+                                <p class="small text-muted mb-0 mt-2">
+                                    Horário: {{ cupom.data_desativacao.strftime('%H:%M') }}
+                                </p>
+                                {% elif cupom.ativo %}
+                                <p class="mb-0 fw-semibold text-success">Cupom ainda ativo na vitrine</p>
+                                {% else %}
+                                <p class="mb-0 text-muted">—</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted mb-3">Regras de Resgate</h3>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <p class="small text-muted mb-1">Limite Total de Ofertas</p>
+                                <p class="mb-0 fw-semibold">
+                                    {% if cupom.limite_total %}
+                                    {{ cupom.limite_total }}
+                                    {% else %}
+                                    Ilimitado
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <p class="small text-muted mb-1">Limite por Unidade</p>
+                                <p class="mb-0 fw-semibold">{{ cupom.limite_por_unidade }}</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted mb-3">Performance</h3>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-4">
+                            <div class="border rounded p-3 h-100 text-center">
+                                <p class="small text-muted mb-1">Códigos Gerados</p>
+                                <p class="h4 mb-0 text-primary">{{ total_resgatados }}</p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="border rounded p-3 h-100 text-center">
+                                <p class="small text-muted mb-1">Códigos Validados</p>
+                                <p class="h4 mb-0 text-success">{{ total_validados }}</p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="border rounded p-3 h-100 text-center">
+                                <p class="small text-muted mb-1">Códigos Pendentes</p>
+                                <p class="h4 mb-0 text-warning">{{ total_pendentes }}</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section>
+                    <h3 class="h6 text-uppercase text-muted mb-2">Auditoria</h3>
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2">
+                            <span class="text-muted">Prefixo:</span>
+                            <strong>{{ cupom.codigo_prefixo }}</strong>
+                        </li>
+                        <li class="mb-2">
+                            <span class="text-muted">Status:</span>
+                            {% if cupom.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Encerrado permanentemente</span>
+                            {% endif %}
+                        </li>
+                        <li class="mb-2">
+                            <span class="text-muted">Data de Criação:</span>
+                            {% if cupom.data_criacao %}
+                            {{ cupom.data_criacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </li>
+                        <li>
+                            <span class="text-muted">Data de Desativação:</span>
+                            {% if cupom.data_desativacao %}
+                            {{ cupom.data_desativacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </li>
+                    </ul>
+                </section>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

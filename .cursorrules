@@ -20,7 +20,7 @@ Inicializacao:
   - configura Flask e SQLAlchemy,
   - registra rotas via `routes.init_app(app)`,
   - roda `db.create_all()`,
-  - executa migracoes leves de compatibilidade por coluna.
+  - executa migracoes leves de compatibilidade por coluna (ver secao 7).
 
 Variaveis de ambiente importantes:
 - `SECRET_KEY`
@@ -32,6 +32,14 @@ Email:
 - Servico em `app/email_service.py`.
 - SMTP Gmail via SSL (`smtp.gmail.com`, porta 465).
 
+Bibliotecas externas homologadas (frontend via CDN):
+- Bootstrap 5 + Bootstrap Icons (padrao global).
+- flatpickr (datas em formularios administrativos).
+- Chart.js — dashboards e analytics (ex: aba Analytics do Clube de Vantagens).
+- qrcode.js — geracao de QR Code no cliente (ex: cupons resgatados pelo morador).
+- html5-qrcode — leitura de QR Code via camera in-app (ex: validacao no portal do parceiro).
+- Preferir CDN ja usados nos templates existentes; nao introduzir libs concorrentes sem necessidade.
+
 ==================================================
 2) HIERARQUIA DE USUARIOS E PERMISSOES
 ==================================================
@@ -41,8 +49,9 @@ Hierarquia funcional:
 - Assistente Administrativo (`role='assistente'`): acesso administrativo parcial.
 - Sindico (`role='sindico'`): acesso operacional apenas ao bloco responsavel.
 - Unidade (morador): autenticacao por bloco/apartamento/senha da unidade.
+- Parceiro comercial: autenticacao propria por e-mail/senha (`session['parceiro_id']`), independente de `Usuario`.
 
-Decorators de acesso (`app/auth.py`):
+Decorators de acesso (`app/auth.py` e `app/routes.py`):
 - `@admin_required`
   - apenas `Role.ADMIN`.
 - `@admin_or_assistente_required`
@@ -51,19 +60,27 @@ Decorators de acesso (`app/auth.py`):
   - apenas `Role.SINDICO`.
 - `@unidade_required`
   - exige sessao de unidade autenticada.
+- `@parceiro_required` (em `routes.py`)
+  - exige `session['parceiro_id']` valido.
 
 Matriz de permissao (resumo):
 - Admin e Assistente:
   - `GET /admin` (dashboard)
   - `POST /admin/registrar/<id>`
+  - `POST /admin/parceiros/criar` (criacao de parceiro)
 - Somente Admin:
   - criacao/revogacao de usuarios administrativos/sindicos
   - reset de senha de unidade
   - exclusao de unidade
   - validacoes documentais e alteracao de senha de sindicos
+  - gestao completa do Clube de Vantagens (`/admin/clube_vantagens`)
+  - edicao, bloqueio e reativacao de parceiros
 - Somente Sindico:
   - dashboard do bloco
   - validacao unificada de unidade pendente
+- Parceiro logado:
+  - portal proprio (`/parceiro/*`); nao acessa rotas admin/morador
+  - edita apenas dados comerciais proprios (e-mail de login nao alteravel pelo parceiro)
 
 ==================================================
 3) MODELOS E CAMPOS-CHAVE
@@ -92,6 +109,24 @@ Matriz de permissao (resumo):
 
 `LogAuditoria`:
 - registra eventos sensiveis com `usuario_id`, `mensagem`, `data_criacao`
+
+`Parceiro`:
+- `nome_empresa`, `email` (unico, login), `senha_hash`
+- `telefone`, `categoria`, `endereco`, `descricao`
+- `ativo` (bool legado) + `status`: `Pendente`, `Ativo`, `Bloqueado`
+- `data_cadastro`
+- perfil comercial exibido no Guia de Parceiros do morador
+
+`Cupom`:
+- vinculado a `parceiro_id`
+- `titulo`, `descricao`, `codigo_prefixo`, `data_validade`
+- `ativo`, `limite_total`, `limite_por_unidade`
+- `data_criacao`, `data_update`, `data_desativacao`
+
+`ResgateCupom`:
+- vincula `cupom_id` + `unidade_id`
+- `codigo_unico` (QR), `status`, `data_resgate`, `data_utilizacao`
+- registro transacional; nao alterar retroativamente para preservar historico
 
 ==================================================
 4) ROTAS E FLUXOS PRINCIPAIS
@@ -126,9 +161,46 @@ Administracao (login unico para admin/assistente):
     - somente roles `assistente` e `sindico`
     - gera log de auditoria de revogacao
 
+Clube de Vantagens — Morador (`@unidade_required`):
+- `GET /clube_vantagens` — abas: Ofertas, Guia de Parceiros, Cupons para Usar, Historico
+- `POST /clube_vantagens/resgatar/<cupom_id>` — gera `ResgateCupom` com codigo unico e QR
+
+Clube de Vantagens — Admin (`@admin_required`):
+- `GET /admin/clube_vantagens` — gestao de parceiros + auditoria de resgates
+- `GET /admin/clube_vantagens/analytics` — dashboard Chart.js
+- `POST /admin/parceiros/criar` (admin/assistente)
+- `POST /admin/parceiros/<id>/editar` (admin only)
+- `POST /admin/parceiros/<id>/bloquear` (admin only) — desativa cupons na vitrine
+- `POST /admin/parceiros/<id>/ativar` (admin only)
+
+Portal do Parceiro (`@parceiro_required`, exceto login):
+- `GET|POST /parceiro/login`, `GET /parceiro/logout`
+- `GET /parceiro/dashboard` — metricas e historico de validacoes
+- `GET /parceiro/validacao` — validacao manual + scanner QR (`html5-qrcode`)
+- `POST /parceiro/validar_codigo`, `POST /parceiro/aprovar`
+- `GET /parceiro/cupons` — criar e listar cupons
+- `POST /parceiro/cupons/criar`, `POST /parceiro/cupons/<id>/desativar`
+- `GET /parceiro/perfil`, `POST /parceiro/perfil/editar`
+- Parceiro `Pendente`: tela `parceiro_pendente.html` (sem sidebar) ate aprovacao admin
+- Parceiro `Bloqueado`: login rejeitado com mensagem de suspensao
+
 ==================================================
-5) DASHBOARDS E REGRAS DE INTERFACE
+5) DASHBOARDS, UX/UI E PADROES DE INTERFACE
 ==================================================
+
+Separacao de contextos (UX/UI):
+- Cada perfil de usuario deve ter layout base proprio para evitar confusao mental:
+  - `base.html` — morador, sindico e admin/assistente (sidebar `bg-primary` / azul Bootstrap).
+  - `parceiro_base.html` — portal do parceiro (sidebar verde: `--parceiro-brand-dark`).
+- Novos portais ou perfis devem seguir o mesmo padrao: arquivo base dedicado + cor de destaque distinta na sidebar.
+- Sidebars com `nav-pills`, estado ativo via `request.endpoint`, e offcanvas no mobile.
+- Nao misturar navegacao de contextos diferentes no mesmo base template.
+
+Padroes de UI Bootstrap (obrigatorios em telas densas):
+- `nav-tabs` para organizar telas com muita informacao (ex: carteira do morador em `clube_vantagens.html`, gestao/analytics admin).
+- Modals para criacao, edicao e detalhes de itens em tabelas — evitar tabelas com excesso de colunas horizontais.
+- Cards + badges para status; feedback por `flash` + `alert` dismissible.
+- Botoes perigosos com `confirm()` no submit e classes `btn-outline-danger`.
 
 Dashboard Sindico (`dashboard_sindico.html`):
 - mapa do bloco completo (inclusive "Aguardando Morador")
@@ -146,6 +218,21 @@ Dashboard Admin (`dashboard_admin.html`):
   - Equipe e Acessos (somente admin)
 - botoes perigosos (Resetar Senha / Excluir Resetar Cadastro):
   - visiveis apenas para `current_user.role == 'admin'`
+- Clube de Vantagens migrou para pagina dedicada (`admin_clube_vantagens.html`) com link na sidebar de `base.html`.
+
+Clube de Vantagens — Morador (`clube_vantagens.html`):
+- abas com contadores (badges)
+- Guia de Parceiros: cards com categoria, descricao, endereco (`bi-geo-alt`), WhatsApp/mailto
+- Cupons resgatados: QR gerado client-side (`qrcode.js`) apontando para `/parceiro/validacao?codigo=...`
+
+Clube de Vantagens — Admin (`admin_clube_vantagens.html`):
+- abas Gestao / Dashboard Analytics
+- modals para criar e editar parceiro
+- analytics com Chart.js (graficos de adesao e conversao)
+
+Portal Parceiro:
+- paginas separadas por funcao (dashboard, validacao, cupons, perfil)
+- `parceiro_pendente.html` isolado (sem sidebar) para status Pendente
 
 Equipe e Acessos:
 - lista usuarios com role `assistente` ou `sindico`
@@ -173,8 +260,33 @@ Regra de lote na validacao do sindico (`sindico_validar_unidade`):
 - Falha de envio nao desfaz persistencia; apenas gera flash de aviso.
 
 ==================================================
-7) OBSERVACOES DE CONSISTENCIA IMPORTANTES
+7) MIGRACOES SQLITE E CONSISTENCIA DE DADOS
 ==================================================
+
+Regra fundamental — SQLite e migracoes leves:
+- SQLite nao suporta alteracao/exclusao complexa de colunas via SQLAlchemy de forma pratica.
+- NUNCA depender apenas de `db.create_all()` para evolucionar schemas existentes em producao.
+- SEMPRE usar funcoes internas em `app/__init__.py` no padrao `_garantir_colunas_*()`:
+  1. verificar existencia da tabela via `inspect(db.engine).get_table_names()`
+  2. mapear colunas existentes via `inspect(...).get_columns(tabela)`
+  3. aplicar apenas `ALTER TABLE ... ADD COLUMN` para campos novos
+  4. commitar ao final; opcionalmente rodar `UPDATE` para backfill de registros antigos
+- Funcoes atuais: `_garantir_colunas_parceiros()`, `_garantir_colunas_cupom()` (+ migracoes legadas de unidades/pessoas).
+- Ao adicionar nova coluna em tabela existente: criar campo no model E funcao de migracao correspondente.
+
+Restricoes SQLite importantes:
+- Evitar `DEFAULT` nao-constante em `ALTER TABLE ADD COLUMN` (ex: `CURRENT_TIMESTAMP` causa erro).
+- Padrao seguro: coluna nullable sem default dinamico + `UPDATE ... SET coluna = datetime('now') WHERE coluna IS NULL`.
+- Preferir inativacao por status/flag a remover colunas ou registros transacionais.
+
+Regras de negocio seguras (soft delete vs hard delete):
+- Dados transacionais e registros com historico auditavel NAO devem ser apagados ou reativados de forma que corrompa o passado.
+- Regra padrao do projeto: inativar via status/flag (`ativo=False`, `data_desativacao`, `status='Bloqueado'`) e exigir criacao de novo registro quando necessario.
+- Exemplos implementados:
+  - Cupom desativado (`POST /parceiro/cupons/<id>/desativar`): permanente; sem rota de reativacao.
+  - ResgateCupom: imutavel apos criacao; validacao apenas preenche `data_utilizacao`.
+  - Parceiro bloqueado: cupons saem da vitrine; reativacao e acao admin explicita (nao apaga historico).
+- Hard delete reservado a entidades sem dependencias transacionais (ex: exclusao de unidade pelo admin).
 
 Blocos e apartamentos:
 - fonte de verdade em `app/utils.py`.
@@ -183,21 +295,37 @@ Blocos e apartamentos:
 Sessao de usuario:
 - `login_usuario()` faz `session.clear()` antes de gravar user_id/role.
 - isso invalida sessao de unidade ao alternar perfil (comportamento esperado).
-
-Migracoes leves:
-- novos campos em `unidades`/`pessoas` devem seguir padrao:
-  - detectar coluna via `inspect`
-  - aplicar `ALTER TABLE`
-  - commitar ao final
+- Sessao de parceiro usa chave separada `parceiro_id`; nao misturar com `user_id`/`unidade_id`.
 
 Auditoria:
 - sempre usar `_registrar_auditoria()` para acoes sensiveis:
   - revogacao de acesso
   - reprovacoes de moradores
   - validacoes/conclusoes relevantes
+  - bloqueio/reativacao de parceiros
 
 ==================================================
-8) DIRETRIZES PARA FUTURAS ALTERACOES
+8) REGRAS DE NEGOCIO — CLUBE DE VANTAGENS
+==================================================
+
+Ciclo de vida do parceiro:
+- Criacao admin → status `Pendente` (senha inicial padrao informada ao admin).
+- Admin ativa → status `Ativo`; passa a aparecer no Guia de Parceiros.
+- Admin bloqueia → status `Bloqueado`, `ativo=False`; cupons desativados na vitrine; login impedido.
+- Parceiro edita perfil comercial (nome, telefone, categoria, endereco, descricao); e-mail so pelo admin.
+
+Cupons e resgates:
+- Resgate valida: cupom ativo, parceiro ativo, validade vigente, limites total e por unidade.
+- Codigo unico por resgate; QR aponta para validacao no portal do parceiro.
+- Validacao pelo parceiro (manual ou QR) marca `data_utilizacao`.
+- Metricas de cupom: total resgatados / total validados via helper `_metricas_resgates_por_cupom()`.
+
+Permissoes UI vs rota:
+- Botoes de editar/bloquear parceiro: visiveis apenas para admin na UI E protegidos por `@admin_required` na rota.
+- Assistente pode criar parceiro, mas nao editar/bloquear.
+
+==================================================
+9) DIRETRIZES PARA FUTURAS ALTERACOES
 ==================================================
 
 Permissoes:
@@ -209,6 +337,8 @@ Permissoes:
 Templates:
 - preservar condicionais de exibicao por role no admin.
 - manter padrao Bootstrap e feedback por `flash`.
+- respeitar separacao de bases por contexto de usuario (secao 5).
+- preferir `nav-tabs` e modals antes de expandir tabelas ou criar paginas monoliticas.
 
 Moradores/unidade:
 - respeitar obrigatoriedades atuais (ao menos 1 pessoa e 1 responsavel).
@@ -223,3 +353,9 @@ Gestao de usuarios:
 - manter bloqueio de autoexclusao do admin.
 - manter criacao de sindico com bloco obrigatorio.
 - manter senhas com hash via `set_password`.
+
+Clube de Vantagens / Parceiros:
+- novos campos em `Parceiro`/`Cupom`: model + `_garantir_colunas_*()` + formularios admin e parceiro + exibicao morador quando aplicavel.
+- nao reintroduzir reativacao de cupons desativados.
+- bibliotecas frontend: usar apenas as homologadas na secao 1.
+- QR e validacao devem manter compatibilidade com URL `/parceiro/validacao?codigo=...`.

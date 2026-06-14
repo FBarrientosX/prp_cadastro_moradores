@@ -65,6 +65,9 @@
                     <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                     {% endif %}
                 </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                    <i class="bi bi-gift me-2"></i>Clube de Vantagens
+                </a>
             {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
                     <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
@@ -79,6 +82,11 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
                     <i class="bi bi-speedometer2 me-2"></i>Dashboard
                 </a>
+                {% if sidebar_user.role == 'admin' %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics'] %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
+                    <i class="bi bi-shop me-2"></i>Clube de Vantagens
+                </a>
+                {% endif %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
                     <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
                 </a>
@@ -128,6 +136,9 @@
                         <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                         {% endif %}
                     </a>
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                        <i class="bi bi-gift me-2"></i>Clube de Vantagens
+                    </a>
                 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
                         <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
@@ -142,6 +153,11 @@
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
                         <i class="bi bi-speedometer2 me-2"></i>Dashboard
                     </a>
+                    {% if sidebar_user.role == 'admin' %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics'] %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
+                        <i class="bi bi-shop me-2"></i>Clube de Vantagens
+                    </a>
+                    {% endif %}
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}#sindicos">
                         <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
                     </a>

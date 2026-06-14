@@ -1,10 +1,13 @@
 from datetime import datetime
 from functools import wraps
 import os
+import random
+import string
 import traceback
 
 from flask import flash, jsonify, redirect, render_template, request, session, url_for
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, case, func, or_
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app import db
 from app.auth import (
@@ -28,10 +31,13 @@ from app.email_service import (
     enviar_email_validacao_sucesso,
 )
 from app.models import (
+    Cupom,
     EspacoComum,
     LogAuditoria,
+    Parceiro,
     Pessoa,
     Reserva,
+    ResgateCupom,
     Role,
     StatusDocumento,
     StatusUnidade,
@@ -101,6 +107,172 @@ def _emails_unicos(pessoas):
         vistos.add(chave)
         emails.append(email)
     return emails
+
+
+def _montar_analytics_clube():
+    total_resgates = db.session.query(func.count(ResgateCupom.id)).scalar() or 0
+    total_cupons_ativos = (
+        db.session.query(func.count(Cupom.id)).filter(Cupom.ativo.is_(True)).scalar() or 0
+    )
+
+    cupons_por_parceiro_rows = (
+        db.session.query(
+            Parceiro.nome_empresa,
+            func.count(Cupom.id).label("total"),
+        )
+        .outerjoin(Cupom, Cupom.parceiro_id == Parceiro.id)
+        .group_by(Parceiro.id, Parceiro.nome_empresa)
+        .order_by(Parceiro.nome_empresa)
+        .all()
+    )
+
+    resgates_por_bloco_rows = (
+        db.session.query(
+            Unidade.bloco,
+            func.count(ResgateCupom.id).label("total"),
+        )
+        .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
+        .group_by(Unidade.bloco)
+        .order_by(func.count(ResgateCupom.id).desc())
+        .all()
+    )
+
+    top_unidades_rows = (
+        db.session.query(
+            Unidade.bloco,
+            Unidade.apartamento,
+            func.count(ResgateCupom.id).label("total"),
+        )
+        .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
+        .group_by(Unidade.id, Unidade.bloco, Unidade.apartamento)
+        .order_by(func.count(ResgateCupom.id).desc())
+        .limit(10)
+        .all()
+    )
+
+    status_rows = (
+        db.session.query(ResgateCupom.status, func.count(ResgateCupom.id))
+        .group_by(ResgateCupom.status)
+        .all()
+    )
+    status_map = {status: quantidade for status, quantidade in status_rows}
+    resgates_ativos = status_map.get("Ativo", 0)
+    resgates_utilizados = status_map.get("Utilizado", 0)
+    taxa_conversao = (
+        round((resgates_utilizados / total_resgates) * 100, 1) if total_resgates else 0.0
+    )
+
+    evolucao_rows = (
+        db.session.query(
+            func.date(ResgateCupom.data_resgate).label("data"),
+            func.count(ResgateCupom.id).label("total"),
+        )
+        .group_by(func.date(ResgateCupom.data_resgate))
+        .order_by(func.date(ResgateCupom.data_resgate))
+        .all()
+    )
+
+    parceiro_popular_row = (
+        db.session.query(
+            Parceiro.nome_empresa,
+            func.count(ResgateCupom.id).label("total"),
+        )
+        .join(Cupom, Cupom.parceiro_id == Parceiro.id)
+        .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
+        .group_by(Parceiro.id, Parceiro.nome_empresa)
+        .order_by(func.count(ResgateCupom.id).desc())
+        .first()
+    )
+
+    cupons_conversao_rows = (
+        db.session.query(
+            Cupom.titulo,
+            Parceiro.nome_empresa,
+            func.count(ResgateCupom.id).label("total_resgates"),
+            func.sum(
+                case((ResgateCupom.status == "Utilizado", 1), else_=0)
+            ).label("utilizados"),
+        )
+        .join(Parceiro, Cupom.parceiro_id == Parceiro.id)
+        .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
+        .group_by(Cupom.id, Cupom.titulo, Parceiro.nome_empresa)
+        .all()
+    )
+
+    cupons_conversao = []
+    for titulo, parceiro_nome, total_cupom_resgates, utilizados in cupons_conversao_rows:
+        utilizados = int(utilizados or 0)
+        taxa_cupom = (
+            round((utilizados / total_cupom_resgates) * 100, 1)
+            if total_cupom_resgates
+            else 0.0
+        )
+        cupons_conversao.append(
+            {
+                "titulo": titulo,
+                "parceiro": parceiro_nome,
+                "resgates": total_cupom_resgates,
+                "utilizados": utilizados,
+                "taxa": taxa_cupom,
+            }
+        )
+    cupons_conversao.sort(key=lambda item: (item["taxa"], item["utilizados"]), reverse=True)
+
+    unidade_destaque = top_unidades_rows[0] if top_unidades_rows else None
+
+    return {
+        "charts": {
+            "cupons_por_parceiro": {
+                "labels": [row[0] for row in cupons_por_parceiro_rows],
+                "values": [row[1] for row in cupons_por_parceiro_rows],
+            },
+            "resgates_por_bloco": {
+                "labels": [f"Bloco {row[0]}" for row in resgates_por_bloco_rows],
+                "values": [row[1] for row in resgates_por_bloco_rows],
+            },
+            "evolucao_resgates": {
+                "labels": [
+                    datetime.strptime(str(row[0]), "%Y-%m-%d").strftime("%d/%m/%Y")
+                    for row in evolucao_rows
+                ],
+                "values": [row[1] for row in evolucao_rows],
+            },
+        },
+        "status_resgates": {
+            "ativo": resgates_ativos,
+            "utilizado": resgates_utilizados,
+            "taxa_conversao": taxa_conversao,
+        },
+        "metricas": {
+            "total_cupons_ativos": total_cupons_ativos,
+            "total_resgates": total_resgates,
+            "parceiro_popular": parceiro_popular_row[0] if parceiro_popular_row else "—",
+            "parceiro_popular_count": parceiro_popular_row[1] if parceiro_popular_row else 0,
+            "unidade_engajada": (
+                f"Bloco {unidade_destaque[0]} / Apto {unidade_destaque[1]}"
+                if unidade_destaque
+                else "—"
+            ),
+            "unidade_engajada_count": unidade_destaque[2] if unidade_destaque else 0,
+        },
+        "top5_unidades": [
+            {
+                "bloco": row[0],
+                "apartamento": row[1],
+                "total": row[2],
+            }
+            for row in top_unidades_rows[:5]
+        ],
+        "top10_unidades": [
+            {
+                "bloco": row[0],
+                "apartamento": row[1],
+                "total": row[2],
+            }
+            for row in top_unidades_rows
+        ],
+        "cupons_conversao": cupons_conversao,
+    }
 
 
 def _parse_data(data_str):
@@ -242,6 +414,17 @@ def gestao_espacos_required(view):
             return view(*args, **kwargs)
         flash("Acesso restrito para gestão de espaços.", "danger")
         return redirect(url_for("reservas"))
+
+    return wrapped
+
+
+def parceiro_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if session.get("parceiro_id"):
+            return view(*args, **kwargs)
+        flash("Faça login para acessar o Portal do Parceiro.", "warning")
+        return redirect(url_for("parceiro_login"))
 
     return wrapped
 
@@ -402,11 +585,516 @@ def atualizar_dados(unidade):
     )
 
 
+def _buscar_parceiro_logado():
+    parceiro_id = session.get("parceiro_id")
+    if not parceiro_id:
+        return None
+    return Parceiro.query.get(parceiro_id)
+
+
+def _parse_limite_total_form(valor):
+    if valor is None:
+        return None
+    valor = str(valor).strip()
+    if not valor:
+        return None
+    try:
+        limite = int(valor)
+    except ValueError:
+        return None
+    return limite if limite > 0 else None
+
+
+def _parse_limite_por_unidade_form(valor, padrao=1):
+    if valor is None or not str(valor).strip():
+        return padrao
+    try:
+        limite = int(str(valor).strip())
+    except ValueError:
+        return padrao
+    return limite if limite > 0 else padrao
+
+
+def _contagem_resgates_por_cupom(cupom_ids):
+    if not cupom_ids:
+        return {}
+    rows = (
+        db.session.query(ResgateCupom.cupom_id, func.count(ResgateCupom.id))
+        .filter(ResgateCupom.cupom_id.in_(cupom_ids))
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    return {cupom_id: total for cupom_id, total in rows}
+
+
+def _metricas_resgates_por_cupom(cupom_ids):
+    if not cupom_ids:
+        return {}
+    rows = (
+        db.session.query(
+            ResgateCupom.cupom_id,
+            func.count(ResgateCupom.id).label("total_resgatados"),
+            func.sum(
+                case((ResgateCupom.status == "Utilizado", 1), else_=0)
+            ).label("total_validados"),
+        )
+        .filter(ResgateCupom.cupom_id.in_(cupom_ids))
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    metricas = {
+        cupom_id: {"total_resgatados": 0, "total_validados": 0} for cupom_id in cupom_ids
+    }
+    for cupom_id, total_resgatados, total_validados in rows:
+        metricas[cupom_id] = {
+            "total_resgatados": total_resgatados,
+            "total_validados": int(total_validados or 0),
+        }
+    return metricas
+
+
+@unidade_required
+def clube_vantagens(unidade):
+    data_atual = datetime.utcnow().date()
+    cupons_ativos = (
+        Cupom.query.join(Parceiro)
+        .filter(
+            Parceiro.status == "Ativo",
+            Cupom.ativo.is_(True),
+            or_(Cupom.data_validade.is_(None), Cupom.data_validade >= data_atual),
+        )
+        .order_by(Parceiro.nome_empresa, Cupom.titulo)
+        .all()
+    )
+    cupom_ids = [cupom.id for cupom in cupons_ativos]
+    resgates_por_cupom = _contagem_resgates_por_cupom(cupom_ids)
+
+    resgates_unidade_rows = (
+        db.session.query(ResgateCupom.cupom_id, func.count(ResgateCupom.id))
+        .filter(ResgateCupom.unidade_id == unidade.id)
+        .group_by(ResgateCupom.cupom_id)
+        .all()
+    )
+    resgates_unidade_por_cupom = {
+        cupom_id: total for cupom_id, total in resgates_unidade_rows
+    }
+
+    cupons_disponiveis = []
+    for cupom in cupons_ativos:
+        total_resgates = resgates_por_cupom.get(cupom.id, 0)
+        if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
+            continue
+        resgates_unidade = resgates_unidade_por_cupom.get(cupom.id, 0)
+        if resgates_unidade >= cupom.limite_por_unidade:
+            continue
+        cupons_disponiveis.append(cupom)
+
+    resgates_ativos = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(ResgateCupom.unidade_id == unidade.id, ResgateCupom.status == "Ativo")
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
+    resgates_utilizados = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(ResgateCupom.unidade_id == unidade.id, ResgateCupom.status == "Utilizado")
+        .order_by(ResgateCupom.data_utilizacao.desc())
+        .all()
+    )
+
+    parceiros_ativos = (
+        Parceiro.query.filter_by(status="Ativo")
+        .order_by(Parceiro.nome_empresa)
+        .all()
+    )
+    parceiros_com_cupons_ativos = {
+        parceiro_id
+        for (parceiro_id,) in db.session.query(Cupom.parceiro_id)
+        .join(Parceiro)
+        .filter(
+            Parceiro.status == "Ativo",
+            Cupom.ativo.is_(True),
+            or_(Cupom.data_validade.is_(None), Cupom.data_validade >= data_atual),
+        )
+        .distinct()
+        .all()
+    }
+
+    return render_template(
+        "clube_vantagens.html",
+        cupons_disponiveis=cupons_disponiveis,
+        resgates_ativos=resgates_ativos,
+        resgates_utilizados=resgates_utilizados,
+        parceiros_ativos=parceiros_ativos,
+        parceiros_com_cupons_ativos=parceiros_com_cupons_ativos,
+    )
+
+
+@unidade_required
+def clube_vantagens_resgatar(unidade, cupom_id):
+    cupom = Cupom.query.get_or_404(cupom_id)
+
+    if not cupom.ativo or not cupom.parceiro.ativo:
+        flash("Este cupom não está disponível no momento.", "warning")
+        return redirect(url_for("clube_vantagens"))
+
+    if cupom.data_validade and cupom.data_validade < datetime.utcnow().date():
+        flash("Este cupom expirou.", "warning")
+        return redirect(url_for("clube_vantagens"))
+
+    total_resgates = ResgateCupom.query.filter_by(cupom_id=cupom.id).count()
+    if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
+        flash("Oferta esgotada.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    resgates_unidade = ResgateCupom.query.filter_by(
+        cupom_id=cupom.id,
+        unidade_id=unidade.id,
+    ).count()
+    if resgates_unidade >= cupom.limite_por_unidade:
+        flash("Você atingiu o limite de resgates para esta oferta.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    bloco = "".join(ch for ch in str(unidade.bloco or "") if ch.isalnum()).upper()
+    apartamento = "".join(ch for ch in str(unidade.apartamento or "") if ch.isalnum()).upper()
+    prefixo = "".join(ch for ch in (cupom.codigo_prefixo or "") if ch.isalnum()).upper()
+    sufixo_chars = string.ascii_uppercase + string.digits
+
+    codigo_unico = None
+    for _ in range(20):
+        sufixo = "".join(random.choices(sufixo_chars, k=4))
+        candidato = f"PRP-{bloco}{apartamento}-{prefixo}-{sufixo}"
+        if not ResgateCupom.query.filter_by(codigo_unico=candidato).first():
+            codigo_unico = candidato
+            break
+    if not codigo_unico:
+        flash("Não foi possível gerar um código único. Tente novamente.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    db.session.add(
+        ResgateCupom(
+            cupom_id=cupom.id,
+            unidade_id=unidade.id,
+            codigo_unico=codigo_unico,
+            status="Ativo",
+        )
+    )
+    db.session.commit()
+    flash(f"Cupom resgatado com sucesso! Código: {codigo_unico}", "success")
+    return redirect(url_for("clube_vantagens"))
+
+
+def parceiro_login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        senha = request.form.get("senha", "")
+
+        parceiro = Parceiro.query.filter_by(email=email).first()
+        if parceiro and check_password_hash(parceiro.senha_hash, senha):
+            if parceiro.status == "Bloqueado":
+                flash(
+                    "Sua conta foi suspensa pela administração do condomínio. "
+                    "Entre em contato para mais detalhes.",
+                    "danger",
+                )
+                return render_template("parceiro_login.html")
+            session["parceiro_id"] = parceiro.id
+            flash("Login realizado com sucesso.", "success")
+            return redirect(url_for("parceiro_dashboard"))
+
+        flash("E-mail ou senha inválidos.", "danger")
+
+    return render_template("parceiro_login.html")
+
+
+def parceiro_logout():
+    session.pop("parceiro_id", None)
+    flash("Sessão do parceiro encerrada.", "info")
+    return redirect(url_for("parceiro_login"))
+
+
+@parceiro_required
+def parceiro_dashboard():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+
+    if parceiro.status == "Pendente":
+        return render_template("parceiro_pendente.html", parceiro=parceiro)
+
+    total_cupons_ativos = (
+        Cupom.query.filter_by(parceiro_id=parceiro.id, ativo=True).count()
+    )
+    total_validacoes = (
+        ResgateCupom.query.join(Cupom)
+        .filter(
+            Cupom.parceiro_id == parceiro.id,
+            ResgateCupom.status == "Utilizado",
+        )
+        .count()
+    )
+    historico_resgates = (
+        ResgateCupom.query.join(Cupom)
+        .filter(Cupom.parceiro_id == parceiro.id)
+        .order_by(ResgateCupom.data_resgate.desc())
+        .limit(20)
+        .all()
+    )
+    return render_template(
+        "parceiro_dashboard.html",
+        parceiro=parceiro,
+        total_cupons_ativos=total_cupons_ativos,
+        total_validacoes=total_validacoes,
+        historico_resgates=historico_resgates,
+    )
+
+
+@parceiro_required
+def parceiro_validacao():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Pendente":
+        flash("Ative seu cadastro para validar cupons.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+    if parceiro.status != "Ativo":
+        flash("Seu acesso está indisponível no momento.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    codigo_url = request.args.get("codigo", "").strip().upper()
+    return render_template(
+        "parceiro_validacao.html",
+        parceiro=parceiro,
+        codigo_url=codigo_url,
+    )
+
+
+@parceiro_required
+def parceiro_cupons():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Pendente":
+        flash("Ative seu cadastro para gerenciar cupons.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+    if parceiro.status != "Ativo":
+        flash("Seu acesso está indisponível no momento.", "danger")
+        return redirect(url_for("parceiro_dashboard"))
+
+    cupons = Cupom.query.filter_by(parceiro_id=parceiro.id).order_by(Cupom.id.desc()).all()
+    metricas_cupons = _metricas_resgates_por_cupom([cupom.id for cupom in cupons])
+    return render_template(
+        "parceiro_cupons.html",
+        parceiro=parceiro,
+        cupons=cupons,
+        metricas_cupons=metricas_cupons,
+    )
+
+
+@parceiro_required
+def parceiro_validar_codigo():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para validar cupons.", "warning")
+        return redirect(url_for("parceiro_validacao"))
+
+    codigo_unico = request.form.get("codigo_unico", "").strip().upper()
+    if not codigo_unico:
+        flash("Informe um código para validação.", "danger")
+        return redirect(url_for("parceiro_validacao"))
+
+    resgate = ResgateCupom.query.filter_by(codigo_unico=codigo_unico).first()
+    if not resgate:
+        flash("Código inválido. Verifique e tente novamente.", "danger")
+        return redirect(url_for("parceiro_validacao"))
+
+    if resgate.cupom.parceiro_id != parceiro.id:
+        flash("Este código pertence a outro parceiro.", "danger")
+        return redirect(url_for("parceiro_validacao"))
+
+    if resgate.status != "Ativo":
+        flash("Este código já foi utilizado ou está indisponível.", "warning")
+        return redirect(url_for("parceiro_validacao"))
+
+    resgate.status = "Utilizado"
+    resgate.data_utilizacao = datetime.utcnow()
+    db.session.commit()
+
+    unidade_texto = (
+        f"Bloco {resgate.unidade.bloco}, Apto {resgate.unidade.apartamento}"
+        if resgate.unidade
+        else "Unidade não identificada"
+    )
+    flash(f"Cupom validado! Unidade: {unidade_texto}.", "success")
+    return redirect(url_for("parceiro_validacao"))
+
+
+@parceiro_required
+def parceiro_aprovar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+
+    if parceiro.status == "Bloqueado":
+        flash(
+            "Sua conta foi suspensa pela administração do condomínio. "
+            "Entre em contato para mais detalhes.",
+            "danger",
+        )
+        return redirect(url_for("parceiro_dashboard"))
+
+    parceiro.status = "Ativo"
+    parceiro.ativo = True
+    db.session.commit()
+    flash("Cadastro aprovado e ativado com sucesso!", "success")
+    return redirect(url_for("parceiro_dashboard"))
+
+
+@parceiro_required
+def parceiro_cupons_criar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para criar cupons.", "warning")
+        return redirect(url_for("parceiro_cupons"))
+
+    titulo = request.form.get("titulo", "").strip()
+    descricao = request.form.get("descricao", "").strip()
+    codigo_prefixo = request.form.get("codigo_prefixo", "").strip().upper()
+    data_validade_str = request.form.get("data_validade", "").strip()
+    limite_total = _parse_limite_total_form(request.form.get("limite_total"))
+    limite_por_unidade = _parse_limite_por_unidade_form(
+        request.form.get("limite_por_unidade"), padrao=1
+    )
+
+    if not titulo or not descricao or not codigo_prefixo:
+        flash("Preencha título, descrição e código prefixo.", "danger")
+        return redirect(url_for("parceiro_cupons"))
+
+    data_validade = None
+    if data_validade_str:
+        try:
+            data_validade = datetime.strptime(data_validade_str, "%Y-%m-%d").date()
+        except ValueError:
+            flash("Data de validade inválida.", "danger")
+            return redirect(url_for("parceiro_cupons"))
+
+    db.session.add(
+        Cupom(
+            parceiro_id=parceiro.id,
+            titulo=titulo,
+            descricao=descricao,
+            codigo_prefixo=codigo_prefixo,
+            data_validade=data_validade,
+            ativo=True,
+            limite_total=limite_total,
+            limite_por_unidade=limite_por_unidade,
+        )
+    )
+    db.session.commit()
+    flash("Cupom criado com sucesso.", "success")
+    return redirect(url_for("parceiro_cupons"))
+
+
+@parceiro_required
+def parceiro_cupons_desativar(cupom_id):
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status != "Ativo":
+        flash("Ative seu cadastro para gerenciar cupons.", "warning")
+        return redirect(url_for("parceiro_cupons"))
+
+    cupom = Cupom.query.filter_by(id=cupom_id, parceiro_id=parceiro.id).first_or_404()
+    if not cupom.ativo:
+        flash("Este cupom já está inativo.", "info")
+        return redirect(url_for("parceiro_cupons"))
+
+    cupom.ativo = False
+    cupom.data_desativacao = datetime.utcnow()
+    db.session.commit()
+    flash("Cupom desativado permanentemente.", "warning")
+    return redirect(url_for("parceiro_cupons"))
+
+
+@parceiro_required
+def parceiro_perfil():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Bloqueado":
+        flash(
+            "Sua conta foi suspensa pela administração do condomínio. "
+            "Entre em contato para mais detalhes.",
+            "danger",
+        )
+        return redirect(url_for("parceiro_login"))
+
+    return render_template("parceiro_perfil.html", parceiro=parceiro)
+
+
+@parceiro_required
+def parceiro_perfil_editar():
+    parceiro = _buscar_parceiro_logado()
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Bloqueado":
+        flash(
+            "Sua conta foi suspensa pela administração do condomínio. "
+            "Entre em contato para mais detalhes.",
+            "danger",
+        )
+        return redirect(url_for("parceiro_login"))
+
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not categoria:
+        flash("Preencha nome da empresa e categoria.", "danger")
+        return redirect(url_for("parceiro_perfil"))
+
+    parceiro.nome_empresa = nome_empresa
+    parceiro.telefone = telefone
+    parceiro.categoria = categoria
+    parceiro.endereco = endereco
+    parceiro.descricao = descricao
+    db.session.commit()
+    flash("Perfil comercial atualizado com sucesso.", "success")
+    return redirect(url_for("parceiro_perfil"))
+
+
 @acesso_reservas_required
 def reservas():
     usuario = get_current_user()
     unidade = get_unidade_logada()
     espacos = []
+    unidades_gestao = []
     reservas_pendentes = []
     reservas_historico = []
     espacos_disponiveis = []
@@ -425,6 +1113,7 @@ def reservas():
                 .order_by(EspacoComum.nome)
                 .all()
             )
+            unidades_gestao = Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
         query_pendentes = Reserva.query.join(EspacoComum).filter(Reserva.status == "Pendente")
         query_historico = Reserva.query.join(EspacoComum).filter(
             Reserva.status != "Pendente"
@@ -432,6 +1121,11 @@ def reservas():
 
         if usuario.role == Role.SINDICO:
             filtro_jurisdicao = EspacoComum.bloco_vinculado == usuario.bloco_responsavel
+            unidades_gestao = [
+                unidade
+                for unidade in Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
+                if blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel)
+            ]
         else:
             filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
 
@@ -469,6 +1163,7 @@ def reservas():
         current_user=usuario,
         current_unidade=unidade,
         espacos=espacos,
+        unidades_gestao=unidades_gestao,
         reservas_pendentes=reservas_pendentes,
         reservas_historico=reservas_historico,
         espacos_disponiveis=espacos_disponiveis,
@@ -533,6 +1228,65 @@ def solicitar_reserva(unidade):
 
 
 @gestao_espacos_required
+def criar_reserva_gestao():
+    usuario = get_current_user()
+    espaco_id = request.form.get("espaco_id", "").strip()
+    data_reserva_str = request.form.get("data_reserva", "").strip()
+    unidade_id = request.form.get("unidade_id", "").strip()
+    motivo_reserva = request.form.get("motivo_reserva", "").strip() or None
+
+    if not espaco_id or not data_reserva_str:
+        flash("Informe o espaço e a data para criar a reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    try:
+        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        data_reserva = datetime.strptime(data_reserva_str, "%d/%m/%Y").date()
+    except ValueError:
+        flash("Dados inválidos para criação da reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para criar reserva neste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    conflito = Reserva.query.filter_by(espaco_id=espaco.id, data_reserva=data_reserva).filter(
+        Reserva.status.in_(["Pendente", "Aprovada"])
+    ).first()
+    if conflito:
+        flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
+        return redirect(url_for("reservas"))
+
+    unidade = None
+    if unidade_id:
+        try:
+            unidade = Unidade.query.get_or_404(int(unidade_id))
+        except ValueError:
+            flash("Unidade inválida para vinculação da reserva.", "danger")
+            return redirect(url_for("reservas"))
+
+        if usuario.role == Role.SINDICO and not blocos_equivalentes(
+            unidade.bloco, usuario.bloco_responsavel
+        ):
+            flash("Você só pode vincular reservas a unidades do seu bloco.", "danger")
+            return redirect(url_for("reservas"))
+
+    reserva = Reserva(
+        espaco_id=espaco.id,
+        unidade_id=unidade.id if unidade else None,
+        data_reserva=data_reserva,
+        status="Aprovada",
+        valor_pago=0.0 if unidade else espaco.valor_reserva,
+        motivo_reserva=motivo_reserva,
+    )
+    db.session.add(reserva)
+    db.session.commit()
+
+    flash("Reserva criada com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
 def responder_reserva(reserva_id):
     usuario = get_current_user()
     reserva = Reserva.query.get_or_404(reserva_id)
@@ -556,21 +1310,22 @@ def responder_reserva(reserva_id):
 
     db.session.commit()
 
-    emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
-    for email in emails_moradores:
-        try:
-            enviar_email_resposta_reserva(
-                email_destino=email,
-                nome_espaco=reserva.espaco.nome,
-                data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
-                status=reserva.status,
-            )
-        except Exception:
-            traceback.print_exc()
-            flash(
-                f"Reserva atualizada, mas houve falha ao notificar {email}.",
-                "warning",
-            )
+    if reserva.unidade:
+        emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
+        for email in emails_moradores:
+            try:
+                enviar_email_resposta_reserva(
+                    email_destino=email,
+                    nome_espaco=reserva.espaco.nome,
+                    data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
+                    status=reserva.status,
+                )
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    f"Reserva atualizada, mas houve falha ao notificar {email}.",
+                    "warning",
+                )
 
     flash(f"Reserva {reserva.status.lower()} com sucesso.", "success")
     return redirect(url_for("reservas"))
@@ -604,15 +1359,19 @@ def api_reservas_eventos():
     eventos = []
     for reserva in reservas:
         pode_gerenciar = _usuario_pode_gerenciar_espaco(usuario, reserva.espaco)
-        titulo_base = (
-            f"{reserva.unidade.bloco} - {reserva.unidade.apartamento} "
-            f"({reserva.espaco.nome})"
-        )
-        titulo = (
-            f"{titulo_base} [Pago: R$ {reserva.valor_pago:.2f}]"
-            if pode_gerenciar
-            else titulo_base
-        )
+        if reserva.unidade:
+            titulo_base = (
+                f"{reserva.unidade.bloco} - {reserva.unidade.apartamento} "
+                f"({reserva.espaco.nome})"
+            )
+            titulo = (
+                f"{titulo_base} [Pago: R$ {reserva.valor_pago:.2f}]"
+                if pode_gerenciar
+                else titulo_base
+            )
+        else:
+            motivo = reserva.motivo_reserva or "Evento interno"
+            titulo = f"[CONDOMÍNIO] {reserva.espaco.nome} - {motivo}"
         eventos.append(
             {
                 "title": titulo,
@@ -668,21 +1427,22 @@ def cancelar_reserva(reserva_id):
     reserva.status = "Cancelada"
     db.session.commit()
 
-    emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
-    for email in emails_moradores:
-        try:
-            enviar_email_resposta_reserva(
-                email_destino=email,
-                nome_espaco=reserva.espaco.nome,
-                data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
-                status="Cancelada",
-            )
-        except Exception:
-            traceback.print_exc()
-            flash(
-                f"Reserva cancelada, mas houve falha ao notificar {email}.",
-                "warning",
-            )
+    if reserva.unidade:
+        emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
+        for email in emails_moradores:
+            try:
+                enviar_email_resposta_reserva(
+                    email_destino=email,
+                    nome_espaco=reserva.espaco.nome,
+                    data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
+                    status="Cancelada",
+                )
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    f"Reserva cancelada, mas houve falha ao notificar {email}.",
+                    "warning",
+                )
 
     flash("Reserva cancelada com sucesso.", "success")
     return redirect(url_for("reservas"))
@@ -1211,6 +1971,144 @@ def admin_dashboard():
     )
 
 
+@admin_required
+def admin_clube_vantagens():
+    usuario = get_current_user()
+    parceiros_clube = Parceiro.query.order_by(Parceiro.data_cadastro.desc()).all()
+    auditoria_cupons = (
+        ResgateCupom.query.join(Cupom).join(Parceiro).join(Unidade)
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
+
+    return render_template(
+        "admin_clube_vantagens.html",
+        parceiros_clube=parceiros_clube,
+        auditoria_cupons=auditoria_cupons,
+        current_user=usuario,
+        active_tab="gestao",
+    )
+
+
+@admin_required
+def admin_clube_vantagens_analytics():
+    usuario = get_current_user()
+    analytics = _montar_analytics_clube()
+
+    return render_template(
+        "admin_clube_vantagens.html",
+        current_user=usuario,
+        active_tab="analytics",
+        analytics=analytics,
+    )
+
+
+@admin_or_assistente_required
+def admin_parceiros_criar():
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not email or not categoria:
+        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    if Parceiro.query.filter_by(email=email).first():
+        flash("Já existe parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro = Parceiro(
+        nome_empresa=nome_empresa,
+        email=email,
+        senha_hash=generate_password_hash("senha123"),
+        telefone=telefone,
+        categoria=categoria,
+        endereco=endereco,
+        descricao=descricao,
+        ativo=True,
+        status="Pendente",
+    )
+    db.session.add(parceiro)
+    db.session.commit()
+    flash("Parceiro cadastrado com sucesso. Status inicial: Pendente.", "success")
+    return redirect(url_for("admin_clube_vantagens"))
+
+
+@admin_required
+def admin_parceiro_editar(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not email or not categoria:
+        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro_existente = Parceiro.query.filter(
+        Parceiro.email == email,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_existente:
+        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("admin_clube_vantagens"))
+
+    parceiro.nome_empresa = nome_empresa
+    parceiro.email = email
+    parceiro.telefone = telefone
+    parceiro.categoria = categoria
+    parceiro.endereco = endereco
+    parceiro.descricao = descricao
+    db.session.commit()
+    flash("Parceiro atualizado com sucesso.", "success")
+    return redirect(url_for("admin_clube_vantagens"))
+
+
+@admin_required
+def admin_parceiro_bloquear(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    usuario = get_current_user()
+
+    parceiro.status = "Bloqueado"
+    parceiro.ativo = False
+    Cupom.query.filter_by(parceiro_id=parceiro.id).update(
+        {"ativo": False},
+        synchronize_session=False,
+    )
+    _registrar_auditoria(
+        usuario,
+        f"Parceiro bloqueado: {parceiro.nome_empresa} ({parceiro.email}).",
+    )
+    db.session.commit()
+    flash(
+        "Parceiro bloqueado. Os cupons deste parceiro foram removidos da vitrine.",
+        "warning",
+    )
+    return redirect(url_for("admin_clube_vantagens"))
+
+
+@admin_required
+def admin_parceiro_ativar(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    usuario = get_current_user()
+
+    parceiro.status = "Ativo"
+    parceiro.ativo = True
+    _registrar_auditoria(
+        usuario,
+        f"Parceiro reativado: {parceiro.nome_empresa} ({parceiro.email}).",
+    )
+    db.session.commit()
+    flash("Parceiro reativado com sucesso.", "success")
+    return redirect(url_for("admin_clube_vantagens"))
+
+
 @admin_or_assistente_required
 def admin_registrar(unidade_id):
     unidade = Unidade.query.get_or_404(unidade_id)
@@ -1478,11 +2376,96 @@ def init_app(app):
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
     )
+    app.add_url_rule(
+        "/parceiro",
+        "parceiro_login",
+        parceiro_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/login",
+        "parceiro_login_alt",
+        parceiro_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule("/parceiro/logout", "parceiro_logout", parceiro_logout, methods=["GET"])
+    app.add_url_rule(
+        "/parceiro/dashboard",
+        "parceiro_dashboard",
+        parceiro_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/validacao",
+        "parceiro_validacao",
+        parceiro_validacao,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons",
+        "parceiro_cupons",
+        parceiro_cupons,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/perfil",
+        "parceiro_perfil",
+        parceiro_perfil,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/perfil/editar",
+        "parceiro_perfil_editar",
+        parceiro_perfil_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/validar_codigo",
+        "parceiro_validar_codigo",
+        parceiro_validar_codigo,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/aprovar",
+        "parceiro_aprovar",
+        parceiro_aprovar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons/criar",
+        "parceiro_cupons_criar",
+        parceiro_cupons_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/cupons/<int:cupom_id>/desativar",
+        "parceiro_cupons_desativar",
+        parceiro_cupons_desativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/clube_vantagens",
+        "clube_vantagens",
+        clube_vantagens,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/clube_vantagens/resgatar/<int:cupom_id>",
+        "clube_vantagens_resgatar",
+        clube_vantagens_resgatar,
+        methods=["POST"],
+    )
     app.add_url_rule("/reservas", "reservas", reservas, methods=["GET"])
     app.add_url_rule(
         "/reservas/solicitar",
         "solicitar_reserva",
         solicitar_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/gestao/criar",
+        "criar_reserva_gestao",
+        criar_reserva_gestao,
         methods=["POST"],
     )
     app.add_url_rule(
@@ -1566,6 +2549,18 @@ def init_app(app):
     app.add_url_rule("/admin/logout", "admin_logout", admin_logout, methods=["GET"])
     app.add_url_rule("/admin", "admin_dashboard", admin_dashboard, methods=["GET"])
     app.add_url_rule(
+        "/admin/clube_vantagens",
+        "admin_clube_vantagens",
+        admin_clube_vantagens,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/clube_vantagens/analytics",
+        "admin_clube_vantagens_analytics",
+        admin_clube_vantagens_analytics,
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/admin/usuarios/novo",
         "admin_criar_usuario",
         admin_criar_usuario,
@@ -1629,5 +2624,29 @@ def init_app(app):
         "/admin/alterar-senha-sindico",
         "admin_alterar_senha_sindico",
         admin_alterar_senha_sindico,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/criar",
+        "admin_parceiros_criar",
+        admin_parceiros_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/<int:parceiro_id>/editar",
+        "admin_parceiro_editar",
+        admin_parceiro_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/<int:parceiro_id>/bloquear",
+        "admin_parceiro_bloquear",
+        admin_parceiro_bloquear,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/parceiros/<int:parceiro_id>/ativar",
+        "admin_parceiro_ativar",
+        admin_parceiro_ativar,
         methods=["POST"],
     )

@@ -236,7 +236,12 @@
             </div>
         </div>
 
-        <div class="d-flex justify-content-end mb-3">
+        <div class="d-flex justify-content-end gap-2 mb-3">
+            <button type="button" class="btn btn-primary"
+                    data-bs-toggle="modal" data-bs-target="#modalReservaGestor"
+                    id="btn-nova-reserva-gestor">
+                + Agendar Data / Bloquear
+            </button>
             <button type="button" class="btn btn-success"
                     data-bs-toggle="modal" data-bs-target="#modal-espaco"
                     id="btn-novo-espaco">
@@ -306,7 +311,13 @@
                         {% for reserva in reservas_historico %}
                         <tr>
                             <td>{{ reserva.espaco.nome }}</td>
-                            <td>Bloco {{ reserva.unidade.bloco }} / Apto {{ reserva.unidade.apartamento }}</td>
+                            <td>
+                                {% if reserva.unidade %}
+                                Bloco {{ reserva.unidade.bloco }} / Apto {{ reserva.unidade.apartamento }}
+                                {% else %}
+                                [CONDOMÍNIO] {{ reserva.motivo_reserva or 'Bloqueio interno' }}
+                                {% endif %}
+                            </td>
                             <td>{{ reserva.data_reserva.strftime('%d/%m/%Y') }}</td>
                             <td>
                                 {% if reserva.status == 'Aprovada' %}
@@ -338,7 +349,7 @@
                                         data-id="{{ reserva.id }}"
                                         data-valor-total="{{ '%.2f'|format(reserva.espaco.valor_reserva) }}"
                                         data-valor-pago="{{ '%.2f'|format(reserva.valor_pago) }}"
-                                        data-contexto="Bloco {{ reserva.unidade.bloco }} / Apto {{ reserva.unidade.apartamento }} - {{ reserva.espaco.nome }}">
+                                        data-contexto="{% if reserva.unidade %}Bloco {{ reserva.unidade.bloco }} / Apto {{ reserva.unidade.apartamento }} - {{ reserva.espaco.nome }}{% else %}[CONDOMÍNIO] {{ reserva.espaco.nome }} - {{ reserva.motivo_reserva or 'Bloqueio interno' }}{% endif %}">
                                     R$
                                 </button>
                                 <form action="{{ url_for('cancelar_reserva', reserva_id=reserva.id) }}"
@@ -371,6 +382,50 @@
 {% endif %}
 {% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
 {% set dias = [('seg', 'Seg'), ('ter', 'Ter'), ('qua', 'Qua'), ('qui', 'Qui'), ('sex', 'Sex'), ('sab', 'Sab'), ('dom', 'Dom')] %}
+<div class="modal fade" id="modalReservaGestor" tabindex="-1" aria-labelledby="modalReservaGestorLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('criar_reserva_gestao') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalReservaGestorLabel">Agendar Data / Bloquear</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="gestao_espaco_id">Espaço Comum</label>
+                        <select class="form-select" id="gestao_espaco_id" name="espaco_id" required>
+                            <option value="">Selecione um espaço</option>
+                            {% for espaco in espacos %}
+                            <option value="{{ espaco.id }}">{{ espaco.nome }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="gestao_data_reserva">Data Desejada</label>
+                        <input type="text" class="form-control" id="gestao_data_reserva" name="data_reserva" placeholder="dd/mm/aaaa" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="gestao_unidade_id">Vincular à Unidade / Morador</label>
+                        <select class="form-select" id="gestao_unidade_id" name="unidade_id">
+                            <option value="">Nenhuma - Evento do Condomínio</option>
+                            {% for unidade in unidades_gestao %}
+                            <option value="{{ unidade.id }}">Bloco {{ unidade.bloco }} / Apto {{ unidade.apartamento }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="gestao_motivo_reserva">Motivo / Observação</label>
+                        <input type="text" class="form-control" id="gestao_motivo_reserva" name="motivo_reserva" maxlength="255" placeholder="Ex: Assembleia extraordinária">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar Reserva</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 <div class="modal fade" id="modalPagamento" tabindex="-1" aria-labelledby="modalPagamentoLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -536,6 +591,25 @@
 </script>
 {% if current_user and current_user.role in ['admin', 'assistente', 'sindico'] %}
 <script>
+    const modalReservaGestor = document.getElementById("modalReservaGestor");
+    const campoDataReservaGestor = document.getElementById("gestao_data_reserva");
+    let seletorDataReservaGestor = null;
+
+    if (modalReservaGestor && campoDataReservaGestor) {
+        modalReservaGestor.addEventListener("show.bs.modal", () => {
+            if (seletorDataReservaGestor) {
+                seletorDataReservaGestor.destroy();
+            }
+            seletorDataReservaGestor = flatpickr(campoDataReservaGestor, {
+                locale: "pt",
+                dateFormat: "d/m/Y",
+                minDate: "today",
+                maxDate: new Date().fp_incr(90),
+            });
+            seletorDataReservaGestor.clear();
+        });
+    }
+
     const modalPagamento = document.getElementById("modalPagamento");
     if (modalPagamento) {
         const formPagamento = document.getElementById("formPagamentoReserva");

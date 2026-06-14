@@ -82,17 +82,160 @@ def _garantir_colunas_reservas():
     if "reservas" not in inspetor.get_table_names():
         return
 
-    colunas = {coluna["name"] for coluna in inspetor.get_columns("reservas")}
+    colunas_info = inspetor.get_columns("reservas")
+    colunas = {coluna["name"] for coluna in colunas_info}
     alteracoes = []
 
     if "valor_pago" not in colunas:
         alteracoes.append(
             "ALTER TABLE reservas ADD COLUMN valor_pago FLOAT NOT NULL DEFAULT 0"
         )
+    if "motivo_reserva" not in colunas:
+        alteracoes.append("ALTER TABLE reservas ADD COLUMN motivo_reserva VARCHAR(255)")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
+        db.session.commit()
+
+    unidade_coluna = next(
+        (coluna for coluna in colunas_info if coluna["name"] == "unidade_id"),
+        None,
+    )
+    if unidade_coluna and unidade_coluna.get("nullable") is False:
+        db.session.execute(text("ALTER TABLE reservas RENAME TO reservas_old"))
+        db.session.execute(
+            text(
+                """
+                CREATE TABLE reservas (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    espaco_id INTEGER NOT NULL,
+                    unidade_id INTEGER,
+                    data_reserva DATE NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'Pendente',
+                    valor_pago FLOAT NOT NULL DEFAULT 0,
+                    data_solicitacao DATETIME NOT NULL,
+                    motivo_reserva VARCHAR(255),
+                    FOREIGN KEY(espaco_id) REFERENCES espacos_comuns (id),
+                    FOREIGN KEY(unidade_id) REFERENCES unidades (id)
+                )
+                """
+            )
+        )
+        db.session.execute(
+            text(
+                """
+                INSERT INTO reservas (
+                    id,
+                    espaco_id,
+                    unidade_id,
+                    data_reserva,
+                    status,
+                    valor_pago,
+                    data_solicitacao,
+                    motivo_reserva
+                )
+                SELECT
+                    id,
+                    espaco_id,
+                    unidade_id,
+                    data_reserva,
+                    status,
+                    COALESCE(valor_pago, 0),
+                    data_solicitacao,
+                    motivo_reserva
+                FROM reservas_old
+                """
+            )
+        )
+        db.session.execute(text("DROP TABLE reservas_old"))
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_reservas_data_reserva ON reservas (data_reserva)"
+            )
+        )
+        db.session.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_reservas_espaco_id ON reservas (espaco_id)")
+        )
+        db.session.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_reservas_unidade_id ON reservas (unidade_id)")
+        )
+        db.session.commit()
+
+
+def _garantir_tabelas_parceiros(app):
+    with app.app_context():
+        db.create_all()
+
+
+def _garantir_colunas_parceiros():
+    inspetor = inspect(db.engine)
+    if "parceiro" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("parceiro")}
+    alteracoes = []
+    if "status" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
+        )
+    if "descricao" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN descricao TEXT")
+    if "endereco" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN endereco VARCHAR(255)")
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+        db.session.execute(
+            text(
+                """
+                UPDATE parceiro
+                SET status = CASE
+                    WHEN ativo = 1 THEN 'Ativo'
+                    ELSE 'Bloqueado'
+                END
+                WHERE status IS NULL OR status = 'Pendente'
+                """
+            )
+        )
+        db.session.commit()
+
+
+def _garantir_colunas_cupom():
+    inspetor = inspect(db.engine)
+    if "cupom" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("cupom")}
+    alteracoes = []
+    atualizacoes = []
+
+    if "limite_total" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN limite_total INTEGER")
+    if "limite_por_unidade" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE cupom ADD COLUMN limite_por_unidade INTEGER NOT NULL DEFAULT 1"
+        )
+    if "data_criacao" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_criacao DATETIME")
+        atualizacoes.append(
+            "UPDATE cupom SET data_criacao = datetime('now') WHERE data_criacao IS NULL"
+        )
+    if "data_update" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_update DATETIME")
+        atualizacoes.append(
+            "UPDATE cupom SET data_update = datetime('now') WHERE data_update IS NULL"
+        )
+    if "data_desativacao" not in colunas:
+        alteracoes.append("ALTER TABLE cupom ADD COLUMN data_desativacao DATETIME")
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    for atualizacao in atualizacoes:
+        db.session.execute(text(atualizacao))
+    if alteracoes or atualizacoes:
         db.session.commit()
 
 
@@ -150,5 +293,9 @@ def create_app(config=None):
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
+        _garantir_colunas_parceiros()
+        _garantir_colunas_cupom()
+
+    _garantir_tabelas_parceiros(app)
 
     return app
