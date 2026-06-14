@@ -1999,7 +1999,12 @@ def admin_dashboard():
         .all()
     )
     cadastros_por_data = [
-        {"data": row.data.isoformat(), "total": row.total}
+        {
+            "data": row.data.isoformat()
+            if hasattr(row.data, "isoformat")
+            else str(row.data),
+            "total": row.total,
+        }
         for row in cadastros_por_data_rows
     ]
 
