@@ -75,24 +75,49 @@ def _buscar_unidade(bloco, apartamento):
     return Unidade.query.filter_by(bloco=bloco, apartamento=apartamento).first()
 
 
-def _buscar_unidade_por_email_principal(email):
-    email = email.strip().lower()
-    if not email:
-        return None
+def _buscar_unidade_e_email_login(email):
+    """Localiza unidade e o e-mail cadastrado que corresponde ao login informado."""
+    email_normalizado = email.strip().lower()
+    if not email_normalizado:
+        return None, None
 
-    unidade = Unidade.query.filter(
-        func.lower(Unidade.proprietario_email) == email
-    ).first()
-    if unidade:
-        return unidade
-
-    return (
+    unidades = (
         db.session.query(Unidade)
-        .join(Pessoa)
-        .filter(Pessoa.is_responsavel.is_(True))
-        .filter(func.lower(Pessoa.email) == email)
-        .first()
+        .outerjoin(
+            Pessoa,
+            and_(
+                Pessoa.unidade_id == Unidade.id,
+                Pessoa.is_responsavel.is_(True),
+            ),
+        )
+        .filter(
+            or_(
+                func.lower(Unidade.proprietario_email) == email_normalizado,
+                func.lower(Pessoa.email) == email_normalizado,
+            )
+        )
+        .all()
     )
+    if not unidades:
+        return None, None
+
+    for unidade in unidades:
+        responsavel = unidade.pessoas.filter_by(is_responsavel=True).first()
+        if (
+            responsavel
+            and responsavel.email
+            and responsavel.email.strip().lower() == email_normalizado
+        ):
+            return unidade, responsavel.email.strip()
+
+    for unidade in unidades:
+        if (
+            unidade.proprietario_email
+            and unidade.proprietario_email.strip().lower() == email_normalizado
+        ):
+            return unidade, unidade.proprietario_email.strip()
+
+    return None, None
 
 
 def _registrar_auditoria(usuario, mensagem):
@@ -570,17 +595,17 @@ def verificar_unidade():
 
 def esqueci_senha():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        email_solicitado = request.form.get("email", "").strip().lower()
         mensagem_generica = (
             "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
         )
 
-        unidade = _buscar_unidade_por_email_principal(email)
-        if unidade:
+        unidade, email_destino = _buscar_unidade_e_email_login(email_solicitado)
+        if unidade and email_destino:
             try:
-                token = gerar_token_redefinicao(email, SALT_RECUPERACAO_MORADOR)
+                token = gerar_token_redefinicao(email_solicitado, SALT_RECUPERACAO_MORADOR)
                 link = url_for("redefinir_senha", token=token, _external=True)
-                enviar_email_redefinicao_senha(email, link, perfil="morador")
+                enviar_email_redefinicao_senha(email_destino, link, perfil="morador")
             except Exception:
                 traceback.print_exc()
                 flash(
@@ -601,7 +626,7 @@ def redefinir_senha(token):
         flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
         return redirect(url_for("esqueci_senha"))
 
-    unidade = _buscar_unidade_por_email_principal(email)
+    unidade, _ = _buscar_unidade_e_email_login(email)
     if not unidade:
         flash("Unidade não encontrada para este e-mail.", "danger")
         return redirect(url_for("esqueci_senha"))
@@ -896,27 +921,27 @@ def parceiro_login():
 
 def parceiro_esqueci_senha():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        email_solicitado = request.form.get("email", "").strip().lower()
         mensagem_generica = (
             "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
         )
 
-        parceiro = Parceiro.query.filter(func.lower(Parceiro.email) == email).first()
-        if parceiro:
+        parceiro = Parceiro.query.filter_by(email=email_solicitado).first()
+        if parceiro and parceiro.status == "Ativo":
             try:
-                token = gerar_token_redefinicao(email, SALT_RECUPERACAO_PARCEIRO)
+                token = gerar_token_redefinicao(email_solicitado, SALT_RECUPERACAO_PARCEIRO)
                 link = url_for("parceiro_redefinir_senha", token=token, _external=True)
-                enviar_email_redefinicao_senha(email, link, perfil="parceiro")
+                enviar_email_redefinicao_senha(parceiro.email, link, perfil="parceiro")
             except Exception:
                 traceback.print_exc()
                 flash(
                     "Não foi possível enviar o e-mail. Tente novamente mais tarde.",
                     "danger",
                 )
-                return redirect(url_for("parceiro_esqueci_senha"))
+                return render_template("parceiro_esqueci_senha.html")
 
         flash(mensagem_generica, "info")
-        return redirect(url_for("parceiro_login"))
+        return render_template("parceiro_esqueci_senha.html")
 
     return render_template("parceiro_esqueci_senha.html")
 
@@ -927,8 +952,8 @@ def parceiro_redefinir_senha(token):
         flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
         return redirect(url_for("parceiro_esqueci_senha"))
 
-    parceiro = Parceiro.query.filter(func.lower(Parceiro.email) == email).first()
-    if not parceiro:
+    parceiro = Parceiro.query.filter_by(email=email).first()
+    if not parceiro or parceiro.status != "Ativo":
         flash("Parceiro não encontrado para este e-mail.", "danger")
         return redirect(url_for("parceiro_esqueci_senha"))
 
