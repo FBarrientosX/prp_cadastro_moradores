@@ -114,13 +114,29 @@
     const datasLabels = {{ cadastros_por_data | map(attribute='data') | list | tojson }};
     const datasTotais = {{ cadastros_por_data | map(attribute='total') | list | tojson }};
 
-    const statusLabels = ['Finalizados', 'Aguardando Registro', 'Pendentes (Síndico)', 'Doc. Pendente'];
-    const statusTotais = [
-        {{ total_aprovados }},
-        {{ aguardando_registro }},
-        {{ pendentes_validacao }},
-        {{ documentos_pendentes }}
-    ];
+    const proporcaoStatus = {{ proporcao_status | tojson }};
+
+    const statusLabelMap = {
+        'Registrada': 'Registrada (Finalizada)',
+        'Aprovada': 'Aprovada (Aguardando Registro)',
+        'Pendente': 'Pendente',
+        'Reprovada': 'Reprovada'
+    };
+
+    const statusColorMap = {
+        'Registrada': 'rgba(13, 110, 253, 0.85)',
+        'Aprovada': 'rgba(255, 193, 7, 0.85)',
+        'Pendente': 'rgba(108, 117, 125, 0.85)',
+        'Reprovada': 'rgba(220, 53, 69, 0.85)'
+    };
+
+    const statusLabels = proporcaoStatus.map(function (item) {
+        return statusLabelMap[item.status] || item.status;
+    });
+    const statusTotais = proporcaoStatus.map(function (item) { return item.total; });
+    const statusColors = proporcaoStatus.map(function (item) {
+        return statusColorMap[item.status] || 'rgba(108, 117, 125, 0.85)';
+    });
 
     new Chart(document.getElementById('chartBlocos'), {
         type: 'bar',
@@ -153,12 +169,7 @@
             labels: statusLabels,
             datasets: [{
                 data: statusTotais,
-                backgroundColor: [
-                    'rgba(13, 110, 253, 0.85)',
-                    'rgba(255, 193, 7, 0.85)',
-                    'rgba(108, 117, 125, 0.85)',
-                    'rgba(220, 53, 69, 0.85)'
-                ],
+                backgroundColor: statusColors,
                 borderWidth: 2
             }]
         },

@@ -2008,9 +2008,15 @@ def admin_dashboard():
         for row in cadastros_por_data_rows
     ]
 
-    pendentes_validacao = Unidade.query.filter_by(
-        status=StatusUnidade.PENDENTE
-    ).count()
+    proporcao_status_rows = (
+        db.session.query(Unidade.status, func.count(Unidade.id).label("total"))
+        .group_by(Unidade.status)
+        .order_by(Unidade.status)
+        .all()
+    )
+    proporcao_status = [
+        {"status": row.status, "total": row.total} for row in proporcao_status_rows
+    ]
 
     return render_template(
         "admin_dashboard.html",
@@ -2019,7 +2025,7 @@ def admin_dashboard():
         documentos_pendentes=documentos_pendentes,
         cadastros_por_bloco=cadastros_por_bloco,
         cadastros_por_data=cadastros_por_data,
-        pendentes_validacao=pendentes_validacao,
+        proporcao_status=proporcao_status,
         current_user=usuario,
     )
 
