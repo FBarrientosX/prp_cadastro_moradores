@@ -82,17 +82,84 @@ def _garantir_colunas_reservas():
     if "reservas" not in inspetor.get_table_names():
         return
 
-    colunas = {coluna["name"] for coluna in inspetor.get_columns("reservas")}
+    colunas_info = inspetor.get_columns("reservas")
+    colunas = {coluna["name"] for coluna in colunas_info}
     alteracoes = []
 
     if "valor_pago" not in colunas:
         alteracoes.append(
             "ALTER TABLE reservas ADD COLUMN valor_pago FLOAT NOT NULL DEFAULT 0"
         )
+    if "motivo_reserva" not in colunas:
+        alteracoes.append("ALTER TABLE reservas ADD COLUMN motivo_reserva VARCHAR(255)")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
+        db.session.commit()
+
+    unidade_coluna = next(
+        (coluna for coluna in colunas_info if coluna["name"] == "unidade_id"),
+        None,
+    )
+    if unidade_coluna and unidade_coluna.get("nullable") is False:
+        db.session.execute(text("ALTER TABLE reservas RENAME TO reservas_old"))
+        db.session.execute(
+            text(
+                """
+                CREATE TABLE reservas (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    espaco_id INTEGER NOT NULL,
+                    unidade_id INTEGER,
+                    data_reserva DATE NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'Pendente',
+                    valor_pago FLOAT NOT NULL DEFAULT 0,
+                    data_solicitacao DATETIME NOT NULL,
+                    motivo_reserva VARCHAR(255),
+                    FOREIGN KEY(espaco_id) REFERENCES espacos_comuns (id),
+                    FOREIGN KEY(unidade_id) REFERENCES unidades (id)
+                )
+                """
+            )
+        )
+        db.session.execute(
+            text(
+                """
+                INSERT INTO reservas (
+                    id,
+                    espaco_id,
+                    unidade_id,
+                    data_reserva,
+                    status,
+                    valor_pago,
+                    data_solicitacao,
+                    motivo_reserva
+                )
+                SELECT
+                    id,
+                    espaco_id,
+                    unidade_id,
+                    data_reserva,
+                    status,
+                    COALESCE(valor_pago, 0),
+                    data_solicitacao,
+                    motivo_reserva
+                FROM reservas_old
+                """
+            )
+        )
+        db.session.execute(text("DROP TABLE reservas_old"))
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_reservas_data_reserva ON reservas (data_reserva)"
+            )
+        )
+        db.session.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_reservas_espaco_id ON reservas (espaco_id)")
+        )
+        db.session.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_reservas_unidade_id ON reservas (unidade_id)")
+        )
         db.session.commit()
 
 

@@ -407,6 +407,7 @@ def reservas():
     usuario = get_current_user()
     unidade = get_unidade_logada()
     espacos = []
+    unidades_gestao = []
     reservas_pendentes = []
     reservas_historico = []
     espacos_disponiveis = []
@@ -425,6 +426,7 @@ def reservas():
                 .order_by(EspacoComum.nome)
                 .all()
             )
+            unidades_gestao = Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
         query_pendentes = Reserva.query.join(EspacoComum).filter(Reserva.status == "Pendente")
         query_historico = Reserva.query.join(EspacoComum).filter(
             Reserva.status != "Pendente"
@@ -432,6 +434,11 @@ def reservas():
 
         if usuario.role == Role.SINDICO:
             filtro_jurisdicao = EspacoComum.bloco_vinculado == usuario.bloco_responsavel
+            unidades_gestao = [
+                unidade
+                for unidade in Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
+                if blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel)
+            ]
         else:
             filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
 
@@ -469,6 +476,7 @@ def reservas():
         current_user=usuario,
         current_unidade=unidade,
         espacos=espacos,
+        unidades_gestao=unidades_gestao,
         reservas_pendentes=reservas_pendentes,
         reservas_historico=reservas_historico,
         espacos_disponiveis=espacos_disponiveis,
@@ -533,6 +541,65 @@ def solicitar_reserva(unidade):
 
 
 @gestao_espacos_required
+def criar_reserva_gestao():
+    usuario = get_current_user()
+    espaco_id = request.form.get("espaco_id", "").strip()
+    data_reserva_str = request.form.get("data_reserva", "").strip()
+    unidade_id = request.form.get("unidade_id", "").strip()
+    motivo_reserva = request.form.get("motivo_reserva", "").strip() or None
+
+    if not espaco_id or not data_reserva_str:
+        flash("Informe o espaço e a data para criar a reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    try:
+        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        data_reserva = datetime.strptime(data_reserva_str, "%d/%m/%Y").date()
+    except ValueError:
+        flash("Dados inválidos para criação da reserva.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para criar reserva neste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    conflito = Reserva.query.filter_by(espaco_id=espaco.id, data_reserva=data_reserva).filter(
+        Reserva.status.in_(["Pendente", "Aprovada"])
+    ).first()
+    if conflito:
+        flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
+        return redirect(url_for("reservas"))
+
+    unidade = None
+    if unidade_id:
+        try:
+            unidade = Unidade.query.get_or_404(int(unidade_id))
+        except ValueError:
+            flash("Unidade inválida para vinculação da reserva.", "danger")
+            return redirect(url_for("reservas"))
+
+        if usuario.role == Role.SINDICO and not blocos_equivalentes(
+            unidade.bloco, usuario.bloco_responsavel
+        ):
+            flash("Você só pode vincular reservas a unidades do seu bloco.", "danger")
+            return redirect(url_for("reservas"))
+
+    reserva = Reserva(
+        espaco_id=espaco.id,
+        unidade_id=unidade.id if unidade else None,
+        data_reserva=data_reserva,
+        status="Aprovada",
+        valor_pago=0.0 if unidade else espaco.valor_reserva,
+        motivo_reserva=motivo_reserva,
+    )
+    db.session.add(reserva)
+    db.session.commit()
+
+    flash("Reserva criada com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
 def responder_reserva(reserva_id):
     usuario = get_current_user()
     reserva = Reserva.query.get_or_404(reserva_id)
@@ -556,21 +623,22 @@ def responder_reserva(reserva_id):
 
     db.session.commit()
 
-    emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
-    for email in emails_moradores:
-        try:
-            enviar_email_resposta_reserva(
-                email_destino=email,
-                nome_espaco=reserva.espaco.nome,
-                data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
-                status=reserva.status,
-            )
-        except Exception:
-            traceback.print_exc()
-            flash(
-                f"Reserva atualizada, mas houve falha ao notificar {email}.",
-                "warning",
-            )
+    if reserva.unidade:
+        emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
+        for email in emails_moradores:
+            try:
+                enviar_email_resposta_reserva(
+                    email_destino=email,
+                    nome_espaco=reserva.espaco.nome,
+                    data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
+                    status=reserva.status,
+                )
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    f"Reserva atualizada, mas houve falha ao notificar {email}.",
+                    "warning",
+                )
 
     flash(f"Reserva {reserva.status.lower()} com sucesso.", "success")
     return redirect(url_for("reservas"))
@@ -604,15 +672,19 @@ def api_reservas_eventos():
     eventos = []
     for reserva in reservas:
         pode_gerenciar = _usuario_pode_gerenciar_espaco(usuario, reserva.espaco)
-        titulo_base = (
-            f"{reserva.unidade.bloco} - {reserva.unidade.apartamento} "
-            f"({reserva.espaco.nome})"
-        )
-        titulo = (
-            f"{titulo_base} [Pago: R$ {reserva.valor_pago:.2f}]"
-            if pode_gerenciar
-            else titulo_base
-        )
+        if reserva.unidade:
+            titulo_base = (
+                f"{reserva.unidade.bloco} - {reserva.unidade.apartamento} "
+                f"({reserva.espaco.nome})"
+            )
+            titulo = (
+                f"{titulo_base} [Pago: R$ {reserva.valor_pago:.2f}]"
+                if pode_gerenciar
+                else titulo_base
+            )
+        else:
+            motivo = reserva.motivo_reserva or "Evento interno"
+            titulo = f"[CONDOMÍNIO] {reserva.espaco.nome} - {motivo}"
         eventos.append(
             {
                 "title": titulo,
@@ -668,21 +740,22 @@ def cancelar_reserva(reserva_id):
     reserva.status = "Cancelada"
     db.session.commit()
 
-    emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
-    for email in emails_moradores:
-        try:
-            enviar_email_resposta_reserva(
-                email_destino=email,
-                nome_espaco=reserva.espaco.nome,
-                data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
-                status="Cancelada",
-            )
-        except Exception:
-            traceback.print_exc()
-            flash(
-                f"Reserva cancelada, mas houve falha ao notificar {email}.",
-                "warning",
-            )
+    if reserva.unidade:
+        emails_moradores = _emails_unicos(reserva.unidade.pessoas.all())
+        for email in emails_moradores:
+            try:
+                enviar_email_resposta_reserva(
+                    email_destino=email,
+                    nome_espaco=reserva.espaco.nome,
+                    data_reserva=reserva.data_reserva.strftime("%d/%m/%Y"),
+                    status="Cancelada",
+                )
+            except Exception:
+                traceback.print_exc()
+                flash(
+                    f"Reserva cancelada, mas houve falha ao notificar {email}.",
+                    "warning",
+                )
 
     flash("Reserva cancelada com sucesso.", "success")
     return redirect(url_for("reservas"))
@@ -1483,6 +1556,12 @@ def init_app(app):
         "/reservas/solicitar",
         "solicitar_reserva",
         solicitar_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/gestao/criar",
+        "criar_reserva_gestao",
+        criar_reserva_gestao,
         methods=["POST"],
     )
     app.add_url_rule(
