@@ -234,6 +234,8 @@
                             Assistente Administrativo
                             {% elif usuario.role == 'sindico' %}
                             Síndico de Bloco
+                            {% elif usuario.role == 'porteiro' %}
+                            Porteiro
                             {% else %}
                             {{ usuario.role }}
                             {% endif %}

@@ -9,7 +9,7 @@
             <div class="card-body p-4">
                 <h1 class="h4 mb-3">{{ titulo }}</h1>
                 <form method="post"
-                      action="{% if action == 'admin' %}{{ url_for('admin_login') }}{% else %}{{ url_for('sindico_login') }}{% endif %}">
+                      action="{% if action == 'admin' %}{{ url_for('admin_login') }}{% elif action == 'portaria' %}{{ url_for('portaria_login') }}{% else %}{{ url_for('sindico_login') }}{% endif %}">
                     <div class="mb-3">
                         <label for="username" class="form-label">Usuário</label>
                         <input type="text" class="form-control" id="username" name="username" required autofocus>

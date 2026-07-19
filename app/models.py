@@ -9,6 +9,18 @@ class Role:
     ADMIN = "admin"
     ASSISTENTE = "assistente"
     SINDICO = "sindico"
+    PORTEIRO = "porteiro"
+
+
+class StatusAgendamentoMudanca:
+    PENDENTE_SINDICO = "Pendente Síndico"
+    PENDENTE_ADMINISTRACAO = "Pendente Administração"
+    APROVADA = "Aprovada"
+    REJEITADA = "Rejeitada"
+    CANCELADA = "Cancelada"
+
+    PENDENTES = (PENDENTE_SINDICO, PENDENTE_ADMINISTRACAO)
+    TIPOS = ("Entrada", "Saída")
 
 
 class StatusUnidade:
@@ -59,6 +71,10 @@ class Usuario(db.Model):
     @property
     def is_assistente(self):
         return self.role == Role.ASSISTENTE
+
+    @property
+    def is_porteiro(self):
+        return self.role == Role.PORTEIRO
 
     def __repr__(self):
         return f"<Usuario {self.username} ({self.role})>"
@@ -111,6 +127,12 @@ class Unidade(db.Model):
         lazy="dynamic",
     )
     cupons_resgatados = db.relationship("ResgateCupom", backref="unidade", lazy=True)
+    agendamentos_mudanca = db.relationship(
+        "AgendamentoMudanca",
+        back_populates="unidade",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -294,3 +316,32 @@ class LogAuditoria(db.Model):
 
     def __repr__(self):
         return f"<LogAuditoria {self.id}>"
+
+
+class AgendamentoMudanca(db.Model):
+    __tablename__ = "agendamentos_mudanca"
+
+    id = db.Column(db.Integer, primary_key=True)
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    tipo = db.Column(db.String(20), nullable=False)
+    data_mudanca = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(
+        db.String(50),
+        nullable=False,
+        default=StatusAgendamentoMudanca.PENDENTE_SINDICO,
+    )
+    data_solicitacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    observacoes = db.Column(db.Text, nullable=True)
+    motivo_rejeicao = db.Column(db.Text, nullable=True)
+    data_chegada = db.Column(db.DateTime, nullable=True)
+    porteiro_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+
+    unidade = db.relationship("Unidade", back_populates="agendamentos_mudanca")
+    porteiro = db.relationship("Usuario", foreign_keys=[porteiro_id])
+
+    def __repr__(self):
+        return f"<AgendamentoMudanca {self.id} ({self.tipo} / {self.status})>"

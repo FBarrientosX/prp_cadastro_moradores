@@ -103,3 +103,15 @@ def unidade_required(view):
         return view(unidade, *args, **kwargs)
 
     return wrapped
+
+
+def portaria_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if not usuario or usuario.role not in (Role.PORTEIRO, Role.ADMIN):
+            flash("Acesso restrito à portaria.", "danger")
+            return redirect(url_for("portaria_login"))
+        return view(*args, **kwargs)
+
+    return wrapped

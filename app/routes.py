@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import wraps
 import os
 import random
@@ -20,6 +20,7 @@ from app.auth import (
     login_usuario,
     logout_unidade,
     logout_usuario,
+    portaria_required,
     sindico_required,
     unidade_required,
 )
@@ -32,6 +33,7 @@ from app.email_service import (
     enviar_email_validacao_sucesso,
 )
 from app.models import (
+    AgendamentoMudanca,
     Cupom,
     EspacoComum,
     LogAuditoria,
@@ -40,6 +42,7 @@ from app.models import (
     Reserva,
     ResgateCupom,
     Role,
+    StatusAgendamentoMudanca,
     StatusDocumento,
     StatusUnidade,
     Unidade,
@@ -2375,7 +2378,9 @@ def admin_index():
         .all()
     )
     equipe_acessos = (
-        Usuario.query.filter(Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO]))
+        Usuario.query.filter(
+            Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO])
+        )
         .order_by(Usuario.role, Usuario.username)
         .all()
     )
@@ -2744,6 +2749,7 @@ def admin_criar_usuario():
         mapeamento_tipo = {
             "assistente": Role.ASSISTENTE,
             "sindico": Role.SINDICO,
+            "porteiro": Role.PORTEIRO,
         }
         role = mapeamento_tipo.get(tipo_acesso)
         if not role:
@@ -2782,8 +2788,11 @@ def admin_excluir_usuario(usuario_id):
         flash("Você não pode excluir o próprio acesso.", "danger")
         return redirect(url_for("admin_index"))
 
-    if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO):
-        flash("Apenas acessos de assistente ou síndico podem ser revogados aqui.", "warning")
+    if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO):
+        flash(
+            "Apenas acessos de assistente, síndico ou porteiro podem ser revogados aqui.",
+            "warning",
+        )
         return redirect(url_for("admin_index"))
 
     username_alvo = usuario_alvo.username
@@ -2798,6 +2807,429 @@ def admin_excluir_usuario(usuario_id):
 
     flash(f"Acesso de '{username_alvo}' revogado com sucesso.", "success")
     return redirect(url_for("admin_index"))
+
+
+def _validar_data_mudanca(data_mudanca):
+    """Valida antecedência mínima de 3 dias e proibição de domingo."""
+    hoje = date.today()
+    data_minima = hoje + timedelta(days=3)
+    if data_mudanca < data_minima:
+        return (
+            "A data da mudança deve ter, no mínimo, 3 dias de antecedência."
+        )
+    if data_mudanca.weekday() == 6:
+        return "Mudanças não são permitidas aos domingos."
+    return None
+
+
+def _nome_responsavel_unidade(unidade):
+    responsavel = unidade.pessoas.filter_by(is_responsavel=True).first()
+    if responsavel:
+        return responsavel.nome_completo
+    return "Não informado"
+
+
+@unidade_required
+def mudancas_morador(unidade):
+    if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
+        flash(
+            "Apenas unidades aprovadas ou registradas podem agendar mudanças.",
+            "warning",
+        )
+        return redirect(url_for("atualizar_dados"))
+
+    if request.method == "POST":
+        acao = request.form.get("acao", "solicitar").strip()
+
+        if acao == "cancelar":
+            agendamento_id = request.form.get("agendamento_id", type=int)
+            agendamento = AgendamentoMudanca.query.filter_by(
+                id=agendamento_id, unidade_id=unidade.id
+            ).first()
+            if not agendamento:
+                flash("Solicitação não encontrada.", "danger")
+            elif agendamento.status not in StatusAgendamentoMudanca.PENDENTES:
+                flash(
+                    "Somente solicitações pendentes podem ser canceladas.",
+                    "warning",
+                )
+            else:
+                agendamento.status = StatusAgendamentoMudanca.CANCELADA
+                db.session.commit()
+                flash("Solicitação de mudança cancelada.", "success")
+            return redirect(url_for("mudancas_morador"))
+
+        tipo = request.form.get("tipo", "").strip()
+        data_str = request.form.get("data_mudanca", "").strip()
+        observacoes = request.form.get("observacoes", "").strip() or None
+
+        if tipo not in StatusAgendamentoMudanca.TIPOS:
+            flash("Selecione o tipo da mudança (Entrada ou Saída).", "danger")
+            return redirect(url_for("mudancas_morador"))
+
+        try:
+            data_mudanca = datetime.strptime(data_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            flash("Informe uma data válida para a mudança.", "danger")
+            return redirect(url_for("mudancas_morador"))
+
+        erro_data = _validar_data_mudanca(data_mudanca)
+        if erro_data:
+            flash(erro_data, "danger")
+            return redirect(url_for("mudancas_morador"))
+
+        agendamento = AgendamentoMudanca(
+            unidade_id=unidade.id,
+            tipo=tipo,
+            data_mudanca=data_mudanca,
+            status=StatusAgendamentoMudanca.PENDENTE_SINDICO,
+            observacoes=observacoes,
+        )
+        db.session.add(agendamento)
+        db.session.commit()
+        flash(
+            "Solicitação de mudança enviada. Aguarde a aprovação do síndico.",
+            "success",
+        )
+        return redirect(url_for("mudancas_morador"))
+
+    historico = (
+        AgendamentoMudanca.query.filter_by(unidade_id=unidade.id)
+        .order_by(
+            AgendamentoMudanca.data_mudanca.desc(),
+            AgendamentoMudanca.data_solicitacao.desc(),
+        )
+        .all()
+    )
+    data_minima = (date.today() + timedelta(days=3)).isoformat()
+    return render_template(
+        "mudancas_morador.html",
+        unidade=unidade,
+        historico=historico,
+        data_minima=data_minima,
+        status_pendentes=StatusAgendamentoMudanca.PENDENTES,
+    )
+
+
+@sindico_required
+def sindico_mudancas():
+    usuario = get_current_user()
+    bloco_codigo = str(normalizar_bloco_codigo(usuario.bloco_responsavel))
+
+    if request.method == "POST":
+        agendamento_id = request.form.get("agendamento_id", type=int)
+        acao = request.form.get("acao", "").strip()
+        agendamento = (
+            AgendamentoMudanca.query.join(Unidade)
+            .filter(
+                AgendamentoMudanca.id == agendamento_id,
+                Unidade.bloco == bloco_codigo,
+            )
+            .first()
+        )
+
+        if not agendamento:
+            flash("Solicitação não encontrada no seu bloco.", "danger")
+            return redirect(url_for("sindico_mudancas"))
+
+        if agendamento.status != StatusAgendamentoMudanca.PENDENTE_SINDICO:
+            flash("Esta solicitação não está pendente de aprovação do síndico.", "warning")
+            return redirect(url_for("sindico_mudancas"))
+
+        if acao == "aprovar":
+            agendamento.status = StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO
+            _registrar_auditoria(
+                usuario,
+                f"Síndico aprovou mudança {agendamento.tipo} da unidade "
+                f"{agendamento.unidade.identificador} em "
+                f"{agendamento.data_mudanca.strftime('%d/%m/%Y')}.",
+            )
+            db.session.commit()
+            flash("Mudança encaminhada para aprovação da administração.", "success")
+        elif acao == "rejeitar":
+            motivo = request.form.get("motivo_rejeicao", "").strip()
+            if not motivo:
+                flash("Informe o motivo da rejeição.", "danger")
+                return redirect(url_for("sindico_mudancas"))
+            agendamento.status = StatusAgendamentoMudanca.REJEITADA
+            agendamento.motivo_rejeicao = motivo
+            _registrar_auditoria(
+                usuario,
+                f"Síndico rejeitou mudança {agendamento.tipo} da unidade "
+                f"{agendamento.unidade.identificador}. Motivo: {motivo}",
+            )
+            db.session.commit()
+            flash("Solicitação de mudança rejeitada.", "info")
+        else:
+            flash("Ação inválida.", "danger")
+
+        return redirect(url_for("sindico_mudancas"))
+
+    solicitacoes = (
+        AgendamentoMudanca.query.join(Unidade)
+        .filter(Unidade.bloco == bloco_codigo)
+        .order_by(
+            case(
+                (
+                    AgendamentoMudanca.status
+                    == StatusAgendamentoMudanca.PENDENTE_SINDICO,
+                    0,
+                ),
+                else_=1,
+            ),
+            AgendamentoMudanca.data_mudanca.asc(),
+            AgendamentoMudanca.data_solicitacao.desc(),
+        )
+        .all()
+    )
+    return render_template(
+        "sindico_mudancas.html",
+        solicitacoes=solicitacoes,
+        current_user=usuario,
+        status_pendente_sindico=StatusAgendamentoMudanca.PENDENTE_SINDICO,
+    )
+
+
+@admin_or_assistente_required
+def admin_mudancas():
+    usuario = get_current_user()
+
+    if request.method == "POST":
+        acao = request.form.get("acao", "").strip()
+
+        if acao == "criar":
+            unidade_id = request.form.get("unidade_id", type=int)
+            tipo = request.form.get("tipo", "").strip()
+            data_str = request.form.get("data_mudanca", "").strip()
+            observacoes = request.form.get("observacoes", "").strip() or None
+
+            unidade = Unidade.query.get(unidade_id) if unidade_id else None
+            if not unidade:
+                flash("Selecione uma unidade válida.", "danger")
+                return redirect(url_for("admin_mudancas"))
+
+            if tipo not in StatusAgendamentoMudanca.TIPOS:
+                flash("Selecione o tipo da mudança (Entrada ou Saída).", "danger")
+                return redirect(url_for("admin_mudancas"))
+
+            try:
+                data_mudanca = datetime.strptime(data_str, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                flash("Informe uma data válida para a mudança.", "danger")
+                return redirect(url_for("admin_mudancas"))
+
+            erro_data = _validar_data_mudanca(data_mudanca)
+            if erro_data:
+                flash(erro_data, "danger")
+                return redirect(url_for("admin_mudancas"))
+
+            agendamento = AgendamentoMudanca(
+                unidade_id=unidade.id,
+                tipo=tipo,
+                data_mudanca=data_mudanca,
+                status=StatusAgendamentoMudanca.APROVADA,
+                observacoes=observacoes,
+            )
+            db.session.add(agendamento)
+            _registrar_auditoria(
+                usuario,
+                f"Administração cadastrou mudança {tipo} já aprovada para a unidade "
+                f"{unidade.identificador} em {data_mudanca.strftime('%d/%m/%Y')}.",
+            )
+            db.session.commit()
+            flash(
+                f"Mudança de {tipo.lower()} cadastrada e aprovada para "
+                f"{unidade.identificador}.",
+                "success",
+            )
+            return redirect(url_for("admin_mudancas"))
+
+        agendamento_id = request.form.get("agendamento_id", type=int)
+        agendamento = AgendamentoMudanca.query.get(agendamento_id)
+
+        if not agendamento:
+            flash("Solicitação não encontrada.", "danger")
+            return redirect(url_for("admin_mudancas"))
+
+        if agendamento.status != StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO:
+            flash(
+                "Esta solicitação não está pendente de aprovação da administração.",
+                "warning",
+            )
+            return redirect(url_for("admin_mudancas"))
+
+        if acao == "aprovar":
+            agendamento.status = StatusAgendamentoMudanca.APROVADA
+            _registrar_auditoria(
+                usuario,
+                f"Administração aprovou definitivamente mudança {agendamento.tipo} "
+                f"da unidade {agendamento.unidade.identificador} em "
+                f"{agendamento.data_mudanca.strftime('%d/%m/%Y')}.",
+            )
+            db.session.commit()
+            flash("Mudança aprovada definitivamente.", "success")
+        elif acao == "rejeitar":
+            motivo = request.form.get("motivo_rejeicao", "").strip()
+            if not motivo:
+                flash("Informe o motivo da rejeição.", "danger")
+                return redirect(url_for("admin_mudancas"))
+            agendamento.status = StatusAgendamentoMudanca.REJEITADA
+            agendamento.motivo_rejeicao = motivo
+            _registrar_auditoria(
+                usuario,
+                f"Administração rejeitou mudança {agendamento.tipo} da unidade "
+                f"{agendamento.unidade.identificador}. Motivo: {motivo}",
+            )
+            db.session.commit()
+            flash("Solicitação de mudança rejeitada.", "info")
+        else:
+            flash("Ação inválida.", "danger")
+
+        return redirect(url_for("admin_mudancas"))
+
+    pendentes = (
+        AgendamentoMudanca.query.filter_by(
+            status=StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO
+        )
+        .order_by(AgendamentoMudanca.data_mudanca.asc())
+        .all()
+    )
+    historico = (
+        AgendamentoMudanca.query.order_by(
+            AgendamentoMudanca.data_solicitacao.desc()
+        ).all()
+    )
+    unidades = (
+        Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
+    )
+    return render_template(
+        "admin_mudancas.html",
+        pendentes=pendentes,
+        historico=historico,
+        unidades=unidades,
+        current_user=usuario,
+    )
+
+
+def portaria_login():
+    usuario_logado = get_current_user()
+    if usuario_logado and usuario_logado.role in (Role.PORTEIRO, Role.ADMIN):
+        return redirect(url_for("portaria_dashboard"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        usuario = Usuario.query.filter(
+            Usuario.username == username,
+            Usuario.role.in_([Role.PORTEIRO, Role.ADMIN]),
+        ).first()
+        if usuario and usuario.check_password(password):
+            login_usuario(usuario)
+            return redirect(url_for("portaria_dashboard"))
+
+        flash("Usuário ou senha inválidos.", "danger")
+
+    return render_template(
+        "login.html", titulo="Login da Portaria", action="portaria"
+    )
+
+
+def portaria_logout():
+    logout_usuario()
+    flash("Sessão encerrada.", "info")
+    return redirect(url_for("portaria_login"))
+
+
+@portaria_required
+def portaria_dashboard():
+    hoje = date.today()
+
+    mudancas = (
+        AgendamentoMudanca.query.join(Unidade)
+        .filter(
+            AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
+            AgendamentoMudanca.data_mudanca >= hoje,
+        )
+        .order_by(
+            AgendamentoMudanca.data_mudanca.asc(),
+            Unidade.bloco,
+            Unidade.apartamento,
+        )
+        .all()
+    )
+
+    reservas = (
+        Reserva.query.join(EspacoComum)
+        .outerjoin(Unidade, Reserva.unidade_id == Unidade.id)
+        .filter(
+            Reserva.status == "Aprovada",
+            Reserva.data_reserva >= hoje,
+        )
+        .order_by(Reserva.data_reserva.asc(), EspacoComum.nome)
+        .all()
+    )
+
+    return render_template(
+        "portaria_dashboard.html",
+        mudancas=mudancas,
+        reservas=reservas,
+        hoje=hoje,
+        current_user=get_current_user(),
+        nome_responsavel=_nome_responsavel_unidade,
+    )
+
+
+def _agora_sao_paulo():
+    """Retorna datetime local de America/Sao_Paulo (naive, para persistência)."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+    except Exception:
+        return datetime.utcnow()
+
+
+@portaria_required
+def portaria_mudanca_chegar(agendamento_id):
+    usuario = get_current_user()
+    hoje = date.today()
+    agendamento = AgendamentoMudanca.query.get_or_404(agendamento_id)
+
+    if agendamento.status != StatusAgendamentoMudanca.APROVADA:
+        flash("Somente mudanças aprovadas podem ter chegada registrada.", "warning")
+        return redirect(url_for("portaria_dashboard"))
+
+    if agendamento.data_mudanca != hoje:
+        flash("O check-in de chegada só é permitido no dia da mudança.", "warning")
+        return redirect(url_for("portaria_dashboard"))
+
+    if agendamento.data_chegada:
+        flash("A chegada deste caminhão já foi registrada.", "info")
+        return redirect(url_for("portaria_dashboard"))
+
+    agendamento.data_chegada = _agora_sao_paulo()
+    # Registra o usuário logado (porteiro nominal ou admin em atuação).
+    agendamento.porteiro_id = usuario.id
+    _registrar_auditoria(
+        usuario,
+        f"{'Admin' if usuario.role == Role.ADMIN else 'Portaria'} "
+        f"'{usuario.username}' registrou chegada do caminhão ({agendamento.tipo}) "
+        f"da unidade {agendamento.unidade.identificador} em "
+        f"{agendamento.data_chegada.strftime('%d/%m/%Y %H:%M')}.",
+    )
+    db.session.commit()
+    flash(
+        f"Chegada registrada para {agendamento.unidade.identificador} "
+        f"às {agendamento.data_chegada.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_dashboard"))
+
+
+@portaria_required
+def portaria_mudancas():
+    return redirect(url_for("portaria_dashboard"))
 
 
 def init_app(app):
@@ -3108,4 +3540,52 @@ def init_app(app):
         "admin_parceiro_ativar",
         admin_parceiro_ativar,
         methods=["POST"],
+    )
+    app.add_url_rule(
+        "/mudancas",
+        "mudancas_morador",
+        mudancas_morador,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/sindico/mudancas",
+        "sindico_mudancas",
+        sindico_mudancas,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/admin/mudancas",
+        "admin_mudancas",
+        admin_mudancas,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/portaria/login",
+        "portaria_login",
+        portaria_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/portaria/logout",
+        "portaria_logout",
+        portaria_logout,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/dashboard",
+        "portaria_dashboard",
+        portaria_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/mudanca/<int:agendamento_id>/chegar",
+        "portaria_mudanca_chegar",
+        portaria_mudanca_chegar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/mudancas",
+        "portaria_mudancas",
+        portaria_mudancas,
+        methods=["GET"],
     )

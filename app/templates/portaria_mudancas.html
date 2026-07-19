@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Portaria — Mudanças{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <div>
+        <h1 class="h4 mb-1">Painel da Portaria — Mudanças</h1>
+        <p class="text-muted mb-0">Somente leitura · mudanças aprovadas</p>
+    </div>
+    <div class="text-end">
+        <div class="display-6 fw-bold text-primary mb-0">{{ hoje.strftime('%d/%m/%Y') }}</div>
+        <div class="text-uppercase small text-muted fw-semibold">Hoje</div>
+    </div>
+</div>
+
+<section class="mb-5">
+    <h2 class="h5 mb-3">
+        <i class="bi bi-truck me-2 text-primary"></i>Mudanças de Hoje
+    </h2>
+    {% if mudancas_hoje %}
+    <div class="row g-3">
+        {% for item in mudancas_hoje %}
+        <div class="col-md-6 col-xl-4">
+            <div class="border rounded-3 p-3 h-100 {% if item.tipo == 'Entrada' %}border-primary{% else %}border-danger{% endif %}"
+                 style="border-width: 2px !important;">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    {% if item.tipo == 'Entrada' %}
+                    <span class="badge text-bg-primary fs-6">ENTRADA</span>
+                    {% else %}
+                    <span class="badge text-bg-danger fs-6">SAÍDA</span>
+                    {% endif %}
+                    <span class="fw-bold">{{ item.data_mudanca.strftime('%d/%m/%Y') }}</span>
+                </div>
+                <div class="fs-4 fw-bold mb-1">
+                    {{ item.unidade.bloco }} · Apto {{ item.unidade.apartamento }}
+                </div>
+                <div class="text-muted">
+                    <i class="bi bi-person me-1"></i>
+                    {{ nome_responsavel(item.unidade) }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-secondary mb-0">
+        Nenhuma mudança aprovada para hoje.
+    </div>
+    {% endif %}
+</section>
+
+<section>
+    <h2 class="h5 mb-3">
+        <i class="bi bi-calendar-week me-2"></i>Próximos 7 dias
+    </h2>
+    {% if mudancas_proximos %}
+    <div class="table-responsive card shadow-sm">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Data</th>
+                    <th>Bloco</th>
+                    <th>Apartamento</th>
+                    <th>Responsável</th>
+                    <th>Tipo (caminhão)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in mudancas_proximos %}
+                <tr>
+                    <td class="fw-semibold">{{ item.data_mudanca.strftime('%d/%m/%Y') }}</td>
+                    <td>{{ item.unidade.bloco }}</td>
+                    <td>{{ item.unidade.apartamento }}</td>
+                    <td>{{ nome_responsavel(item.unidade) }}</td>
+                    <td>
+                        {% if item.tipo == 'Entrada' %}
+                        <span class="badge text-bg-primary">ENTRADA</span>
+                        {% else %}
+                        <span class="badge text-bg-danger">SAÍDA</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-light border mb-0">
+        Nenhuma mudança aprovada nos próximos 7 dias.
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

@@ -14,7 +14,7 @@
                     </a>
                 </div>
                 <p class="text-muted mb-4">
-                    Cadastre um novo acesso para assistente administrativo ou síndico.
+                    Cadastre um novo acesso para assistente administrativo, síndico ou porteiro.
                 </p>
 
                 <form method="post" action="{{ url_for('admin_criar_usuario') }}">
@@ -34,6 +34,7 @@
                             <option value="" selected disabled>Selecione...</option>
                             <option value="assistente">Assistente Administrativo</option>
                             <option value="sindico">Síndico de Bloco</option>
+                            <option value="porteiro">Porteiro</option>
                         </select>
                     </div>
 

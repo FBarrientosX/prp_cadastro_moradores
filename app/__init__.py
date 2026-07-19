@@ -241,6 +241,47 @@ def _garantir_colunas_cupom():
         db.session.commit()
 
 
+def _garantir_tabela_agendamentos_mudanca():
+    """Garante a tabela de agendamentos (db.create_all) e colunas novas via ALTER TABLE."""
+    inspetor = inspect(db.engine)
+    tabelas = inspetor.get_table_names()
+    if "agendamentos_mudanca" not in tabelas:
+        # Tabela nova: criada por db.create_all() a partir do model AgendamentoMudanca.
+        return
+
+    colunas = {
+        coluna["name"] for coluna in inspetor.get_columns("agendamentos_mudanca")
+    }
+    alteracoes = []
+    if "motivo_rejeicao" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN motivo_rejeicao TEXT"
+        )
+    if "data_chegada" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN data_chegada DATETIME"
+        )
+    adicionou_porteiro = False
+    if "porteiro_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN porteiro_id INTEGER"
+        )
+        adicionou_porteiro = True
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+    if adicionou_porteiro:
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_agendamentos_mudanca_porteiro_id "
+                "ON agendamentos_mudanca (porteiro_id)"
+            )
+        )
+        db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -297,6 +338,7 @@ def create_app(config=None):
         _garantir_colunas_reservas()
         _garantir_colunas_parceiros()
         _garantir_colunas_cupom()
+        _garantir_tabela_agendamentos_mudanca()
 
     _garantir_tabelas_parceiros(app)
 
