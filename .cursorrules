@@ -42,19 +42,24 @@ Email:
 Bibliotecas externas homologadas (frontend via CDN):
 - Bootstrap 5 + Bootstrap Icons (padrao global).
 - flatpickr — ferramenta padrao para campos de data no sistema (exibicao DD/MM/YYYY via altInput; valor enviado Y-m-d). CSS/JS + locale pt carregados em `base.html`.
+  - Para novos campos de data: usar `type="text"` + classe `datepicker` (ou equivalente) com Flatpickr; evitar `<input type="date">` nativo (locale do dispositivo).
 - Chart.js — dashboards e analytics (ex: aba Analytics do Clube de Vantagens).
 - qrcode.js — geracao de QR Code no cliente (ex: cupons resgatados pelo morador).
 - html5-qrcode — leitura de QR Code via camera in-app (ex: validacao no portal do parceiro).
 - Preferir CDN ja usados nos templates existentes; nao introduzir libs concorrentes sem necessidade.
-- Para novos campos de data: usar `type="text"` + classe `datepicker` (ou equivalente) com Flatpickr; evitar `<input type="date">` nativo (locale do dispositivo).
 
 ==================================================
-2) SEGURANCA — RECUPERACAO DE SENHA E ANTI-ENUMERACAO
+2) SEGURANCA — AUTH, RECUPERACAO DE SENHA E ANTI-ENUMERACAO
 ==================================================
 
 Principio geral:
 - Rotas sensiveis de recuperacao/redefinicao de senha devem operar com escopo estrito por contexto de usuario.
 - NUNCA misturar buscas entre tabelas/perfis distintos (ex: e-mail de `Parceiro` nao deve resolver recuperacao de `Unidade`/morador).
+
+Desacoplamento de Identidade (Parceiros):
+- O login do parceiro usa estritamente `usuario_login` (unico).
+- O campo `email` e apenas para comunicacao e recuperacao de senha (podendo ser editado pelo parceiro no perfil).
+- Rota `POST /parceiro/login` faz fallback para e-mail caso `usuario_login` nao seja encontrado (transicao segura de banco).
 
 Scoping por perfil (implementado):
 - Morador: `_buscar_unidade_e_email_login()` consulta apenas `Unidade` + `Pessoa` responsavel (e `proprietario_email` quando aplicavel).
@@ -90,8 +95,9 @@ Hierarquia funcional:
 - Admin Geral (`role='admin'`): acesso total administrativo.
 - Assistente Administrativo (`role='assistente'`): acesso administrativo parcial.
 - Sindico (`role='sindico'`): acesso operacional apenas ao bloco responsavel.
+- Porteiro (`role='porteiro'`): acesso operacional de leitura e registro de check-in na guarita.
 - Unidade (morador): autenticacao por bloco/apartamento/senha da unidade.
-- Parceiro comercial: autenticacao propria por e-mail/senha (`session['parceiro_id']`), independente de `Usuario`.
+- Parceiro comercial: autenticacao propria por `usuario_login`/senha (`session['parceiro_id']`), independente de `Usuario`.
 
 Decorators de acesso (`app/auth.py` e `app/routes.py`):
 - `@admin_required`
@@ -100,6 +106,8 @@ Decorators de acesso (`app/auth.py` e `app/routes.py`):
   - permite `Role.ADMIN` ou `Role.ASSISTENTE`.
 - `@sindico_required`
   - apenas `Role.SINDICO`.
+- `@portaria_required`
+  - permite `Role.PORTEIRO` ou `Role.ADMIN`.
 - `@unidade_required`
   - exige sessao de unidade autenticada.
 - `@parceiro_required` (em `routes.py`)
@@ -120,6 +128,9 @@ Matriz de permissao (resumo):
 - Somente Sindico:
   - dashboard do bloco
   - validacao unificada de unidade pendente
+- Porteiro:
+  - visualizacao do painel de dashboard `/portaria/dashboard`
+  - registro de entrada em mudancas aprovadas
 - Parceiro logado:
   - portal proprio (`/parceiro/*`); nao acessa rotas admin/morador
   - edita apenas dados comerciais proprios (e-mail de login nao alteravel pelo parceiro)
@@ -131,7 +142,7 @@ Matriz de permissao (resumo):
 `Usuario`:
 - `username` unico
 - `password_hash`
-- `role` em: `admin`, `assistente`, `sindico`
+- `role` em: `admin`, `assistente`, `sindico`, `porteiro`
 - `bloco_responsavel` (usado para sindico)
 
 `Unidade`:
@@ -153,7 +164,7 @@ Matriz de permissao (resumo):
 - registra eventos sensiveis com `usuario_id`, `mensagem`, `data_criacao`
 
 `Parceiro`:
-- `nome_empresa`, `email` (unico, login), `senha_hash`
+- `nome_empresa`, `usuario_login` (unico, authy principal), `email` (contato/recuperacao), `senha_hash`
 - `telefone`, `categoria`, `endereco`, `descricao`
 - `ativo` (bool legado) + `status`: `Pendente`, `Ativo`, `Bloqueado`
 - `data_cadastro`
@@ -169,6 +180,11 @@ Matriz de permissao (resumo):
 - vincula `cupom_id` + `unidade_id`
 - `codigo_unico` (QR), `status`, `data_resgate`, `data_utilizacao`
 - registro transacional; nao alterar retroativamente para preservar historico
+
+`AgendamentoMudanca`:
+- `unidade_id`, `tipo` ('Entrada' ou 'Saída'), `data_mudanca`, `status`
+- `data_solicitacao`, `observacoes`
+- `data_chegada`, `porteiro_id` (registro de check-in na portaria)
 
 ==================================================
 5) ROTAS E FLUXOS PRINCIPAIS
@@ -203,6 +219,13 @@ Administracao (login unico para admin/assistente):
     - impede autoexclusao
     - somente roles `assistente` e `sindico`
     - gera log de auditoria de revogacao
+
+Agendamento de Mudancas e Portaria:
+- `GET|POST /mudancas` (Morador): validacao backend de D+3 e bloqueio de domingos.
+- `GET|POST /sindico/mudancas`: filtro exige JOIN com `Unidade` comparando `Unidade.bloco == bloco_do_sindico`.
+- `GET|POST /admin/mudancas`: aprovacao final e criacao de mudancas avulsas (bypass).
+- `GET /portaria/dashboard`: painel read-only cruzando mudancas aprovadas e eventos/reservas do dia.
+- `POST /portaria/mudanca/<id>/chegar`: registra `data_chegada` e `porteiro_id`.
 
 Clube de Vantagens — Morador (`@unidade_required`):
 - `GET /clube_vantagens` — abas: Ofertas, Guia de Parceiros, Cupons para Usar, Historico
@@ -242,6 +265,10 @@ Separacao de contextos (UX/UI):
 - Novos portais ou perfis devem seguir o mesmo padrao: arquivo base dedicado + cor de destaque distinta na sidebar.
 - Sidebars com `nav-pills`, estado ativo via `request.endpoint`, e offcanvas no mobile.
 - Nao misturar navegacao de contextos diferentes no mesmo base template.
+
+Anti Dead-End (Beco Sem Saida):
+- Rotas isoladas operacionais (ex: painel da portaria) nao devem ter links no menu lateral administrativo se nao houver navegacao de volta.
+- Se um Admin acessar a rota isolada, o template deve identificar `{% if current_user.perfil == 'Admin' %}` e renderizar um botao para voltar ao dashboard admin sem forcar logout.
 
 Padroes de UI Bootstrap (obrigatorios em telas densas):
 - `nav-tabs` para organizar telas com muita informacao (ex: carteira do morador em `clube_vantagens.html`, gestao/analytics admin).
@@ -456,4 +483,7 @@ Clube de Vantagens / Parceiros:
 - nao reintroduzir reativacao de cupons desativados.
 - bibliotecas frontend: usar apenas as homologadas na secao 1.
 - QR e validacao devem manter compatibilidade com URL `/parceiro/validacao?codigo=...`.
-
+
+Modulos de Agendamento/Mudancas:
+- Respeitar o fluxo de dupla aprovacao (Sindico do Bloco -> Administracao).
+- Interfaces para portaria/operacional devem ser focadas (read-only ou acoes simples de check-in) com log nominal.
