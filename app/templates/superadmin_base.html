@@ -79,6 +79,10 @@
                href="{{ url_for('superadmin_condominios') }}">
                 <i class="bi bi-buildings me-2"></i>Condomínios
             </a>
+            <a class="nav-link text-white d-flex align-items-center {% if request.endpoint and request.endpoint.startswith('superadmin_parceiro') %}active{% endif %}"
+               href="{{ url_for('superadmin_parceiros') }}">
+                <i class="bi bi-shop me-2"></i>Parceiros (Global)
+            </a>
         </nav>
         <div class="mt-auto pt-3">
             <a class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center"
@@ -105,6 +109,10 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'superadmin_condominios' %}active{% endif %}"
                    href="{{ url_for('superadmin_condominios') }}">
                     <i class="bi bi-buildings me-2"></i>Condomínios
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint and request.endpoint.startswith('superadmin_parceiro') %}active{% endif %}"
+                   href="{{ url_for('superadmin_parceiros') }}">
+                    <i class="bi bi-shop me-2"></i>Parceiros (Global)
                 </a>
             </nav>
             <div class="mt-auto pt-3">

@@ -1,30 +1,28 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
 {% block title %}Esqueci minha senha{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-lg-6">
-        <div class="card shadow-sm">
-            <div class="card-body p-4">
-                <h1 class="h4 mb-3">Esqueci minha senha</h1>
-                <p class="text-muted">
-                    Informe o e-mail principal cadastrado na unidade (responsável ou proprietário).
-                    Enviaremos um link para redefinir a senha de acesso.
-                </p>
+<div class="card auth-card shadow-lg">
+    <div class="card-body p-4 p-md-5">
+        <h1 class="h4 mb-3 text-center">Esqueci minha senha</h1>
+        <p class="text-muted small text-center mb-4">
+            Informe o e-mail principal cadastrado na unidade (responsável ou proprietário).
+            Enviaremos um link para redefinir a senha de acesso.
+        </p>
 
-                <form method="post" action="{{ url_for('esqueci_senha') }}">
-                    <div class="mb-3">
-                        <label for="email" class="form-label">E-mail cadastrado</label>
-                        <input type="email" class="form-control" id="email" name="email" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Enviar link de redefinição</button>
-                </form>
-
-                <div class="text-center mt-3">
-                    <a href="{{ url_for('tenant_login', slug=slug or 'prp') }}" class="small">Voltar ao acesso da unidade</a>
-                </div>
+        <form method="post" action="{{ url_for('esqueci_senha') }}">
+            <div class="mb-3">
+                <label for="email" class="form-label">E-mail cadastrado</label>
+                <input type="email" class="form-control" id="email" name="email" required>
             </div>
+            <button type="submit" class="btn btn-primary w-100">Enviar link de redefinição</button>
+        </form>
+
+        <div class="text-center mt-3">
+            <a href="{{ url_for('tenant_login', slug=slug or 'prp') }}" class="small text-muted text-decoration-none">
+                Voltar ao acesso da unidade
+            </a>
         </div>
     </div>
 </div>

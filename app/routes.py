@@ -30,6 +30,7 @@ from app.auth import (
     login_usuario,
     logout_unidade,
     logout_usuario,
+    condominio_esta_ativo,
     normalizar_slug,
     obter_condominio_por_slug,
     portaria_required,
@@ -259,8 +260,20 @@ def _emails_unicos(pessoas):
     return emails
 
 
-def _montar_analytics_clube():
-    total_resgates = db.session.query(func.count(ResgateCupom.id)).scalar() or 0
+def _aplicar_filtro_resgates_condominio(query, condominio_id, unidade_ja_joinada=False):
+    """Restringe métricas de resgate às unidades do condomínio (admin local)."""
+    if condominio_id is None:
+        return query
+    if not unidade_ja_joinada:
+        query = query.join(Unidade, ResgateCupom.unidade_id == Unidade.id)
+    return query.filter(Unidade.condominio_id == condominio_id)
+
+
+def _montar_analytics_clube(condominio_id=None):
+    total_resgates_q = db.session.query(func.count(ResgateCupom.id))
+    total_resgates_q = _aplicar_filtro_resgates_condominio(total_resgates_q, condominio_id)
+    total_resgates = total_resgates_q.scalar() or 0
+
     total_cupons_ativos = (
         db.session.query(func.count(Cupom.id)).filter(Cupom.ativo.is_(True)).scalar() or 0
     )
@@ -276,35 +289,43 @@ def _montar_analytics_clube():
         .all()
     )
 
-    resgates_por_bloco_rows = (
+    resgates_por_bloco_q = (
         db.session.query(
             Unidade.bloco,
             func.count(ResgateCupom.id).label("total"),
         )
         .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
-        .group_by(Unidade.bloco)
+    )
+    resgates_por_bloco_q = _aplicar_filtro_resgates_condominio(
+        resgates_por_bloco_q, condominio_id, unidade_ja_joinada=True
+    )
+    resgates_por_bloco_rows = (
+        resgates_por_bloco_q.group_by(Unidade.bloco)
         .order_by(func.count(ResgateCupom.id).desc())
         .all()
     )
 
-    top_unidades_rows = (
+    top_unidades_q = (
         db.session.query(
             Unidade.bloco,
             Unidade.apartamento,
             func.count(ResgateCupom.id).label("total"),
         )
         .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
-        .group_by(Unidade.id, Unidade.bloco, Unidade.apartamento)
+    )
+    top_unidades_q = _aplicar_filtro_resgates_condominio(
+        top_unidades_q, condominio_id, unidade_ja_joinada=True
+    )
+    top_unidades_rows = (
+        top_unidades_q.group_by(Unidade.id, Unidade.bloco, Unidade.apartamento)
         .order_by(func.count(ResgateCupom.id).desc())
         .limit(10)
         .all()
     )
 
-    status_rows = (
-        db.session.query(ResgateCupom.status, func.count(ResgateCupom.id))
-        .group_by(ResgateCupom.status)
-        .all()
-    )
+    status_q = db.session.query(ResgateCupom.status, func.count(ResgateCupom.id))
+    status_q = _aplicar_filtro_resgates_condominio(status_q, condominio_id)
+    status_rows = status_q.group_by(ResgateCupom.status).all()
     status_map = {status: quantidade for status, quantidade in status_rows}
     resgates_ativos = status_map.get("Ativo", 0)
     resgates_utilizados = status_map.get("Utilizado", 0)
@@ -312,29 +333,35 @@ def _montar_analytics_clube():
         round((resgates_utilizados / total_resgates) * 100, 1) if total_resgates else 0.0
     )
 
+    evolucao_q = db.session.query(
+        func.date(ResgateCupom.data_resgate).label("data"),
+        func.count(ResgateCupom.id).label("total"),
+    )
+    evolucao_q = _aplicar_filtro_resgates_condominio(evolucao_q, condominio_id)
     evolucao_rows = (
-        db.session.query(
-            func.date(ResgateCupom.data_resgate).label("data"),
-            func.count(ResgateCupom.id).label("total"),
-        )
-        .group_by(func.date(ResgateCupom.data_resgate))
+        evolucao_q.group_by(func.date(ResgateCupom.data_resgate))
         .order_by(func.date(ResgateCupom.data_resgate))
         .all()
     )
 
-    parceiro_popular_row = (
+    parceiro_popular_q = (
         db.session.query(
             Parceiro.nome_empresa,
             func.count(ResgateCupom.id).label("total"),
         )
         .join(Cupom, Cupom.parceiro_id == Parceiro.id)
         .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
-        .group_by(Parceiro.id, Parceiro.nome_empresa)
+    )
+    parceiro_popular_q = _aplicar_filtro_resgates_condominio(
+        parceiro_popular_q, condominio_id
+    )
+    parceiro_popular_row = (
+        parceiro_popular_q.group_by(Parceiro.id, Parceiro.nome_empresa)
         .order_by(func.count(ResgateCupom.id).desc())
         .first()
     )
 
-    cupons_conversao_rows = (
+    cupons_conversao_q = (
         db.session.query(
             Cupom.titulo,
             Parceiro.nome_empresa,
@@ -345,9 +372,13 @@ def _montar_analytics_clube():
         )
         .join(Parceiro, Cupom.parceiro_id == Parceiro.id)
         .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
-        .group_by(Cupom.id, Cupom.titulo, Parceiro.nome_empresa)
-        .all()
     )
+    cupons_conversao_q = _aplicar_filtro_resgates_condominio(
+        cupons_conversao_q, condominio_id
+    )
+    cupons_conversao_rows = cupons_conversao_q.group_by(
+        Cupom.id, Cupom.titulo, Parceiro.nome_empresa
+    ).all()
 
     cupons_conversao = []
     for titulo, parceiro_nome, total_cupom_resgates, utilizados in cupons_conversao_rows:
@@ -758,37 +789,72 @@ def index():
     return redirect(url_for("tenant_login", slug="prp"))
 
 
-def tenant_login(slug):
-    """Login de Morador (formulário) e Admin local do condomínio."""
+def _render_tenant_login(condominio, **extra):
+    return render_template(
+        "tenant_login.html",
+        **_contexto_index(condominio=condominio, slug=condominio.slug, **extra),
+    )
+
+
+def _resposta_condominio_inativo(condominio):
+    """Bloqueia portas /c/<slug>/ de clientes com soft delete (ativo=False)."""
+    return (
+        render_template("condominio_suspenso.html", condominio=condominio),
+        403,
+    )
+
+
+def _carregar_condominio_entrada(slug):
+    """Carrega tenant por slug e bloqueia se inativo."""
     condominio = obter_condominio_por_slug(slug)
+    if not condominio_esta_ativo(condominio):
+        return condominio, _resposta_condominio_inativo(condominio)
+    return condominio, None
+
+
+def _redirect_pos_login_equipe(usuario):
+    if usuario.role == Role.SINDICO:
+        return redirect(url_for("sindico_dashboard"))
+    if usuario.role == Role.PORTEIRO:
+        return redirect(url_for("portaria_dashboard"))
+    return _redirect_pos_login_admin(usuario)
+
+
+def tenant_login(slug):
+    """Login unificado: Morador (aba) e Equipe (admin/síndico/porteiro)."""
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        return bloqueio
     session["tenant_slug"] = condominio.slug
 
     usuario_logado = get_current_user()
-    if usuario_logado and usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE):
-        if usuario_logado.condominio_id == condominio.id:
-            return _redirect_pos_login_admin(usuario_logado)
+    if usuario_logado and usuario_logado.condominio_id == condominio.id:
+        if usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO):
+            return _redirect_pos_login_equipe(usuario_logado)
 
-    if request.method == "POST" and request.form.get("perfil") == "admin":
+    if request.method == "POST" and request.form.get("perfil") in ("admin", "equipe"):
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         usuario = Usuario.query.filter(
             Usuario.username == username,
-            Usuario.role.in_([Role.ADMIN, Role.ASSISTENTE]),
+            Usuario.role.in_(
+                [Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]
+            ),
             Usuario.condominio_id == condominio.id,
         ).first()
         if usuario and usuario.check_password(password):
             login_usuario(usuario)
-            return _redirect_pos_login_admin(usuario)
+            return _redirect_pos_login_equipe(usuario)
         flash("Usuário ou senha inválidos.", "danger")
+        return _render_tenant_login(condominio, active_tab="equipe")
 
-    return render_template(
-        "index.html",
-        **_contexto_index(condominio=condominio, slug=condominio.slug),
-    )
+    return _render_tenant_login(condominio)
 
 
 def verificar_unidade(slug):
-    condominio = obter_condominio_por_slug(slug)
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        return bloqueio
     session["tenant_slug"] = condominio.slug
 
     bloco, apartamento = normalizar_bloco_apartamento(
@@ -798,14 +864,11 @@ def verificar_unidade(slug):
 
     if not validar_unidade(bloco, apartamento):
         flash("Combinação de bloco e apartamento inválida.", "danger")
-        return render_template(
-            "index.html",
-            **_contexto_index(
-                condominio=condominio,
-                slug=condominio.slug,
-                bloco=bloco,
-                apartamento=apartamento,
-            ),
+        return _render_tenant_login(
+            condominio,
+            active_tab="morador",
+            bloco=bloco,
+            apartamento=apartamento,
         )
 
     unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
@@ -835,40 +898,31 @@ def verificar_unidade(slug):
 
     if exige_senha:
         if not senha:
-            return render_template(
-                "index.html",
-                **_contexto_index(
-                    condominio=condominio,
-                    slug=condominio.slug,
-                    exige_senha=True,
-                    bloco=bloco,
-                    apartamento=apartamento,
-                ),
+            return _render_tenant_login(
+                condominio,
+                active_tab="morador",
+                exige_senha=True,
+                bloco=bloco,
+                apartamento=apartamento,
             )
 
         if not unidade.check_password(senha):
             flash("Senha incorreta.", "danger")
-            return render_template(
-                "index.html",
-                **_contexto_index(
-                    condominio=condominio,
-                    slug=condominio.slug,
-                    exige_senha=True,
-                    bloco=bloco,
-                    apartamento=apartamento,
-                ),
+            return _render_tenant_login(
+                condominio,
+                active_tab="morador",
+                exige_senha=True,
+                bloco=bloco,
+                apartamento=apartamento,
             )
 
     if unidade.status == StatusUnidade.PENDENTE:
-        return render_template(
-            "index.html",
-            **_contexto_index(
-                condominio=condominio,
-                slug=condominio.slug,
-                pendente=True,
-                bloco=bloco,
-                apartamento=apartamento,
-            ),
+        return _render_tenant_login(
+            condominio,
+            active_tab="morador",
+            pendente=True,
+            bloco=bloco,
+            apartamento=apartamento,
         )
 
     login_unidade(unidade)
@@ -942,7 +996,9 @@ def redefinir_senha(token):
 
 
 def cadastro_inicial(slug):
-    condominio = obter_condominio_por_slug(slug)
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        return bloqueio
     session["tenant_slug"] = condominio.slug
     session["cadastro_condominio_id"] = condominio.id
     session["cadastro_slug"] = condominio.slug
@@ -2166,7 +2222,9 @@ def salvar_cadastro():
 
 
 def sindico_login(slug):
-    condominio = obter_condominio_por_slug(slug)
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        return bloqueio
     session["tenant_slug"] = condominio.slug
 
     usuario_atual = get_current_user()
@@ -2492,7 +2550,7 @@ def superadmin_logout():
 def superadmin_dashboard():
     usuario = get_current_user()
     total_condominios = Condominio.query.count()
-    total_parceiros = Parceiro.query.count()
+    total_parceiros_ativos = Parceiro.query.filter_by(status="Ativo").count()
     total_usuarios = Usuario.query.filter(Usuario.role != Role.SUPERADMIN).count()
     condominios_recentes = (
         Condominio.query.order_by(Condominio.data_cadastro.desc()).limit(5).all()
@@ -2502,7 +2560,7 @@ def superadmin_dashboard():
         "superadmin_dashboard.html",
         current_user=usuario,
         total_condominios=total_condominios,
-        total_parceiros=total_parceiros,
+        total_parceiros_ativos=total_parceiros_ativos,
         total_usuarios=total_usuarios,
         condominios_recentes=condominios_recentes,
     )
@@ -2546,7 +2604,7 @@ def superadmin_condominios():
 
         logo_filename = _salvar_logo_condominio(request.files.get("logo"), slug)
 
-        condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj)
+        condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj, ativo=True)
         db.session.add(condominio)
         db.session.flush()
         db.session.add(
@@ -2649,6 +2707,234 @@ def superadmin_condominio_whitelabel(condominio_id):
     db.session.commit()
     flash(f"Identidade visual de '{condominio.nome}' atualizada.", "success")
     return redirect(url_for("superadmin_condominios"))
+
+
+@superadmin_required
+def superadmin_condominio_editar(condominio_id):
+    """Atualiza dados básicos e configuração operacional. Slug é imutável."""
+    condominio = Condominio.query.get_or_404(condominio_id)
+    nome = request.form.get("nome", "").strip()
+    cnpj = request.form.get("cnpj", "").strip() or None
+    label_agrupamento = request.form.get("label_agrupamento", "Bloco").strip() or "Bloco"
+    label_unidade = request.form.get("label_unidade", "Apto").strip() or "Apto"
+    usa_agrupamentos = request.form.get("usa_agrupamentos") == "on"
+    tem_subsindicos = request.form.get("tem_subsindicos") == "on"
+    fluxo_aprovacao_mudanca = (
+        request.form.get("fluxo_aprovacao_mudanca", "Dupla").strip() or "Dupla"
+    )
+
+    if not nome:
+        flash("Informe o nome do condomínio.", "danger")
+        return redirect(url_for("superadmin_condominios"))
+
+    if fluxo_aprovacao_mudanca not in ("Simples", "Dupla"):
+        flash("Fluxo de aprovação de mudança inválido.", "danger")
+        return redirect(url_for("superadmin_condominios"))
+
+    condominio.nome = nome
+    condominio.cnpj = cnpj
+
+    cfg = condominio.configuracao
+    if cfg is None:
+        cfg = ConfiguracaoCondominio(condominio_id=condominio.id)
+        db.session.add(cfg)
+        db.session.flush()
+
+    cfg.label_agrupamento = label_agrupamento
+    cfg.label_unidade = label_unidade
+    cfg.usa_agrupamentos = usa_agrupamentos
+    cfg.tem_subsindicos = tem_subsindicos
+    cfg.fluxo_aprovacao_mudanca = fluxo_aprovacao_mudanca
+
+    db.session.commit()
+    flash(f"Condomínio '{condominio.nome}' atualizado com sucesso.", "success")
+    return redirect(url_for("superadmin_condominios"))
+
+
+@superadmin_required
+def superadmin_condominio_desativar(condominio_id):
+    """Soft delete: marca condomínio como inativo, preservando histórico."""
+    condominio = Condominio.query.get_or_404(condominio_id)
+    if not condominio.ativo:
+        flash(f"O condomínio '{condominio.nome}' já está inativo.", "info")
+        return redirect(url_for("superadmin_condominios"))
+
+    condominio.ativo = False
+    db.session.commit()
+    flash(
+        f"Condomínio '{condominio.nome}' desativado. O acesso pela porta /c/{condominio.slug}/ está suspenso.",
+        "success",
+    )
+    return redirect(url_for("superadmin_condominios"))
+
+
+@superadmin_required
+def superadmin_condominio_ativar(condominio_id):
+    """Reativa condomínio previamente inativado (soft delete)."""
+    condominio = Condominio.query.get_or_404(condominio_id)
+    if condominio.ativo:
+        flash(f"O condomínio '{condominio.nome}' já está ativo.", "info")
+        return redirect(url_for("superadmin_condominios"))
+
+    condominio.ativo = True
+    db.session.commit()
+    flash(f"Condomínio '{condominio.nome}' reativado com sucesso.", "success")
+    return redirect(url_for("superadmin_condominios"))
+
+
+@superadmin_required
+def superadmin_parceiros():
+    """Gestão global de parceiros do Clube de Vantagens (plataforma)."""
+    usuario = get_current_user()
+    parceiros = Parceiro.query.order_by(Parceiro.data_cadastro.desc()).all()
+    auditoria_cupons = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .join(Unidade)
+        .order_by(ResgateCupom.data_resgate.desc())
+        .limit(100)
+        .all()
+    )
+
+    return render_template(
+        "superadmin_parceiros.html",
+        current_user=usuario,
+        parceiros=parceiros,
+        auditoria_cupons=auditoria_cupons,
+    )
+
+
+@superadmin_required
+def superadmin_parceiros_criar():
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    usuario_login = request.form.get("usuario_login", "").strip().lower()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not usuario_login or not email or not categoria:
+        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
+    if " " in usuario_login:
+        flash("O usuário de login não pode conter espaços.", "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
+    if Parceiro.query.filter_by(usuario_login=usuario_login).first():
+        flash("Já existe parceiro cadastrado com este usuário de login.", "warning")
+        return redirect(url_for("superadmin_parceiros"))
+
+    if Parceiro.query.filter_by(email=email).first():
+        flash("Já existe parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("superadmin_parceiros"))
+
+    parceiro = Parceiro(
+        nome_empresa=nome_empresa,
+        usuario_login=usuario_login,
+        email=email,
+        senha_hash=generate_password_hash("senha123"),
+        telefone=telefone,
+        categoria=categoria,
+        endereco=endereco,
+        descricao=descricao,
+        ativo=True,
+        status="Pendente",
+    )
+    db.session.add(parceiro)
+    db.session.commit()
+    flash(
+        "Parceiro global cadastrado. Status inicial: Pendente. Senha padrão: senha123.",
+        "success",
+    )
+    return redirect(url_for("superadmin_parceiros"))
+
+
+@superadmin_required
+def superadmin_parceiro_editar(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    nome_empresa = request.form.get("nome_empresa", "").strip()
+    usuario_login = request.form.get("usuario_login", "").strip().lower()
+    email = request.form.get("email", "").strip().lower()
+    telefone = request.form.get("telefone", "").strip() or None
+    categoria = request.form.get("categoria", "").strip()
+    endereco = request.form.get("endereco", "").strip() or None
+    descricao = request.form.get("descricao", "").strip() or None
+
+    if not nome_empresa or not usuario_login or not email or not categoria:
+        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
+    if " " in usuario_login:
+        flash("O usuário de login não pode conter espaços.", "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
+    parceiro_login_existente = Parceiro.query.filter(
+        Parceiro.usuario_login == usuario_login,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_login_existente:
+        flash("Já existe outro parceiro cadastrado com este usuário de login.", "warning")
+        return redirect(url_for("superadmin_parceiros"))
+
+    parceiro_existente = Parceiro.query.filter(
+        Parceiro.email == email,
+        Parceiro.id != parceiro.id,
+    ).first()
+    if parceiro_existente:
+        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
+        return redirect(url_for("superadmin_parceiros"))
+
+    parceiro.nome_empresa = nome_empresa
+    parceiro.usuario_login = usuario_login
+    parceiro.email = email
+    parceiro.telefone = telefone
+    parceiro.categoria = categoria
+    parceiro.endereco = endereco
+    parceiro.descricao = descricao
+    db.session.commit()
+    flash("Parceiro atualizado com sucesso.", "success")
+    return redirect(url_for("superadmin_parceiros"))
+
+
+@superadmin_required
+def superadmin_parceiro_bloquear(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    usuario = get_current_user()
+
+    parceiro.status = "Bloqueado"
+    parceiro.ativo = False
+    Cupom.query.filter_by(parceiro_id=parceiro.id).update(
+        {"ativo": False},
+        synchronize_session=False,
+    )
+    _registrar_auditoria(
+        usuario,
+        f"Parceiro global bloqueado: {parceiro.nome_empresa} ({parceiro.email}).",
+    )
+    db.session.commit()
+    flash(
+        "Parceiro bloqueado. Os cupons deste parceiro foram removidos da vitrine.",
+        "warning",
+    )
+    return redirect(url_for("superadmin_parceiros"))
+
+
+@superadmin_required
+def superadmin_parceiro_ativar(parceiro_id):
+    parceiro = Parceiro.query.get_or_404(parceiro_id)
+    usuario = get_current_user()
+
+    parceiro.status = "Ativo"
+    parceiro.ativo = True
+    _registrar_auditoria(
+        usuario,
+        f"Parceiro global reativado: {parceiro.nome_empresa} ({parceiro.email}).",
+    )
+    db.session.commit()
+    flash("Parceiro reativado com sucesso.", "success")
+    return redirect(url_for("superadmin_parceiros"))
 
 
 def admin_login():
@@ -2801,27 +3087,9 @@ def admin_index():
 
 @admin_required
 def admin_clube_vantagens():
+    """Admin local: apenas Relatórios/Analytics do próprio condomínio."""
     usuario = get_current_user()
-    parceiros_clube = Parceiro.query.order_by(Parceiro.data_cadastro.desc()).all()
-    auditoria_cupons = (
-        ResgateCupom.query.join(Cupom).join(Parceiro).join(Unidade)
-        .order_by(ResgateCupom.data_resgate.desc())
-        .all()
-    )
-
-    return render_template(
-        "admin_clube_vantagens.html",
-        parceiros_clube=parceiros_clube,
-        auditoria_cupons=auditoria_cupons,
-        current_user=usuario,
-        active_tab="gestao",
-    )
-
-
-@admin_required
-def admin_clube_vantagens_analytics():
-    usuario = get_current_user()
-    analytics = _montar_analytics_clube()
+    analytics = _montar_analytics_clube(condominio_id=usuario.condominio_id)
 
     return render_template(
         "admin_clube_vantagens.html",
@@ -2831,133 +3099,8 @@ def admin_clube_vantagens_analytics():
     )
 
 
-@admin_or_assistente_required
-def admin_parceiros_criar():
-    nome_empresa = request.form.get("nome_empresa", "").strip()
-    usuario_login = request.form.get("usuario_login", "").strip().lower()
-    email = request.form.get("email", "").strip().lower()
-    telefone = request.form.get("telefone", "").strip() or None
-    categoria = request.form.get("categoria", "").strip()
-    endereco = request.form.get("endereco", "").strip() or None
-    descricao = request.form.get("descricao", "").strip() or None
-
-    if not nome_empresa or not usuario_login or not email or not categoria:
-        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    if " " in usuario_login:
-        flash("O usuário de login não pode conter espaços.", "danger")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    if Parceiro.query.filter_by(usuario_login=usuario_login).first():
-        flash("Já existe parceiro cadastrado com este usuário de login.", "warning")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    if Parceiro.query.filter_by(email=email).first():
-        flash("Já existe parceiro cadastrado com este e-mail.", "warning")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    parceiro = Parceiro(
-        nome_empresa=nome_empresa,
-        usuario_login=usuario_login,
-        email=email,
-        senha_hash=generate_password_hash("senha123"),
-        telefone=telefone,
-        categoria=categoria,
-        endereco=endereco,
-        descricao=descricao,
-        ativo=True,
-        status="Pendente",
-    )
-    db.session.add(parceiro)
-    db.session.commit()
-    flash("Parceiro cadastrado com sucesso. Status inicial: Pendente.", "success")
-    return redirect(url_for("admin_clube_vantagens"))
-
-
 @admin_required
-def admin_parceiro_editar(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    nome_empresa = request.form.get("nome_empresa", "").strip()
-    usuario_login = request.form.get("usuario_login", "").strip().lower()
-    email = request.form.get("email", "").strip().lower()
-    telefone = request.form.get("telefone", "").strip() or None
-    categoria = request.form.get("categoria", "").strip()
-    endereco = request.form.get("endereco", "").strip() or None
-    descricao = request.form.get("descricao", "").strip() or None
-
-    if not nome_empresa or not usuario_login or not email or not categoria:
-        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    if " " in usuario_login:
-        flash("O usuário de login não pode conter espaços.", "danger")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    parceiro_login_existente = Parceiro.query.filter(
-        Parceiro.usuario_login == usuario_login,
-        Parceiro.id != parceiro.id,
-    ).first()
-    if parceiro_login_existente:
-        flash("Já existe outro parceiro cadastrado com este usuário de login.", "warning")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    parceiro_existente = Parceiro.query.filter(
-        Parceiro.email == email,
-        Parceiro.id != parceiro.id,
-    ).first()
-    if parceiro_existente:
-        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
-        return redirect(url_for("admin_clube_vantagens"))
-
-    parceiro.nome_empresa = nome_empresa
-    parceiro.usuario_login = usuario_login
-    parceiro.email = email
-    parceiro.telefone = telefone
-    parceiro.categoria = categoria
-    parceiro.endereco = endereco
-    parceiro.descricao = descricao
-    db.session.commit()
-    flash("Parceiro atualizado com sucesso.", "success")
-    return redirect(url_for("admin_clube_vantagens"))
-
-
-@admin_required
-def admin_parceiro_bloquear(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    usuario = get_current_user()
-
-    parceiro.status = "Bloqueado"
-    parceiro.ativo = False
-    Cupom.query.filter_by(parceiro_id=parceiro.id).update(
-        {"ativo": False},
-        synchronize_session=False,
-    )
-    _registrar_auditoria(
-        usuario,
-        f"Parceiro bloqueado: {parceiro.nome_empresa} ({parceiro.email}).",
-    )
-    db.session.commit()
-    flash(
-        "Parceiro bloqueado. Os cupons deste parceiro foram removidos da vitrine.",
-        "warning",
-    )
-    return redirect(url_for("admin_clube_vantagens"))
-
-
-@admin_required
-def admin_parceiro_ativar(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    usuario = get_current_user()
-
-    parceiro.status = "Ativo"
-    parceiro.ativo = True
-    _registrar_auditoria(
-        usuario,
-        f"Parceiro reativado: {parceiro.nome_empresa} ({parceiro.email}).",
-    )
-    db.session.commit()
-    flash("Parceiro reativado com sucesso.", "success")
+def admin_clube_vantagens_analytics():
     return redirect(url_for("admin_clube_vantagens"))
 
 
@@ -3928,6 +4071,54 @@ def init_app(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/editar",
+        "superadmin_condominio_editar",
+        superadmin_condominio_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/desativar",
+        "superadmin_condominio_desativar",
+        superadmin_condominio_desativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/ativar",
+        "superadmin_condominio_ativar",
+        superadmin_condominio_ativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/parceiros",
+        "superadmin_parceiros",
+        superadmin_parceiros,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/superadmin/parceiros/criar",
+        "superadmin_parceiros_criar",
+        superadmin_parceiros_criar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/parceiros/<int:parceiro_id>/editar",
+        "superadmin_parceiro_editar",
+        superadmin_parceiro_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/parceiros/<int:parceiro_id>/bloquear",
+        "superadmin_parceiro_bloquear",
+        superadmin_parceiro_bloquear,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/parceiros/<int:parceiro_id>/ativar",
+        "superadmin_parceiro_ativar",
+        superadmin_parceiro_ativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/admin/login", "admin_login", admin_login, methods=["GET", "POST"]
     )
     app.add_url_rule("/admin/logout", "admin_logout", admin_logout, methods=["GET"])
@@ -4011,30 +4202,6 @@ def init_app(app):
         "/admin/alterar-senha-sindico",
         "admin_alterar_senha_sindico",
         admin_alterar_senha_sindico,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/parceiros/criar",
-        "admin_parceiros_criar",
-        admin_parceiros_criar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/parceiros/<int:parceiro_id>/editar",
-        "admin_parceiro_editar",
-        admin_parceiro_editar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/parceiros/<int:parceiro_id>/bloquear",
-        "admin_parceiro_bloquear",
-        admin_parceiro_bloquear,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/parceiros/<int:parceiro_id>/ativar",
-        "admin_parceiro_ativar",
-        admin_parceiro_ativar,
         methods=["POST"],
     )
     app.add_url_rule(

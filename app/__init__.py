@@ -354,6 +354,26 @@ def _garantir_colunas_whitelabel():
         db.session.commit()
 
 
+def _garantir_coluna_ativo_condominio():
+    """Soft delete: garante coluna ativo em condominio e backfill True."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    if "ativo" in colunas:
+        return
+
+    db.session.execute(
+        text(
+            "ALTER TABLE condominio ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT 1"
+        )
+    )
+    db.session.commit()
+    db.session.execute(text("UPDATE condominio SET ativo = 1 WHERE ativo IS NULL"))
+    db.session.commit()
+
+
 def _seed_condominio_transicao():
     """
     Seed de transição multi-tenant:
@@ -586,6 +606,7 @@ def create_app(config=None):
         _garantir_colunas_multi_tenant()
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
+        _garantir_coluna_ativo_condominio()
         _seed_condominio_transicao()
         _migrar_sindico_agrupamentos()
         _garantir_colunas_unidades()

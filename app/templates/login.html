@@ -1,41 +1,46 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
 {% block title %}{{ titulo }}{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-5">
-        <div class="card shadow-sm">
-            <div class="card-body p-4">
-                {% if condominio %}
-                <p class="text-muted small mb-1">Bem-vindo ao</p>
-                <h1 class="h4 mb-3">{{ condominio.nome }}</h1>
-                <p class="fw-semibold mb-3">{{ titulo }}</p>
-                {% else %}
-                <h1 class="h4 mb-3">{{ titulo }}</h1>
-                {% endif %}
-                <form method="post"
-                      action="{% if action == 'superadmin' %}{{ url_for('superadmin_login') }}{% elif action == 'admin' %}{{ url_for('tenant_login', slug=slug or 'prp') }}{% elif action == 'portaria' %}{{ url_for('portaria_login') }}{% elif action == 'sindico' %}{{ url_for('sindico_login', slug=slug or 'prp') }}{% else %}{{ url_for('sindico_login', slug=slug or 'prp') }}{% endif %}">
-                    {% if action == 'admin' %}
-                    <input type="hidden" name="perfil" value="admin">
-                    {% endif %}
-                    <div class="mb-3">
-                        <label for="username" class="form-label">Usuário</label>
-                        <input type="text" class="form-control" id="username" name="username" required autofocus>
-                    </div>
-                    <div class="mb-3">
-                        <label for="password" class="form-label">Senha</label>
-                        <input type="password" class="form-control" id="password" name="password" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Entrar</button>
-                </form>
-                {% if slug and action == 'sindico' %}
-                <div class="text-center mt-3">
-                    <a href="{{ url_for('tenant_login', slug=slug) }}" class="small">Voltar ao acesso do condomínio</a>
-                </div>
-                {% endif %}
-            </div>
+{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
+
+<div class="card auth-card shadow-lg">
+    <div class="card-body p-4 p-md-5">
+        <div class="text-center mb-4">
+            {% if brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ condominio.nome }}" class="auth-logo mb-2">
+            <p class="text-muted small mb-2">{{ condominio.nome }}</p>
+            {% elif condominio %}
+            <h1 class="h4 mb-2">{{ condominio.nome }}</h1>
+            {% endif %}
+            <p class="fw-semibold mb-0">{{ titulo }}</p>
         </div>
+
+        <form method="post"
+              action="{% if action == 'superadmin' %}{{ url_for('superadmin_login') }}{% elif action == 'admin' %}{{ url_for('tenant_login', slug=slug or 'prp') }}{% elif action == 'portaria' %}{{ url_for('portaria_login') }}{% else %}{{ url_for('sindico_login', slug=slug or 'prp') }}{% endif %}">
+            {% if action == 'admin' %}
+            <input type="hidden" name="perfil" value="equipe">
+            {% endif %}
+            <div class="mb-3">
+                <label for="username" class="form-label">Usuário</label>
+                <input type="text" class="form-control" id="username" name="username" required autofocus>
+            </div>
+            <div class="mb-3">
+                <label for="password" class="form-label">Senha</label>
+                <input type="password" class="form-control" id="password" name="password" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Entrar</button>
+        </form>
+
+        {% if slug and action == 'sindico' %}
+        <div class="text-center mt-3">
+            <a href="{{ url_for('tenant_login', slug=slug) }}" class="small text-muted text-decoration-none">
+                Voltar ao acesso do condomínio
+            </a>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

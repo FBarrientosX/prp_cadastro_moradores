@@ -55,6 +55,8 @@ class Condominio(db.Model):
     nome = db.Column(db.String(200), nullable=False)
     slug = db.Column(db.String(50), unique=True, nullable=True, index=True)
     cnpj = db.Column(db.String(18), nullable=True)
+    # Soft delete: cliente inativo permanece no histórico (não hard delete).
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     configuracao = db.relationship(

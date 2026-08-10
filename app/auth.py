@@ -31,6 +31,14 @@ def obter_condominio_por_slug(slug):
     return Condominio.query.filter_by(slug=normalizar_slug(slug)).first_or_404()
 
 
+def condominio_esta_ativo(condominio):
+    """Soft delete: None/ausente trata como ativo (compatibilidade de migração)."""
+    if condominio is None:
+        return False
+    ativo = getattr(condominio, "ativo", True)
+    return ativo is not False and ativo != 0
+
+
 def obter_condominio_padrao_id():
     """Fallback legado — preferir slug/sessão nas portas de entrada."""
     condominio = Condominio.query.filter_by(slug="prp").first()

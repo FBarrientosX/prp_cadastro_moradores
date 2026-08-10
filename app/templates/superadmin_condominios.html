@@ -33,6 +33,7 @@
                         <th>Nome</th>
                         <th>Slug</th>
                         <th>CNPJ</th>
+                        <th>Status</th>
                         <th>Agrupamento / Unidade</th>
                         <th>Flags</th>
                         <th>Fluxo Mudança</th>
@@ -44,7 +45,8 @@
                     {% for condo in condominios %}
                     {% set cfg = condo.configuracao %}
                     {% set qtd_admins = admins_por_condominio.get(condo.id, 0) %}
-                    <tr>
+                    {% set condo_ativo = condo.ativo is not false and condo.ativo != 0 %}
+                    <tr class="{% if not condo_ativo %}table-secondary{% endif %}">
                         <td class="fw-semibold">{{ condo.nome }}</td>
                         <td>
                             {% if condo.slug %}
@@ -54,6 +56,13 @@
                             {% endif %}
                         </td>
                         <td>{{ condo.cnpj or '—' }}</td>
+                        <td>
+                            {% if condo_ativo %}
+                            <span class="badge bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge bg-danger">Inativo</span>
+                            {% endif %}
+                        </td>
                         <td>
                             {% if cfg %}
                             {{ cfg.label_agrupamento }} / {{ cfg.label_unidade }}
@@ -86,6 +95,12 @@
                             </span>
                         </td>
                         <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalEditarCondominio{{ condo.id }}"
+                                    title="Editar">
+                                <i class="bi bi-pencil"></i>
+                            </button>
                             <button type="button" class="btn btn-sm btn-outline-secondary"
                                     data-bs-toggle="modal"
                                     data-bs-target="#modalWhitelabel{{ condo.id }}">
@@ -96,6 +111,23 @@
                                     data-bs-target="#modalPrimeiroAdmin{{ condo.id }}">
                                 <i class="bi bi-person-plus me-1"></i>Primeiro Admin
                             </button>
+                            {% if condo_ativo %}
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('superadmin_condominio_desativar', condominio_id=condo.id) }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger"
+                                        onclick="return confirm('Tem certeza?');">
+                                    Desativar
+                                </button>
+                            </form>
+                            {% else %}
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('superadmin_condominio_ativar', condominio_id=condo.id) }}">
+                                <button type="submit" class="btn btn-sm btn-outline-success"
+                                        onclick="return confirm('Tem certeza?');">
+                                    Reativar
+                                </button>
+                            </form>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -212,9 +244,121 @@
     </div>
 </div>
 
-{# Modais: white-label e primeiro admin por condomínio #}
+{# Modais: editar, white-label e primeiro admin por condomínio #}
 {% for condo in condominios %}
 {% set cfg = condo.configuracao %}
+<div class="modal fade" id="modalEditarCondominio{{ condo.id }}" tabindex="-1"
+     aria-labelledby="modalEditarCondominioLabel{{ condo.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <form method="post"
+                  action="{{ url_for('superadmin_condominio_editar', condominio_id=condo.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEditarCondominioLabel{{ condo.id }}">
+                        Editar Condomínio — {{ condo.nome }}
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="edit_nome_{{ condo.id }}">Nome</label>
+                            <input type="text" class="form-control" id="edit_nome_{{ condo.id }}"
+                                   name="nome" required maxlength="200" value="{{ condo.nome }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label" for="edit_slug_{{ condo.id }}">Slug (URL)</label>
+                            <input type="text" class="form-control" id="edit_slug_{{ condo.id }}"
+                                   name="slug" value="{{ condo.slug or '' }}" readonly
+                                   tabindex="-1" aria-readonly="true">
+                            <div class="form-text">O slug não pode ser alterado (links salvos pelos moradores).</div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label" for="edit_cnpj_{{ condo.id }}">CNPJ</label>
+                            <input type="text" class="form-control" id="edit_cnpj_{{ condo.id }}"
+                                   name="cnpj" maxlength="18" value="{{ condo.cnpj or '' }}"
+                                   placeholder="00.000.000/0000-00">
+                        </div>
+
+                        <div class="col-12">
+                            <hr class="my-1">
+                            <p class="small text-muted mb-0">Configuração operacional</p>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_label_agrupamento_{{ condo.id }}">Label Agrupamento</label>
+                            <select class="form-select" id="edit_label_agrupamento_{{ condo.id }}"
+                                    name="label_agrupamento">
+                                {% for opcao in labels_agrupamento %}
+                                <option value="{{ opcao }}"
+                                    {% if cfg and cfg.label_agrupamento == opcao %}selected
+                                    {% elif not cfg and opcao == 'Bloco' %}selected{% endif %}>
+                                    {{ opcao }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_label_unidade_{{ condo.id }}">Label Unidade</label>
+                            <select class="form-select" id="edit_label_unidade_{{ condo.id }}"
+                                    name="label_unidade">
+                                {% for opcao in labels_unidade %}
+                                <option value="{{ opcao }}"
+                                    {% if cfg and cfg.label_unidade == opcao %}selected
+                                    {% elif not cfg and opcao == 'Apto' %}selected{% endif %}>
+                                    {{ opcao }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_fluxo_{{ condo.id }}">Fluxo Aprovação Mudança</label>
+                            <select class="form-select" id="edit_fluxo_{{ condo.id }}"
+                                    name="fluxo_aprovacao_mudanca">
+                                <option value="Dupla"
+                                    {% if not cfg or cfg.fluxo_aprovacao_mudanca == 'Dupla' %}selected{% endif %}>
+                                    Dupla (Síndico + Admin)
+                                </option>
+                                <option value="Simples"
+                                    {% if cfg and cfg.fluxo_aprovacao_mudanca == 'Simples' %}selected{% endif %}>
+                                    Simples
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       id="edit_usa_agrupamentos_{{ condo.id }}"
+                                       name="usa_agrupamentos"
+                                       {% if not cfg or cfg.usa_agrupamentos %}checked{% endif %}>
+                                <label class="form-check-label" for="edit_usa_agrupamentos_{{ condo.id }}">
+                                    Usa agrupamentos (blocos/torres)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       id="edit_tem_subsindicos_{{ condo.id }}"
+                                       name="tem_subsindicos"
+                                       {% if not cfg or cfg.tem_subsindicos %}checked{% endif %}>
+                                <label class="form-check-label" for="edit_tem_subsindicos_{{ condo.id }}">
+                                    Tem subsíndicos
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar alterações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade" id="modalWhitelabel{{ condo.id }}" tabindex="-1"
      aria-labelledby="modalWhitelabelLabel{{ condo.id }}" aria-hidden="true">
     <div class="modal-dialog">
