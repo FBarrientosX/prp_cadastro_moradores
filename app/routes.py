@@ -5,9 +5,19 @@ import random
 import string
 import traceback
 
-from flask import flash, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    current_app,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from sqlalchemy import and_, case, func, or_
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 from app import db
 from app.auth import (
@@ -20,9 +30,14 @@ from app.auth import (
     login_usuario,
     logout_unidade,
     logout_usuario,
+    normalizar_slug,
+    obter_condominio_por_slug,
     portaria_required,
+    resolver_condominio_id,
     sindico_required,
+    superadmin_required,
     unidade_required,
+    validar_slug,
 )
 from app.email_service import (
     enviar_email_nova_reserva,
@@ -34,6 +49,8 @@ from app.email_service import (
 )
 from app.models import (
     AgendamentoMudanca,
+    Condominio,
+    ConfiguracaoCondominio,
     Cupom,
     EspacoComum,
     LogAuditoria,
@@ -42,6 +59,7 @@ from app.models import (
     Reserva,
     ResgateCupom,
     Role,
+    SindicoAgrupamento,
     StatusAgendamentoMudanca,
     StatusDocumento,
     StatusUnidade,
@@ -53,7 +71,6 @@ from app.models import (
 from app.utils import (
     SALT_RECUPERACAO_MORADOR,
     SALT_RECUPERACAO_PARCEIRO,
-    blocos_equivalentes,
     gerar_token_redefinicao,
     get_apartamentos_bloco,
     get_condominio_estrutura,
@@ -74,8 +91,50 @@ def _contexto_index(**extra):
     return base
 
 
-def _buscar_unidade(bloco, apartamento):
-    return Unidade.query.filter_by(bloco=bloco, apartamento=apartamento).first()
+def _slug_sessao_ou_prp():
+    return session.get("tenant_slug") or session.get("cadastro_slug") or "prp"
+
+
+_LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
+
+
+def _normalizar_cor_primaria(valor):
+    cor = str(valor or "").strip()
+    if len(cor) == 7 and cor.startswith("#"):
+        try:
+            int(cor[1:], 16)
+            return cor.lower()
+        except ValueError:
+            pass
+    return "#0d6efd"
+
+
+def _salvar_logo_condominio(arquivo, slug):
+    """Salva logo em static/uploads/logos e retorna o filename, ou None."""
+    if not arquivo or not arquivo.filename:
+        return None
+
+    nome_seguro = secure_filename(arquivo.filename)
+    if not nome_seguro or "." not in nome_seguro:
+        return None
+
+    extensao = nome_seguro.rsplit(".", 1)[-1].lower()
+    if extensao not in _LOGO_EXTENSIONS:
+        return None
+
+    pasta = current_app.config["UPLOAD_LOGOS_FOLDER"]
+    os.makedirs(pasta, exist_ok=True)
+    token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    nome_final = f"{slug}_{token}.{extensao}"
+    arquivo.save(os.path.join(pasta, nome_final))
+    return nome_final
+
+
+def _buscar_unidade(bloco, apartamento, condominio_id=None):
+    query = Unidade.query.filter_by(bloco=bloco, apartamento=apartamento)
+    if condominio_id is not None:
+        query = query.filter_by(condominio_id=condominio_id)
+    return query.first()
 
 
 def _buscar_unidade_e_email_login(email):
@@ -123,10 +182,48 @@ def _buscar_unidade_e_email_login(email):
     return None, None
 
 
+def _agrupamentos_sindico(usuario):
+    """Lista os nomes de agrupamento (blocos) sob jurisdição do síndico."""
+    if not usuario:
+        return []
+    return [agrup.nome_agrupamento for agrup in usuario.agrupamentos]
+
+
+def _blocos_codigo_sindico(usuario):
+    """Códigos normalizados dos agrupamentos do síndico (ex.: '1', '6')."""
+    return [
+        normalizar_bloco_codigo(nome) for nome in _agrupamentos_sindico(usuario)
+    ]
+
+
+def _chaves_agrupamento_sindico(usuario):
+    """Valores possíveis para filtros SQL em EspacoComum.bloco_vinculado."""
+    chaves = set()
+    for nome in _agrupamentos_sindico(usuario):
+        chaves.add(nome)
+        codigo = normalizar_bloco_codigo(nome)
+        chaves.add(codigo)
+        chaves.add(f"Bloco {codigo}")
+    return list(chaves)
+
+
+def _sindico_gerencia_bloco(usuario, bloco):
+    if not bloco:
+        return False
+    bloco_norm = normalizar_bloco_codigo(bloco)
+    return bloco_norm in _blocos_codigo_sindico(usuario)
+
+
+def _label_agrupamentos_sindico(usuario):
+    nomes = _agrupamentos_sindico(usuario)
+    return ", ".join(nomes) if nomes else "—"
+
+
 def _registrar_auditoria(usuario, mensagem):
     db.session.add(
         LogAuditoria(
             usuario_id=usuario.id,
+            condominio_id=resolver_condominio_id(usuario=usuario),
             mensagem=mensagem,
         )
     )
@@ -581,7 +678,7 @@ def acesso_reservas_required(view):
         if get_current_user() or get_unidade_logada():
             return view(*args, **kwargs)
         flash("Faça login para acessar o módulo de reservas.", "warning")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
 
     return wrapped
 
@@ -616,7 +713,7 @@ def _usuario_pode_gerenciar_espaco(usuario, espaco):
     if not usuario:
         return False
     if usuario.role == Role.SINDICO:
-        return espaco.bloco_vinculado == usuario.bloco_responsavel
+        return _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado)
     if usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         return espaco.gerenciado_por == "admin"
     return False
@@ -627,7 +724,10 @@ def _reservas_pendentes_por_jurisdicao(usuario):
         return []
     query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
     if usuario.role == Role.SINDICO:
-        query = query.filter(EspacoComum.bloco_vinculado == usuario.bloco_responsavel)
+        chaves = _chaves_agrupamento_sindico(usuario)
+        if not chaves:
+            return []
+        query = query.filter(EspacoComum.bloco_vinculado.in_(chaves))
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         query = query.filter(EspacoComum.gerenciado_por == "admin")
     else:
@@ -654,10 +754,43 @@ def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
 
 
 def index():
-    return render_template("index.html", **_contexto_index())
+    """Porta genérica da plataforma — redireciona ao tenant legado PRP."""
+    return redirect(url_for("tenant_login", slug="prp"))
 
 
-def verificar_unidade():
+def tenant_login(slug):
+    """Login de Morador (formulário) e Admin local do condomínio."""
+    condominio = obter_condominio_por_slug(slug)
+    session["tenant_slug"] = condominio.slug
+
+    usuario_logado = get_current_user()
+    if usuario_logado and usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE):
+        if usuario_logado.condominio_id == condominio.id:
+            return _redirect_pos_login_admin(usuario_logado)
+
+    if request.method == "POST" and request.form.get("perfil") == "admin":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        usuario = Usuario.query.filter(
+            Usuario.username == username,
+            Usuario.role.in_([Role.ADMIN, Role.ASSISTENTE]),
+            Usuario.condominio_id == condominio.id,
+        ).first()
+        if usuario and usuario.check_password(password):
+            login_usuario(usuario)
+            return _redirect_pos_login_admin(usuario)
+        flash("Usuário ou senha inválidos.", "danger")
+
+    return render_template(
+        "index.html",
+        **_contexto_index(condominio=condominio, slug=condominio.slug),
+    )
+
+
+def verificar_unidade(slug):
+    condominio = obter_condominio_por_slug(slug)
+    session["tenant_slug"] = condominio.slug
+
     bloco, apartamento = normalizar_bloco_apartamento(
         request.form.get("bloco", ""),
         request.form.get("apartamento", ""),
@@ -667,22 +800,31 @@ def verificar_unidade():
         flash("Combinação de bloco e apartamento inválida.", "danger")
         return render_template(
             "index.html",
-            **_contexto_index(bloco=bloco, apartamento=apartamento),
+            **_contexto_index(
+                condominio=condominio,
+                slug=condominio.slug,
+                bloco=bloco,
+                apartamento=apartamento,
+            ),
         )
 
-    unidade = _buscar_unidade(bloco, apartamento)
+    unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
 
     if not unidade:
         session["cadastro_bloco"] = bloco
         session["cadastro_apartamento"] = apartamento
-        return redirect(url_for("cadastro_inicial"))
+        session["cadastro_condominio_id"] = condominio.id
+        session["cadastro_slug"] = condominio.slug
+        return redirect(url_for("cadastro_inicial", slug=condominio.slug))
 
     if unidade.status == StatusUnidade.REPROVADA:
         db.session.delete(unidade)
         db.session.commit()
         session["cadastro_bloco"] = bloco
         session["cadastro_apartamento"] = apartamento
-        return redirect(url_for("cadastro_inicial"))
+        session["cadastro_condominio_id"] = condominio.id
+        session["cadastro_slug"] = condominio.slug
+        return redirect(url_for("cadastro_inicial", slug=condominio.slug))
 
     senha = request.form.get("senha", "").strip()
     exige_senha = unidade.status in (
@@ -696,6 +838,8 @@ def verificar_unidade():
             return render_template(
                 "index.html",
                 **_contexto_index(
+                    condominio=condominio,
+                    slug=condominio.slug,
                     exige_senha=True,
                     bloco=bloco,
                     apartamento=apartamento,
@@ -707,6 +851,8 @@ def verificar_unidade():
             return render_template(
                 "index.html",
                 **_contexto_index(
+                    condominio=condominio,
+                    slug=condominio.slug,
                     exige_senha=True,
                     bloco=bloco,
                     apartamento=apartamento,
@@ -717,6 +863,8 @@ def verificar_unidade():
         return render_template(
             "index.html",
             **_contexto_index(
+                condominio=condominio,
+                slug=condominio.slug,
                 pendente=True,
                 bloco=bloco,
                 apartamento=apartamento,
@@ -749,9 +897,12 @@ def esqueci_senha():
                 return redirect(url_for("esqueci_senha"))
 
         flash(mensagem_generica, "info")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
 
-    return render_template("esqueci_senha.html")
+    return render_template(
+        "esqueci_senha.html",
+        slug=_slug_sessao_ou_prp(),
+    )
 
 
 def redefinir_senha(token):
@@ -782,22 +933,33 @@ def redefinir_senha(token):
             "Senha redefinida com sucesso. Acesse com bloco, apartamento e a nova senha.",
             "success",
         )
-        return redirect(url_for("index"))
+        slug = "prp"
+        if unidade.condominio and unidade.condominio.slug:
+            slug = unidade.condominio.slug
+        return redirect(url_for("tenant_login", slug=slug))
 
     return render_template("redefinir_senha.html", token=token)
 
 
-def cadastro_inicial():
+def cadastro_inicial(slug):
+    condominio = obter_condominio_por_slug(slug)
+    session["tenant_slug"] = condominio.slug
+    session["cadastro_condominio_id"] = condominio.id
+    session["cadastro_slug"] = condominio.slug
+
+    if request.method == "POST":
+        return salvar_cadastro()
+
     bloco = session.get("cadastro_bloco")
     apartamento = session.get("cadastro_apartamento")
 
     if not bloco or not apartamento or not validar_unidade(bloco, apartamento):
         flash("Selecione um bloco e apartamento válidos.", "warning")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=condominio.slug))
 
-    if _buscar_unidade(bloco, apartamento):
+    if _buscar_unidade(bloco, apartamento, condominio_id=condominio.id):
         flash("Esta unidade já possui cadastro.", "warning")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=condominio.slug))
 
     return render_template(
         "cadastro_morador.html",
@@ -805,6 +967,8 @@ def cadastro_inicial():
         apartamento=apartamento,
         modo="cadastro",
         vinculos=VinculoPessoa.CHOICES,
+        condominio=condominio,
+        slug=condominio.slug,
     )
 
 
@@ -812,7 +976,7 @@ def cadastro_inicial():
 def atualizar_dados(unidade):
     if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
         flash("Esta unidade não pode ser atualizada no momento.", "warning")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
 
     pessoas = unidade.pessoas.all()
     veiculos = unidade.veiculos.all()
@@ -826,6 +990,7 @@ def atualizar_dados(unidade):
         pessoas=pessoas,
         veiculos=veiculos,
         unidade=unidade,
+        slug=_slug_sessao_ou_prp(),
     )
 
 
@@ -1419,10 +1584,13 @@ def reservas():
 
     if usuario:
         if usuario.role == Role.SINDICO:
+            chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
             espacos = (
-                EspacoComum.query.filter_by(bloco_vinculado=usuario.bloco_responsavel)
+                EspacoComum.query.filter(EspacoComum.bloco_vinculado.in_(chaves_agrupamento))
                 .order_by(EspacoComum.nome)
                 .all()
+                if chaves_agrupamento
+                else []
             )
         elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
             espacos = (
@@ -1437,12 +1605,16 @@ def reservas():
         )
 
         if usuario.role == Role.SINDICO:
-            filtro_jurisdicao = EspacoComum.bloco_vinculado == usuario.bloco_responsavel
-            unidades_gestao = [
-                unidade
-                for unidade in Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
-                if blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel)
-            ]
+            chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
+            filtro_jurisdicao = EspacoComum.bloco_vinculado.in_(chaves_agrupamento or [""])
+            blocos_sindico = _blocos_codigo_sindico(usuario)
+            unidades_gestao = (
+                Unidade.query.filter(Unidade.bloco.in_(blocos_sindico))
+                .order_by(Unidade.bloco, Unidade.apartamento)
+                .all()
+                if blocos_sindico
+                else []
+            )
         else:
             filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
 
@@ -1582,8 +1754,8 @@ def criar_reserva_gestao():
             flash("Unidade inválida para vinculação da reserva.", "danger")
             return redirect(url_for("reservas"))
 
-        if usuario.role == Role.SINDICO and not blocos_equivalentes(
-            unidade.bloco, usuario.bloco_responsavel
+        if usuario.role == Role.SINDICO and not _sindico_gerencia_bloco(
+            usuario, unidade.bloco
         ):
             flash("Você só pode vincular reservas a unidades do seu bloco.", "danger")
             return redirect(url_for("reservas"))
@@ -1652,8 +1824,9 @@ def responder_reserva(reserva_id):
 def api_reservas_eventos():
     usuario = get_current_user()
     if usuario.role == Role.SINDICO:
+        chaves = _chaves_agrupamento_sindico(usuario)
         query = Reserva.query.join(EspacoComum).filter(
-            EspacoComum.bloco_vinculado == usuario.bloco_responsavel,
+            EspacoComum.bloco_vinculado.in_(chaves or [""]),
             Reserva.status.in_(["Pendente", "Aprovada"]),
         )
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
@@ -1798,7 +1971,7 @@ def salvar_espaco_reserva():
     if espaco_id:
         espaco = EspacoComum.query.get_or_404(int(espaco_id))
         if usuario.role == Role.SINDICO:
-            if espaco.bloco_vinculado != usuario.bloco_responsavel:
+            if not _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado):
                 flash("Você não tem permissão para editar este espaço.", "danger")
                 return redirect(url_for("reservas"))
         elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
@@ -1814,8 +1987,13 @@ def salvar_espaco_reserva():
     espaco.dias_funcionamento = ",".join(dias_selecionados)
 
     if usuario.role == Role.SINDICO:
+        agrupamentos = _agrupamentos_sindico(usuario)
+        if not agrupamentos:
+            flash("Síndico sem agrupamento vinculado. Contate a administração.", "danger")
+            return redirect(url_for("reservas"))
         espaco.gerenciado_por = "sindico"
-        espaco.bloco_vinculado = usuario.bloco_responsavel
+        # Espaço continua vinculado a um agrupamento; usa o primeiro até haver seletor.
+        espaco.bloco_vinculado = agrupamentos[0]
         espaco.apenas_moradores_bloco = apenas_moradores_bloco
     else:
         espaco.gerenciado_por = "admin"
@@ -1828,10 +2006,11 @@ def salvar_espaco_reserva():
 
 
 def sair():
+    slug = _slug_sessao_ou_prp()
     logout_unidade()
     logout_usuario()
     flash("Sessão encerrada.", "info")
-    return redirect(url_for("index"))
+    return redirect(url_for("tenant_login", slug=slug))
 
 
 @unidade_required
@@ -1847,22 +2026,31 @@ def salvar_cadastro():
     apartamento = session.get("cadastro_apartamento")
     unidade_logada = get_unidade_logada()
     modo_atualizacao = unidade_logada is not None
+    slug_retorno = _slug_sessao_ou_prp()
 
     if modo_atualizacao:
         unidade = unidade_logada
         bloco = unidade.bloco
         apartamento = unidade.apartamento
+        condominio_id = unidade.condominio_id
     else:
         if not bloco or not apartamento:
             flash("Sessão expirada. Selecione bloco e apartamento novamente.", "warning")
-            return redirect(url_for("index"))
+            return redirect(url_for("tenant_login", slug=slug_retorno))
+        condominio_id = session.get("cadastro_condominio_id")
+        if not condominio_id:
+            flash(
+                "Sessão do condomínio expirada. Acesse pelo link do seu condomínio.",
+                "warning",
+            )
+            return redirect(url_for("tenant_login", slug=slug_retorno))
         unidade = None
 
     bloco, apartamento = normalizar_bloco_apartamento(bloco, apartamento)
 
     if not validar_unidade(bloco, apartamento):
         flash("Combinação de bloco e apartamento inválida.", "danger")
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=slug_retorno))
 
     senha = request.form.get("senha", "").strip()
     confirmar_senha = request.form.get("confirmar_senha", "").strip()
@@ -1884,7 +2072,7 @@ def salvar_cadastro():
                     raise ValueError("A senha deve ter ao menos 6 caracteres.")
                 unidade.set_password(senha)
         else:
-            if _buscar_unidade(bloco, apartamento):
+            if _buscar_unidade(bloco, apartamento, condominio_id=condominio_id):
                 raise ValueError("Esta unidade já possui cadastro.")
 
             if not senha or senha != confirmar_senha:
@@ -1897,6 +2085,7 @@ def salvar_cadastro():
                 apartamento=apartamento,
                 status=StatusUnidade.PENDENTE,
                 documento_status=StatusDocumento.PENDENTE,
+                condominio_id=condominio_id,
             )
             unidade.set_password(senha)
             db.session.add(unidade)
@@ -1956,14 +2145,14 @@ def salvar_cadastro():
             "Cadastro enviado! Aguarde a aprovação do síndico do seu bloco.",
             "success",
         )
-        return redirect(url_for("index"))
+        return redirect(url_for("tenant_login", slug=slug_retorno))
 
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), "danger")
         if modo_atualizacao:
             return redirect(url_for("atualizar_dados"))
-        return redirect(url_for("cadastro_inicial"))
+        return redirect(url_for("cadastro_inicial", slug=slug_retorno))
     except Exception:
         db.session.rollback()
         traceback.print_exc()
@@ -1973,57 +2162,81 @@ def salvar_cadastro():
         )
         if modo_atualizacao:
             return redirect(url_for("atualizar_dados"))
-        return redirect(url_for("cadastro_inicial"))
+        return redirect(url_for("cadastro_inicial", slug=slug_retorno))
 
 
-def sindico_login():
-    if get_current_user() and get_current_user().is_sindico:
-        return redirect(url_for("sindico_dashboard"))
+def sindico_login(slug):
+    condominio = obter_condominio_por_slug(slug)
+    session["tenant_slug"] = condominio.slug
+
+    usuario_atual = get_current_user()
+    if usuario_atual and usuario_atual.is_sindico:
+        if usuario_atual.condominio_id == condominio.id:
+            return redirect(url_for("sindico_dashboard"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        usuario = Usuario.query.filter_by(username=username, role="sindico").first()
+        usuario = Usuario.query.filter_by(
+            username=username,
+            role=Role.SINDICO,
+            condominio_id=condominio.id,
+        ).first()
         if usuario and usuario.check_password(password):
             login_usuario(usuario)
             return redirect(url_for("sindico_dashboard"))
 
         flash("Usuário ou senha inválidos.", "danger")
 
-    return render_template("login.html", titulo="Login do Síndico", action="sindico")
+    return render_template(
+        "login.html",
+        titulo="Login do Síndico",
+        action="sindico",
+        condominio=condominio,
+        slug=condominio.slug,
+    )
 
 
 def sindico_logout():
+    slug = _slug_sessao_ou_prp()
     logout_usuario()
     flash("Sessão encerrada.", "info")
-    return redirect(url_for("sindico_login"))
+    return redirect(url_for("sindico_login", slug=slug))
 
 
 @sindico_required
 def sindico_dashboard():
     usuario = get_current_user()
-    bloco_codigo = normalizar_bloco_codigo(usuario.bloco_responsavel)
-    todos_apartamentos = get_apartamentos_bloco(bloco_codigo)
+    blocos_sindico = _blocos_codigo_sindico(usuario)
 
-    unidades_cadastradas = Unidade.query.filter_by(bloco=bloco_codigo).all()
-    unidades_por_apto = {u.apartamento: u for u in unidades_cadastradas}
+    unidades_cadastradas = (
+        Unidade.query.filter(Unidade.bloco.in_(blocos_sindico)).all()
+        if blocos_sindico
+        else []
+    )
 
     mapa_bloco = []
-    for apto in todos_apartamentos:
-        unidade = unidades_por_apto.get(apto)
-        mapa_bloco.append(
-            {
-                "apartamento": apto,
-                "unidade": unidade,
-                "status": unidade.status if unidade else "Aguardando Morador",
-            }
-        )
+    for bloco_codigo in blocos_sindico:
+        unidades_por_apto = {
+            u.apartamento: u for u in unidades_cadastradas if u.bloco == bloco_codigo
+        }
+        for apto in get_apartamentos_bloco(bloco_codigo):
+            unidade = unidades_por_apto.get(apto)
+            mapa_bloco.append(
+                {
+                    "bloco": bloco_codigo,
+                    "apartamento": apto,
+                    "unidade": unidade,
+                    "status": unidade.status if unidade else "Aguardando Morador",
+                }
+            )
 
     return render_template(
         "dashboard_sindico.html",
         mapa_bloco=mapa_bloco,
         current_user=usuario,
+        agrupamentos_label=_label_agrupamentos_sindico(usuario),
     )
 
 
@@ -2032,7 +2245,7 @@ def sindico_aprovar(unidade_id):
     usuario = get_current_user()
     unidade = Unidade.query.get_or_404(unidade_id)
 
-    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
@@ -2051,7 +2264,7 @@ def sindico_reprovar(unidade_id):
     usuario = get_current_user()
     unidade = Unidade.query.get_or_404(unidade_id)
 
-    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
@@ -2071,7 +2284,7 @@ def sindico_reprovar_pessoa(pessoa_id):
     pessoa = Pessoa.query.get_or_404(pessoa_id)
     unidade = pessoa.unidade
 
-    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
@@ -2137,7 +2350,7 @@ def sindico_validar_unidade(unidade_id):
     usuario = get_current_user()
     unidade = Unidade.query.get_or_404(unidade_id)
 
-    if not blocos_equivalentes(unidade.bloco, usuario.bloco_responsavel):
+    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
@@ -2244,32 +2457,223 @@ def _redirect_pos_login_admin(usuario):
     return redirect(url_for("admin_index"))
 
 
-def admin_login():
+def superadmin_login():
     usuario_logado = get_current_user()
-    if usuario_logado and usuario_logado.role in (Role.ADMIN, Role.ASSISTENTE):
-        return _redirect_pos_login_admin(usuario_logado)
+    if usuario_logado and usuario_logado.role == Role.SUPERADMIN:
+        return redirect(url_for("superadmin_dashboard"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        usuario = Usuario.query.filter(
-            Usuario.username == username,
-            Usuario.role.in_([Role.ADMIN, Role.ASSISTENTE]),
+        usuario = Usuario.query.filter_by(
+            username=username, role=Role.SUPERADMIN
         ).first()
         if usuario and usuario.check_password(password):
             login_usuario(usuario)
-            return _redirect_pos_login_admin(usuario)
+            return redirect(url_for("superadmin_dashboard"))
 
         flash("Usuário ou senha inválidos.", "danger")
 
-    return render_template("login.html", titulo="Login do Administrador", action="admin")
+    return render_template(
+        "login.html",
+        titulo="Login Super Admin — Plataforma",
+        action="superadmin",
+    )
+
+
+def superadmin_logout():
+    logout_usuario()
+    flash("Sessão encerrada.", "info")
+    return redirect(url_for("superadmin_login"))
+
+
+@superadmin_required
+def superadmin_dashboard():
+    usuario = get_current_user()
+    total_condominios = Condominio.query.count()
+    total_parceiros = Parceiro.query.count()
+    total_usuarios = Usuario.query.filter(Usuario.role != Role.SUPERADMIN).count()
+    condominios_recentes = (
+        Condominio.query.order_by(Condominio.data_cadastro.desc()).limit(5).all()
+    )
+
+    return render_template(
+        "superadmin_dashboard.html",
+        current_user=usuario,
+        total_condominios=total_condominios,
+        total_parceiros=total_parceiros,
+        total_usuarios=total_usuarios,
+        condominios_recentes=condominios_recentes,
+    )
+
+
+@superadmin_required
+def superadmin_condominios():
+    usuario = get_current_user()
+
+    if request.method == "POST":
+        nome = request.form.get("nome", "").strip()
+        slug = normalizar_slug(request.form.get("slug", ""))
+        cnpj = request.form.get("cnpj", "").strip() or None
+        label_agrupamento = request.form.get("label_agrupamento", "Bloco").strip() or "Bloco"
+        label_unidade = request.form.get("label_unidade", "Apto").strip() or "Apto"
+        usa_agrupamentos = request.form.get("usa_agrupamentos") == "on"
+        tem_subsindicos = request.form.get("tem_subsindicos") == "on"
+        fluxo_aprovacao_mudanca = (
+            request.form.get("fluxo_aprovacao_mudanca", "Dupla").strip() or "Dupla"
+        )
+        cor_primaria = _normalizar_cor_primaria(request.form.get("cor_primaria"))
+
+        if not nome:
+            flash("Informe o nome do condomínio.", "danger")
+            return redirect(url_for("superadmin_condominios"))
+
+        if not validar_slug(slug):
+            flash(
+                "Informe um slug válido (apenas letras minúsculas, números e hifens).",
+                "danger",
+            )
+            return redirect(url_for("superadmin_condominios"))
+
+        if Condominio.query.filter_by(slug=slug).first():
+            flash("Já existe um condomínio com este slug.", "warning")
+            return redirect(url_for("superadmin_condominios"))
+
+        if fluxo_aprovacao_mudanca not in ("Simples", "Dupla"):
+            flash("Fluxo de aprovação de mudança inválido.", "danger")
+            return redirect(url_for("superadmin_condominios"))
+
+        logo_filename = _salvar_logo_condominio(request.files.get("logo"), slug)
+
+        condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj)
+        db.session.add(condominio)
+        db.session.flush()
+        db.session.add(
+            ConfiguracaoCondominio(
+                condominio_id=condominio.id,
+                label_agrupamento=label_agrupamento,
+                label_unidade=label_unidade,
+                usa_agrupamentos=usa_agrupamentos,
+                tem_subsindicos=tem_subsindicos,
+                fluxo_aprovacao_mudanca=fluxo_aprovacao_mudanca,
+                cor_primaria=cor_primaria,
+                logo_filename=logo_filename,
+            )
+        )
+        db.session.commit()
+        flash(
+            f"Condomínio '{nome}' cadastrado. Porta de entrada: /c/{slug}/login",
+            "success",
+        )
+        return redirect(url_for("superadmin_condominios"))
+
+    condominios = Condominio.query.order_by(Condominio.nome).all()
+    admins_por_condominio = {
+        row.condominio_id: row.total
+        for row in (
+            db.session.query(
+                Usuario.condominio_id,
+                func.count(Usuario.id).label("total"),
+            )
+            .filter(
+                Usuario.role == Role.ADMIN,
+                Usuario.condominio_id.isnot(None),
+            )
+            .group_by(Usuario.condominio_id)
+            .all()
+        )
+    }
+
+    return render_template(
+        "superadmin_condominios.html",
+        current_user=usuario,
+        condominios=condominios,
+        admins_por_condominio=admins_por_condominio,
+        labels_agrupamento=("Bloco", "Torre", "Rua", "Quadra", "Setor"),
+        labels_unidade=("Apto", "Casa", "Sala", "Loja", "Unidade"),
+    )
+
+
+@superadmin_required
+def superadmin_condominio_primeiro_admin(condominio_id):
+    condominio = Condominio.query.get_or_404(condominio_id)
+    username = request.form.get("username", "").strip()
+    senha = request.form.get("senha", "")
+
+    if not username:
+        flash("Informe o login do administrador local.", "danger")
+        return redirect(url_for("superadmin_condominios"))
+    if len(senha) < 6:
+        flash("A senha deve ter ao menos 6 caracteres.", "danger")
+        return redirect(url_for("superadmin_condominios"))
+
+    if Usuario.query.filter_by(username=username).first():
+        flash("Já existe um usuário com esse login.", "warning")
+        return redirect(url_for("superadmin_condominios"))
+
+    admin_local = Usuario(
+        username=username,
+        role=Role.ADMIN,
+        condominio_id=condominio.id,
+    )
+    admin_local.set_password(senha)
+    db.session.add(admin_local)
+    db.session.commit()
+
+    flash(
+        f"Admin local '{username}' criado para o condomínio '{condominio.nome}'.",
+        "success",
+    )
+    return redirect(url_for("superadmin_condominios"))
+
+
+@superadmin_required
+def superadmin_condominio_whitelabel(condominio_id):
+    """Atualiza cor primária e logo (white-label) de um condomínio existente."""
+    condominio = Condominio.query.get_or_404(condominio_id)
+    cfg = condominio.configuracao
+    if cfg is None:
+        cfg = ConfiguracaoCondominio(condominio_id=condominio.id)
+        db.session.add(cfg)
+        db.session.flush()
+
+    cfg.cor_primaria = _normalizar_cor_primaria(request.form.get("cor_primaria"))
+
+    novo_logo = _salvar_logo_condominio(
+        request.files.get("logo"), condominio.slug or f"condo{condominio.id}"
+    )
+    if novo_logo:
+        cfg.logo_filename = novo_logo
+
+    db.session.commit()
+    flash(f"Identidade visual de '{condominio.nome}' atualizada.", "success")
+    return redirect(url_for("superadmin_condominios"))
+
+
+def admin_login():
+    """Legacy: redireciona para a porta de entrada do tenant PRP."""
+    return redirect(url_for("tenant_login", slug="prp"))
 
 
 def admin_logout():
+    slug = _slug_sessao_ou_prp()
     logout_usuario()
     flash("Sessão encerrada.", "info")
-    return redirect(url_for("admin_login"))
+    return redirect(url_for("tenant_login", slug=slug))
+
+
+def sindico_login_legacy():
+    """Legacy: redireciona síndico para o tenant PRP."""
+    return redirect(url_for("sindico_login", slug="prp"))
+
+
+def verificar_unidade_legacy():
+    return redirect(url_for("verificar_unidade", slug="prp"), code=307)
+
+
+def cadastro_inicial_legacy():
+    return redirect(url_for("cadastro_inicial", slug="prp"))
 
 
 @admin_required
@@ -2374,7 +2778,7 @@ def admin_index():
     )
     sindicos = (
         Usuario.query.filter_by(role="sindico")
-        .order_by(Usuario.bloco_responsavel, Usuario.username)
+        .order_by(Usuario.username)
         .all()
     )
     equipe_acessos = (
@@ -2705,7 +3109,8 @@ def admin_alterar_senha_sindico():
     sindico.set_password(nova_senha)
     db.session.commit()
     flash(
-        f"Senha do síndico do {sindico.bloco_responsavel} atualizada com sucesso.",
+        f"Senha do síndico ({_label_agrupamentos_sindico(sindico)}) "
+        "atualizada com sucesso.",
         "success",
     )
     return redirect(url_for("admin_index"))
@@ -2731,6 +3136,7 @@ def admin_salvar_proprietario(unidade_id):
 
 @admin_required
 def admin_criar_usuario():
+    usuario_logado = get_current_user()
     blocos = [f"Bloco {indice}" for indice in range(1, 9)]
 
     if request.method == "POST":
@@ -2764,13 +3170,25 @@ def admin_criar_usuario():
             flash("Já existe um usuário com esse login.", "warning")
             return render_template("criar_usuario.html", blocos=blocos)
 
+        condominio_id = resolver_condominio_id(usuario=usuario_logado)
         novo_usuario = Usuario(
             username=username,
             role=role,
-            bloco_responsavel=bloco_responsavel if role == Role.SINDICO else None,
+            condominio_id=condominio_id,
         )
         novo_usuario.set_password(senha)
         db.session.add(novo_usuario)
+        db.session.flush()
+
+        if role == Role.SINDICO:
+            db.session.add(
+                SindicoAgrupamento(
+                    usuario_id=novo_usuario.id,
+                    condominio_id=condominio_id,
+                    nome_agrupamento=bloco_responsavel,
+                )
+            )
+
         db.session.commit()
 
         flash("Usuário criado com sucesso.", "success")
@@ -2797,6 +3215,7 @@ def admin_excluir_usuario(usuario_id):
 
     username_alvo = usuario_alvo.username
     role_alvo = usuario_alvo.role
+    SindicoAgrupamento.query.filter_by(usuario_id=usuario_alvo.id).delete()
     db.session.delete(usuario_alvo)
     _registrar_auditoria(
         usuario_logado,
@@ -2884,6 +3303,7 @@ def mudancas_morador(unidade):
             data_mudanca=data_mudanca,
             status=StatusAgendamentoMudanca.PENDENTE_SINDICO,
             observacoes=observacoes,
+            condominio_id=resolver_condominio_id(unidade=unidade),
         )
         db.session.add(agendamento)
         db.session.commit()
@@ -2914,7 +3334,7 @@ def mudancas_morador(unidade):
 @sindico_required
 def sindico_mudancas():
     usuario = get_current_user()
-    bloco_codigo = str(normalizar_bloco_codigo(usuario.bloco_responsavel))
+    blocos_sindico = _blocos_codigo_sindico(usuario)
 
     if request.method == "POST":
         agendamento_id = request.form.get("agendamento_id", type=int)
@@ -2923,7 +3343,7 @@ def sindico_mudancas():
             AgendamentoMudanca.query.join(Unidade)
             .filter(
                 AgendamentoMudanca.id == agendamento_id,
-                Unidade.bloco == bloco_codigo,
+                Unidade.bloco.in_(blocos_sindico or [""]),
             )
             .first()
         )
@@ -2967,7 +3387,7 @@ def sindico_mudancas():
 
     solicitacoes = (
         AgendamentoMudanca.query.join(Unidade)
-        .filter(Unidade.bloco == bloco_codigo)
+        .filter(Unidade.bloco.in_(blocos_sindico or [""]))
         .order_by(
             case(
                 (
@@ -2981,11 +3401,14 @@ def sindico_mudancas():
             AgendamentoMudanca.data_solicitacao.desc(),
         )
         .all()
+        if blocos_sindico
+        else []
     )
     return render_template(
         "sindico_mudancas.html",
         solicitacoes=solicitacoes,
         current_user=usuario,
+        agrupamentos_label=_label_agrupamentos_sindico(usuario),
         status_pendente_sindico=StatusAgendamentoMudanca.PENDENTE_SINDICO,
     )
 
@@ -3029,6 +3452,9 @@ def admin_mudancas():
                 data_mudanca=data_mudanca,
                 status=StatusAgendamentoMudanca.APROVADA,
                 observacoes=observacoes,
+                condominio_id=resolver_condominio_id(
+                    usuario=usuario, unidade=unidade
+                ),
             )
             db.session.add(agendamento)
             _registrar_auditoria(
@@ -3235,7 +3661,41 @@ def portaria_mudancas():
 def init_app(app):
     app.add_url_rule("/", "index", index, methods=["GET"])
     app.add_url_rule(
-        "/verificar-unidade", "verificar_unidade", verificar_unidade, methods=["POST"]
+        "/c/<slug>/login",
+        "tenant_login",
+        tenant_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/c/<slug>/verificar-unidade",
+        "verificar_unidade",
+        verificar_unidade,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/c/<slug>/cadastro-inicial",
+        "cadastro_inicial",
+        cadastro_inicial,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/c/<slug>/sindico/login",
+        "sindico_login",
+        sindico_login,
+        methods=["GET", "POST"],
+    )
+    # Legacy bypass — não quebra bookmarks antigos.
+    app.add_url_rule(
+        "/verificar-unidade",
+        "verificar_unidade_legacy",
+        verificar_unidade_legacy,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/cadastro-inicial",
+        "cadastro_inicial_legacy",
+        cadastro_inicial_legacy,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/esqueci_senha", "esqueci_senha", esqueci_senha, methods=["GET", "POST"]
@@ -3245,9 +3705,6 @@ def init_app(app):
         "redefinir_senha",
         redefinir_senha,
         methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/cadastro-inicial", "cadastro_inicial", cadastro_inicial, methods=["GET"]
     )
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
@@ -3398,7 +3855,10 @@ def init_app(app):
     )
 
     app.add_url_rule(
-        "/sindico/login", "sindico_login", sindico_login, methods=["GET", "POST"]
+        "/sindico/login",
+        "sindico_login_legacy",
+        sindico_login_legacy,
+        methods=["GET", "POST"],
     )
     app.add_url_rule(
         "/sindico/logout", "sindico_logout", sindico_logout, methods=["GET"]
@@ -3431,6 +3891,42 @@ def init_app(app):
         methods=["POST"],
     )
 
+    app.add_url_rule(
+        "/superadmin/login",
+        "superadmin_login",
+        superadmin_login,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/logout",
+        "superadmin_logout",
+        superadmin_logout,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/superadmin",
+        "superadmin_dashboard",
+        superadmin_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios",
+        "superadmin_condominios",
+        superadmin_condominios,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/primeiro-admin",
+        "superadmin_condominio_primeiro_admin",
+        superadmin_condominio_primeiro_admin,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/whitelabel",
+        "superadmin_condominio_whitelabel",
+        superadmin_condominio_whitelabel,
+        methods=["POST"],
+    )
     app.add_url_rule(
         "/admin/login", "admin_login", admin_login, methods=["GET", "POST"]
     )

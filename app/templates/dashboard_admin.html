@@ -187,7 +187,13 @@
                 <tbody>
                     {% for sindico in sindicos %}
                     <tr>
-                        <td>{{ sindico.bloco_responsavel }}</td>
+                        <td>
+                            {% for agrup in sindico.agrupamentos %}
+                                {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                            {% else %}
+                                —
+                            {% endfor %}
+                        </td>
                         <td>{{ sindico.username }}</td>
                         <td>
                             <form method="post" action="{{ url_for('admin_alterar_senha_sindico') }}" class="d-flex gap-2">
@@ -240,7 +246,17 @@
                             {{ usuario.role }}
                             {% endif %}
                         </td>
-                        <td>{{ usuario.bloco_responsavel or '—' }}</td>
+                        <td>
+                            {% if usuario.role == 'sindico' %}
+                                {% for agrup in usuario.agrupamentos %}
+                                    {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                                {% else %}
+                                    —
+                                {% endfor %}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
                         <td class="text-end">
                             <form method="post"
                                   action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"

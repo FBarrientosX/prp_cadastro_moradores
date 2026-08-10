@@ -1,22 +1,30 @@
 {% extends "base.html" %}
 
-{% block title %}Início - Cadastro de Moradores{% endblock %}
+{% block title %}{% if condominio %}{{ condominio.nome }} — Acesso{% else %}Acesso da Unidade{% endif %}{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-lg-6">
-        <div class="card shadow-sm">
+    <div class="col-lg-7">
+        <div class="card shadow-sm mb-4">
             <div class="card-body p-4">
-                <h1 class="h4 mb-3">Acesso da Unidade</h1>
-                <p class="text-muted">Selecione o bloco e o apartamento para iniciar ou atualizar o cadastro.</p>
+                <h1 class="h4 mb-1">
+                    {% if condominio %}
+                    Bem-vindo ao {{ condominio.nome }}
+                    {% else %}
+                    Acesso da Unidade
+                    {% endif %}
+                </h1>
+                <p class="text-muted mb-4">
+                    Selecione o bloco e o apartamento para iniciar ou atualizar o cadastro.
+                </p>
 
                 {% if pendente %}
-                <div class="alert alert-warning">
+                <div class="alert alert-warning mb-0">
                     A unidade <strong>Bloco {{ bloco }} - Apto {{ apartamento }}</strong> está
                     aguardando aprovação do síndico.
                 </div>
                 {% else %}
-                <form method="post" action="{{ url_for('verificar_unidade') }}" id="form-unidade">
+                <form method="post" action="{{ url_for('verificar_unidade', slug=slug) }}" id="form-unidade">
                     <div class="mb-3">
                         <label for="bloco" class="form-label">Bloco</label>
                         <select class="form-select" id="bloco" name="bloco" required>
@@ -50,6 +58,29 @@
                 {% endif %}
             </div>
         </div>
+
+        {% if condominio and not pendente %}
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h2 class="h6 text-uppercase text-muted mb-3">Administração do condomínio</h2>
+                <form method="post" action="{{ url_for('tenant_login', slug=slug) }}">
+                    <input type="hidden" name="perfil" value="admin">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Usuário</label>
+                        <input type="text" class="form-control" id="username" name="username" required autocomplete="username">
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Senha</label>
+                        <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn btn-outline-dark w-100">Entrar como Admin</button>
+                </form>
+                <div class="text-center mt-3">
+                    <a href="{{ url_for('sindico_login', slug=slug) }}" class="small">Acesso do Síndico</a>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

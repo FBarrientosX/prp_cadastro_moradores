@@ -6,6 +6,7 @@ from app import db
 
 
 class Role:
+    SUPERADMIN = "superadmin"
     ADMIN = "admin"
     ASSISTENTE = "assistente"
     SINDICO = "sindico"
@@ -45,6 +46,87 @@ class VinculoPessoa:
     CHOICES = (PROPRIETARIO, LOCATARIO, MORADOR)
 
 
+class Condominio(db.Model):
+    """Tenant raiz do SaaS multi-condomínio."""
+
+    __tablename__ = "condominio"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(200), nullable=False)
+    slug = db.Column(db.String(50), unique=True, nullable=True, index=True)
+    cnpj = db.Column(db.String(18), nullable=True)
+    data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    configuracao = db.relationship(
+        "ConfiguracaoCondominio",
+        back_populates="condominio",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self):
+        return f"<Condominio {self.id} ({self.nome})>"
+
+
+class ConfiguracaoCondominio(db.Model):
+    """Configurações operacionais 1:1 com Condominio."""
+
+    __tablename__ = "configuracao_condominio"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer,
+        db.ForeignKey("condominio.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    label_agrupamento = db.Column(db.String(50), nullable=False, default="Bloco")
+    label_unidade = db.Column(db.String(50), nullable=False, default="Apto")
+    usa_agrupamentos = db.Column(db.Boolean, nullable=False, default=True)
+    tem_subsindicos = db.Column(db.Boolean, nullable=False, default=True)
+    # Valores esperados: 'Simples' | 'Dupla'
+    fluxo_aprovacao_mudanca = db.Column(db.String(20), nullable=False, default="Dupla")
+    # White-label
+    cor_primaria = db.Column(db.String(7), nullable=False, default="#0d6efd")
+    logo_filename = db.Column(db.String(255), nullable=True)
+
+    condominio = db.relationship("Condominio", back_populates="configuracao")
+
+    def __repr__(self):
+        return f"<ConfiguracaoCondominio condominio_id={self.condominio_id}>"
+
+
+class SindicoAgrupamento(db.Model):
+    """Associa síndico a um ou mais agrupamentos (ex.: blocos) dentro de um condomínio."""
+
+    __tablename__ = "sindico_agrupamento"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome_agrupamento = db.Column(db.String(50), nullable=False)
+
+    usuario = db.relationship(
+        "Usuario",
+        backref=db.backref("agrupamentos", lazy="dynamic"),
+    )
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("sindico_agrupamentos", lazy="dynamic"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SindicoAgrupamento usuario_id={self.usuario_id} "
+            f"agrupamento={self.nome_agrupamento}>"
+        )
+
+
 class Usuario(db.Model):
     __tablename__ = "usuarios"
 
@@ -52,13 +134,24 @@ class Usuario(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
     role = db.Column(db.String(20), nullable=False)
-    bloco_responsavel = db.Column(db.String(50), nullable=True)
+    # Multi-tenant: nullable na transição; rotas ainda serão adaptadas.
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
+    # Evolução síndico 1:N — responsabilidade passa para SindicoAgrupamento.
+    # bloco_responsavel = db.Column(db.String(50), nullable=True)
+
+    condominio = db.relationship("Condominio", backref=db.backref("usuarios", lazy=True))
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    @property
+    def is_superadmin(self):
+        return self.role == Role.SUPERADMIN
 
     @property
     def is_admin(self):
@@ -87,6 +180,10 @@ class Unidade(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    # Multi-tenant: nullable na transição.
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
     bloco = db.Column(db.String(50), nullable=False, index=True)
     apartamento = db.Column(db.String(20), nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
@@ -114,6 +211,9 @@ class Unidade(db.Model):
     proprietario_email = db.Column(db.String(120), nullable=True)
     notificacao_sindico = db.Column(db.Text, nullable=True)
 
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("unidades", lazy=True)
+    )
     pessoas = db.relationship(
         "Pessoa",
         back_populates="unidade",
@@ -199,6 +299,8 @@ class Reserva(db.Model):
 
 
 class Parceiro(db.Model):
+    """Parceiro comercial — escopo GLOBAL (sem condominio_id)."""
+
     __tablename__ = "parceiro"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -221,6 +323,8 @@ class Parceiro(db.Model):
 
 
 class Cupom(db.Model):
+    """Cupom do Clube de Vantagens — escopo GLOBAL (sem condominio_id)."""
+
     __tablename__ = "cupom"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -248,6 +352,12 @@ class Cupom(db.Model):
 
 
 class ResgateCupom(db.Model):
+    """
+    Resgate transacional do Clube de Vantagens.
+    Sem condominio_id direto: o isolamento/rastreio por tenant ocorre via
+    unidade_id → Unidade.condominio_id (métricas globais com corte por condomínio).
+    """
+
     __tablename__ = "resgate_cupom"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -306,6 +416,10 @@ class LogAuditoria(db.Model):
     __tablename__ = "logs_auditoria"
 
     id = db.Column(db.Integer, primary_key=True)
+    # Multi-tenant: nullable na transição.
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
     usuario_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
     )
@@ -313,6 +427,9 @@ class LogAuditoria(db.Model):
     data_criacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     usuario = db.relationship("Usuario")
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("logs_auditoria", lazy=True)
+    )
 
     def __repr__(self):
         return f"<LogAuditoria {self.id}>"
@@ -322,6 +439,10 @@ class AgendamentoMudanca(db.Model):
     __tablename__ = "agendamentos_mudanca"
 
     id = db.Column(db.Integer, primary_key=True)
+    # Multi-tenant: nullable na transição.
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
     unidade_id = db.Column(
         db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
     )
@@ -342,6 +463,9 @@ class AgendamentoMudanca(db.Model):
 
     unidade = db.relationship("Unidade", back_populates="agendamentos_mudanca")
     porteiro = db.relationship("Usuario", foreign_keys=[porteiro_id])
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("agendamentos_mudanca", lazy=True)
+    )
 
     def __repr__(self):
         return f"<AgendamentoMudanca {self.id} ({self.tipo} / {self.status})>"

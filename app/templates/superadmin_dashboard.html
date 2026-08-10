@@ -1,0 +1,128 @@
+{% extends "superadmin_base.html" %}
+
+{% block title %}Dashboard — Super Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Dashboard da Plataforma</h1>
+        <p class="text-muted mb-0">Visão global dos clientes e recursos SaaS.</p>
+    </div>
+    <a href="{{ url_for('superadmin_condominios') }}" class="btn btn-dark">
+        <i class="bi bi-plus-lg me-1"></i>Gerenciar Condomínios
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Condomínios (Clientes)</p>
+                        <p class="display-6 fw-semibold mb-0">{{ total_condominios }}</p>
+                    </div>
+                    <span class="rounded-circle bg-dark bg-opacity-10 p-3">
+                        <i class="bi bi-buildings fs-4 text-dark"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Parceiros Globais</p>
+                        <p class="display-6 fw-semibold mb-0">{{ total_parceiros }}</p>
+                    </div>
+                    <span class="rounded-circle bg-success bg-opacity-10 p-3">
+                        <i class="bi bi-shop fs-4 text-success"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Usuários Locais</p>
+                        <p class="display-6 fw-semibold mb-0">{{ total_usuarios }}</p>
+                    </div>
+                    <span class="rounded-circle bg-primary bg-opacity-10 p-3">
+                        <i class="bi bi-people fs-4 text-primary"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-recentes" data-bs-toggle="tab"
+                data-bs-target="#painel-recentes" type="button" role="tab">
+            Clientes recentes
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="painel-recentes" role="tabpanel">
+        {% if condominios_recentes %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>Slug</th>
+                        <th>CNPJ</th>
+                        <th>Cadastro</th>
+                        <th>Configuração</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for condo in condominios_recentes %}
+                    <tr>
+                        <td class="fw-semibold">{{ condo.nome }}</td>
+                        <td>
+                            {% if condo.slug %}
+                            <code>{{ condo.slug }}</code>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{{ condo.cnpj or '—' }}</td>
+                        <td>
+                            {% if condo.data_cadastro %}
+                            {{ condo.data_cadastro.strftime('%d/%m/%Y') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if condo.configuracao %}
+                            <span class="badge text-bg-secondary">
+                                {{ condo.configuracao.label_agrupamento }}/{{ condo.configuracao.label_unidade }}
+                            </span>
+                            <span class="badge text-bg-dark">
+                                {{ condo.configuracao.fluxo_aprovacao_mudanca }}
+                            </span>
+                            {% else %}
+                            <span class="text-muted">Sem configuração</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">Nenhum condomínio cadastrado ainda.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

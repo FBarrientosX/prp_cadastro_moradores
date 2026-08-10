@@ -282,8 +282,227 @@ def _garantir_tabela_agendamentos_mudanca():
         db.session.commit()
 
 
+def _garantir_colunas_multi_tenant():
+    """Adiciona condominio_id (nullable) nas tabelas locais para transição SaaS."""
+    inspetor = inspect(db.engine)
+    tabelas = inspetor.get_table_names()
+    tabelas_locais = (
+        "usuarios",
+        "unidades",
+        "agendamentos_mudanca",
+        "logs_auditoria",
+    )
+
+    for tabela in tabelas_locais:
+        if tabela not in tabelas:
+            continue
+        colunas = {coluna["name"] for coluna in inspetor.get_columns(tabela)}
+        if "condominio_id" in colunas:
+            continue
+        db.session.execute(
+            text(f"ALTER TABLE {tabela} ADD COLUMN condominio_id INTEGER")
+        )
+        db.session.commit()
+        db.session.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS ix_{tabela}_condominio_id "
+                f"ON {tabela} (condominio_id)"
+            )
+        )
+        db.session.commit()
+
+
+def _garantir_coluna_slug_condominio():
+    """Garante coluna slug na tabela condominio (SQLite legado)."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    if "slug" in colunas:
+        return
+    db.session.execute(text("ALTER TABLE condominio ADD COLUMN slug VARCHAR(50)"))
+    db.session.commit()
+    db.session.execute(
+        text("CREATE UNIQUE INDEX IF NOT EXISTS ix_condominio_slug ON condominio (slug)")
+    )
+    db.session.commit()
+
+
+def _garantir_colunas_whitelabel():
+    """Adiciona colunas de identidade visual em configuracao_condominio."""
+    inspetor = inspect(db.engine)
+    if "configuracao_condominio" not in inspetor.get_table_names():
+        return
+
+    colunas = {
+        coluna["name"] for coluna in inspetor.get_columns("configuracao_condominio")
+    }
+    alteracoes = []
+    if "cor_primaria" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE configuracao_condominio "
+            "ADD COLUMN cor_primaria VARCHAR(7) NOT NULL DEFAULT '#0d6efd'"
+        )
+    if "logo_filename" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE configuracao_condominio ADD COLUMN logo_filename VARCHAR(255)"
+        )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
+def _seed_condominio_transicao():
+    """
+    Seed de transição multi-tenant:
+    cria o Cliente Nº 1 se ainda não existir e faz backfill de condominio_id.
+    """
+    from app.models import Condominio, ConfiguracaoCondominio
+
+    condominio = Condominio.query.order_by(Condominio.id).first()
+    if condominio is None:
+        condominio = Condominio(nome="PRP Condomínio", slug="prp")
+        db.session.add(condominio)
+        db.session.flush()
+        db.session.add(ConfiguracaoCondominio(condominio_id=condominio.id))
+        db.session.commit()
+
+    # Garante slug do cliente legado "PRP Condomínio".
+    prp = Condominio.query.filter_by(nome="PRP Condomínio").first()
+    if prp is not None and not prp.slug:
+        prp.slug = "prp"
+        db.session.commit()
+    elif condominio.slug is None and condominio.id == 1:
+        condominio.slug = "prp"
+        db.session.commit()
+
+    condominio_id = condominio.id
+    tabelas_backfill = (
+        "unidades",
+        "usuarios",
+        "agendamentos_mudanca",
+        "logs_auditoria",
+    )
+    inspetor = inspect(db.engine)
+    tabelas = set(inspetor.get_table_names())
+
+    for tabela in tabelas_backfill:
+        if tabela not in tabelas:
+            continue
+        colunas = {coluna["name"] for coluna in inspetor.get_columns(tabela)}
+        if "condominio_id" not in colunas:
+            continue
+        if tabela == "usuarios":
+            # Super Admin da plataforma permanece sem tenant (condominio_id NULL).
+            db.session.execute(
+                text(
+                    "UPDATE usuarios "
+                    "SET condominio_id = :condominio_id "
+                    "WHERE condominio_id IS NULL AND role != 'superadmin'"
+                ),
+                {"condominio_id": condominio_id},
+            )
+        else:
+            db.session.execute(
+                text(
+                    f"UPDATE {tabela} "
+                    "SET condominio_id = :condominio_id "
+                    "WHERE condominio_id IS NULL"
+                ),
+                {"condominio_id": condominio_id},
+            )
+    db.session.commit()
+    _seed_superadmin()
+
+
+def _seed_superadmin():
+    """Garante usuário padrão Super Admin da plataforma SaaS."""
+    from app.models import Role, Usuario
+
+    existente = Usuario.query.filter_by(role=Role.SUPERADMIN).first()
+    if existente is not None:
+        return
+
+    if Usuario.query.filter_by(username="superadmin").first() is not None:
+        return
+
+    superadmin = Usuario(
+        username="superadmin",
+        role=Role.SUPERADMIN,
+        condominio_id=None,
+    )
+    superadmin.set_password("admin123")
+    db.session.add(superadmin)
+    db.session.commit()
+
+
+def _migrar_sindico_agrupamentos():
+    """
+    Migra bloco_responsavel legado (coluna SQLite) para SindicoAgrupamento (1:N).
+    Usa SQL bruto porque a coluna foi removida do modelo SQLAlchemy.
+    """
+    from app.models import Condominio, SindicoAgrupamento
+
+    inspetor = inspect(db.engine)
+    if "usuarios" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("usuarios")}
+    if "bloco_responsavel" not in colunas:
+        return
+
+    condominio_padrao = Condominio.query.order_by(Condominio.id).first()
+    rows = db.session.execute(
+        text(
+            "SELECT id, bloco_responsavel, condominio_id FROM usuarios "
+            "WHERE role = 'sindico' AND bloco_responsavel IS NOT NULL"
+        )
+    ).fetchall()
+
+    for row in rows:
+        usuario_id = row[0]
+        bloco_responsavel = (row[1] or "").strip()
+        condominio_id = row[2] or (
+            condominio_padrao.id if condominio_padrao is not None else None
+        )
+        if not bloco_responsavel or condominio_id is None:
+            continue
+
+        ja_possui = SindicoAgrupamento.query.filter_by(usuario_id=usuario_id).first()
+        if ja_possui:
+            continue
+
+        db.session.add(
+            SindicoAgrupamento(
+                usuario_id=usuario_id,
+                condominio_id=condominio_id,
+                nome_agrupamento=bloco_responsavel,
+            )
+        )
+
+    db.session.commit()
+
+
+def _hex_para_rgb(hex_color):
+    """Converte '#RRGGBB' em string 'r, g, b' para CSS --bs-primary-rgb."""
+    valor = str(hex_color or "").strip().lstrip("#")
+    if len(valor) != 6:
+        return "13, 110, 253"
+    try:
+        r = int(valor[0:2], 16)
+        g = int(valor[2:4], 16)
+        b = int(valor[4:6], 16)
+    except ValueError:
+        return "13, 110, 253"
+    return f"{r}, {g}, {b}"
+
+
 def create_app(config=None):
     app = Flask(__name__)
+
+    upload_logos = os.path.join(app.root_path, "static", "uploads", "logos")
 
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me-in-production"),
@@ -293,6 +512,7 @@ def create_app(config=None):
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 15}},
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
+        UPLOAD_LOGOS_FOLDER=upload_logos,
     )
 
     if config:
@@ -303,26 +523,55 @@ def create_app(config=None):
     @app.context_processor
     def inject_nav_context():
         from app.auth import get_current_user, get_unidade_logada
-        from app.models import Reserva
+        from app.models import Condominio, EspacoComum, Reserva
 
         usuario = get_current_user()
+        unidade = get_unidade_logada()
         reservas_pendentes_count = 0
+        condominio_ctx = None
 
         if usuario:
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
             if usuario.role == "sindico":
-                reservas_pendentes_count = query.filter(
-                    Reserva.espaco.has(bloco_vinculado=usuario.bloco_responsavel)
-                ).count()
+                blocos_sindico = [
+                    agrup.nome_agrupamento for agrup in usuario.agrupamentos
+                ]
+                if blocos_sindico:
+                    reservas_pendentes_count = query.filter(
+                        EspacoComum.bloco_vinculado.in_(blocos_sindico)
+                    ).count()
             elif usuario.role in ("admin", "assistente"):
                 reservas_pendentes_count = query.filter(
                     Reserva.espaco.has(gerenciado_por="admin")
                 ).count()
 
+            if usuario.condominio_id:
+                condominio_ctx = usuario.condominio
+        elif unidade and unidade.condominio_id:
+            condominio_ctx = unidade.condominio
+
+        # Fallback: slug do tenant na sessão (portas públicas).
+        if condominio_ctx is None:
+            from flask import session
+
+            slug = session.get("tenant_slug") or session.get("cadastro_slug")
+            if slug:
+                condominio_ctx = Condominio.query.filter_by(slug=slug).first()
+
+        cor_primaria = "#0d6efd"
+        if (
+            condominio_ctx
+            and condominio_ctx.configuracao
+            and condominio_ctx.configuracao.cor_primaria
+        ):
+            cor_primaria = condominio_ctx.configuracao.cor_primaria
+
         return {
             "sidebar_user": usuario,
-            "sidebar_unidade": get_unidade_logada(),
+            "sidebar_unidade": unidade,
             "reservas_pendentes_count": reservas_pendentes_count,
+            "condominio": condominio_ctx,
+            "cor_primaria_rgb": _hex_para_rgb(cor_primaria),
         }
 
     from app import routes
@@ -333,6 +582,12 @@ def create_app(config=None):
         from app import models  # noqa: F401
 
         db.create_all()
+        # Garante condominio_id em bancos SQLite legados antes do backfill.
+        _garantir_colunas_multi_tenant()
+        _garantir_coluna_slug_condominio()
+        _garantir_colunas_whitelabel()
+        _seed_condominio_transicao()
+        _migrar_sindico_agrupamentos()
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()

@@ -8,3 +8,5 @@ token.json
 *.db
 seed.py
 seed_parceiros
+app/static/uploads/logos/*
+!app/static/uploads/logos/.gitkeep

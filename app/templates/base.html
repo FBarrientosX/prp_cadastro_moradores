@@ -26,6 +26,12 @@
             border-radius: 0.375rem;
         }
 
+        .brand-logo {
+            max-height: 40px;
+            width: auto;
+            object-fit: contain;
+        }
+
         @media (min-width: 992px) {
             .app-sidebar {
                 position: fixed;
@@ -38,8 +44,43 @@
             }
         }
     </style>
+    {% if condominio and condominio.configuracao and condominio.configuracao.cor_primaria %}
+    <style>
+        :root {
+            --bs-primary: {{ condominio.configuracao.cor_primaria }};
+            --bs-primary-rgb: {{ cor_primaria_rgb }};
+        }
+        .bg-primary,
+        .btn-primary,
+        .text-bg-primary {
+            background-color: var(--bs-primary) !important;
+            border-color: var(--bs-primary) !important;
+        }
+        .btn-primary:hover,
+        .btn-primary:focus {
+            background-color: var(--bs-primary) !important;
+            border-color: var(--bs-primary) !important;
+            filter: brightness(0.92);
+        }
+        .btn-outline-primary {
+            color: var(--bs-primary) !important;
+            border-color: var(--bs-primary) !important;
+        }
+        .btn-outline-primary:hover {
+            background-color: var(--bs-primary) !important;
+            color: #fff !important;
+        }
+        .text-primary { color: var(--bs-primary) !important; }
+        .app-sidebar.bg-primary,
+        .offcanvas.text-bg-primary {
+            background-color: var(--bs-primary) !important;
+        }
+    </style>
+    {% endif %}
 </head>
 <body class="bg-light">
+    {% set brand_nome = condominio.nome if condominio else 'PRP Condomínio' %}
+    {% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
 
     <header class="d-lg-none sticky-top bg-primary shadow-sm">
         <div class="d-flex align-items-center justify-content-between px-3 py-2 text-white">
@@ -47,13 +88,26 @@
                     data-bs-target="#mobileSidebar" aria-controls="mobileSidebar">
                 Menu
             </button>
-            <span class="fw-semibold">PRP Condomínio</span>
+            {% if brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ brand_nome }}" class="brand-logo">
+            {% else %}
+            <span class="fw-semibold">{{ brand_nome }}</span>
+            {% endif %}
             <span></span>
         </div>
     </header>
 
     <aside class="app-sidebar d-none d-lg-flex flex-column bg-primary text-white p-3">
-        <h1 class="h5 mb-4">PRP Condomínio</h1>
+        <div class="mb-4">
+            {% if brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ brand_nome }}" class="brand-logo mb-2">
+            <p class="small text-white-50 mb-0">{{ brand_nome }}</p>
+            {% else %}
+            <h1 class="h5 mb-0">{{ brand_nome }}</h1>
+            {% endif %}
+        </div>
         <nav class="nav nav-pills flex-column gap-1">
             {% if sidebar_unidade and not sidebar_user %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'atualizar_dados' %}active{% endif %}" href="{{ url_for('atualizar_dados') }}">
@@ -88,6 +142,7 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_dashboard' %}active{% endif %}" href="{{ url_for('portaria_dashboard') }}">
                     <i class="bi bi-truck me-2"></i>Painel da Portaria
                 </a>
+            {# Painel do cliente: admin/assistente locais — sem menus Super Admin (plataforma). #}
             {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
                 {% if sidebar_user.role == 'admin' %}
                 <a class="nav-link text-white d-flex align-items-center{% if request.endpoint == 'admin_dashboard' %} active{% endif %}" href="{{ url_for('admin_dashboard') }}">
@@ -114,14 +169,20 @@
                     <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                     {% endif %}
                 </a>
+            {% elif sidebar_user and sidebar_user.role == 'superadmin' %}
+                {# Super Admin usa superadmin_base.html; evita menus de cliente aqui. #}
+                <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('superadmin_dashboard') }}">
+                    <i class="bi bi-shield-lock me-2"></i>Ir para Plataforma
+                </a>
             {% else %}
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                {% set tenant_slug = slug if slug is defined and slug else 'prp' %}
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug) }}">
                     <i class="bi bi-house-door me-2"></i>Início
                 </a>
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login') }}">
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login', slug=tenant_slug) }}">
                     <i class="bi bi-building me-2"></i>Síndico
                 </a>
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_login' %}active{% endif %}" href="{{ url_for('admin_login') }}">
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug) }}">
                     <i class="bi bi-briefcase me-2"></i>Administração
                 </a>
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_login' %}active{% endif %}" href="{{ url_for('portaria_login') }}">
@@ -142,7 +203,12 @@
     <div class="offcanvas offcanvas-start text-bg-primary" tabindex="-1" id="mobileSidebar"
          aria-labelledby="mobileSidebarLabel">
         <div class="offcanvas-header">
-            <h5 class="offcanvas-title" id="mobileSidebarLabel">PRP Condomínio</h5>
+            {% if brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ brand_nome }}" class="brand-logo">
+            {% else %}
+            <h5 class="offcanvas-title" id="mobileSidebarLabel">{{ brand_nome }}</h5>
+            {% endif %}
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Fechar"></button>
         </div>
         <div class="offcanvas-body d-flex flex-column">
@@ -206,14 +272,19 @@
                         <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
                         {% endif %}
                     </a>
+                {% elif sidebar_user and sidebar_user.role == 'superadmin' %}
+                    <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('superadmin_dashboard') }}">
+                        <i class="bi bi-shield-lock me-2"></i>Ir para Plataforma
+                    </a>
                 {% else %}
-                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                    {% set tenant_slug_mobile = slug if slug is defined and slug else 'prp' %}
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug_mobile) }}">
                         <i class="bi bi-house-door me-2"></i>Início
                     </a>
-                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login') }}">
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login', slug=tenant_slug_mobile) }}">
                         <i class="bi bi-building me-2"></i>Síndico
                     </a>
-                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'admin_login' %}active{% endif %}" href="{{ url_for('admin_login') }}">
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug_mobile) }}">
                         <i class="bi bi-briefcase me-2"></i>Administração
                     </a>
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_login' %}active{% endif %}" href="{{ url_for('portaria_login') }}">
