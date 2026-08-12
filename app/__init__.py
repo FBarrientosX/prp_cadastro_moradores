@@ -551,7 +551,17 @@ def create_app(config=None):
         condominio_ctx = None
 
         if usuario:
+            from app.models import Unidade
+            from sqlalchemy import or_
+
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
+            if usuario.condominio_id:
+                query = query.outerjoin(Unidade, Reserva.unidade_id == Unidade.id).filter(
+                    or_(
+                        Reserva.unidade_id.is_(None),
+                        Unidade.condominio_id == usuario.condominio_id,
+                    )
+                )
             if usuario.role == "sindico":
                 blocos_sindico = [
                     agrup.nome_agrupamento for agrup in usuario.agrupamentos

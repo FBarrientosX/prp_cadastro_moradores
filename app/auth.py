@@ -49,8 +49,13 @@ def obter_condominio_padrao_id():
     return condominio.id if condominio is not None else None
 
 
-def resolver_condominio_id(usuario=None, unidade=None):
-    """Resolve condominio_id a partir do ator logado, da unidade ou da sessão."""
+def resolver_condominio_id(usuario=None, unidade=None, permitir_fallback=True):
+    """
+    Resolve condominio_id a partir do ator logado, da unidade ou da sessão.
+
+    Em rotas administrativas locais, preferir condominio_id_obrigatorio() —
+    o fallback para o condomínio padrão (PRP) é apenas legado de cadastro público.
+    """
     if usuario is not None and getattr(usuario, "condominio_id", None):
         return usuario.condominio_id
     if unidade is not None and getattr(unidade, "condominio_id", None):
@@ -60,7 +65,29 @@ def resolver_condominio_id(usuario=None, unidade=None):
     sessao_id = session.get("condominio_id")
     if sessao_id:
         return sessao_id
-    return obter_condominio_padrao_id()
+    if permitir_fallback:
+        return obter_condominio_padrao_id()
+    return None
+
+
+def condominio_id_obrigatorio(usuario=None):
+    """
+    condominio_id do usuário local autenticado (fonte de verdade).
+    Retorna None se o usuário não estiver vinculado a um tenant.
+    """
+    if usuario is None:
+        usuario = get_current_user()
+    if usuario is None:
+        return None
+    return getattr(usuario, "condominio_id", None)
+
+
+def _sincronizar_sessao_tenant(usuario):
+    """Garante que a sessão reflita o condominio_id do usuário (evita sessão suja)."""
+    if usuario is None or not getattr(usuario, "condominio_id", None):
+        return
+    session["condominio_id"] = usuario.condominio_id
+    _gravar_tenant_slug_sessao(usuario.condominio_id)
 
 
 def _gravar_tenant_slug_sessao(condominio_id):
@@ -72,6 +99,7 @@ def _gravar_tenant_slug_sessao(condominio_id):
 
 
 def login_usuario(usuario):
+    # Limpa sessão anterior (evita vazamento de tenant entre logins).
     session.clear()
     session["user_id"] = usuario.id
     session["role"] = usuario.role
@@ -92,6 +120,11 @@ def get_current_user():
     if not user_id:
         return None
     return Usuario.query.get(user_id)
+
+
+def _redirect_login_tenant():
+    slug = session.get("tenant_slug") or "prp"
+    return redirect(url_for("tenant_login", slug=slug))
 
 
 def login_unidade(unidade):
@@ -143,8 +176,15 @@ def admin_required(view):
         usuario = get_current_user()
         if not usuario or usuario.role != Role.ADMIN:
             flash("Acesso restrito ao administrador.", "danger")
-            slug = session.get("tenant_slug") or "prp"
-            return redirect(url_for("tenant_login", slug=slug))
+            return _redirect_login_tenant()
+        if not usuario.condominio_id:
+            flash(
+                "Conta administrativa sem condomínio vinculado. "
+                "Contate o Super Admin da plataforma.",
+                "danger",
+            )
+            return _redirect_login_tenant()
+        _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 
     return wrapped
@@ -156,8 +196,15 @@ def admin_or_assistente_required(view):
         usuario = get_current_user()
         if not usuario or usuario.role not in (Role.ADMIN, Role.ASSISTENTE):
             flash("Acesso restrito à administração.", "danger")
-            slug = session.get("tenant_slug") or "prp"
-            return redirect(url_for("tenant_login", slug=slug))
+            return _redirect_login_tenant()
+        if not usuario.condominio_id:
+            flash(
+                "Conta administrativa sem condomínio vinculado. "
+                "Contate o Super Admin da plataforma.",
+                "danger",
+            )
+            return _redirect_login_tenant()
+        _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 
     return wrapped
@@ -171,6 +218,15 @@ def sindico_required(view):
             flash("Acesso restrito ao síndico.", "danger")
             slug = session.get("tenant_slug") or "prp"
             return redirect(url_for("sindico_login", slug=slug))
+        if not usuario.condominio_id:
+            flash(
+                "Conta de síndico sem condomínio vinculado. "
+                "Contate a administração.",
+                "danger",
+            )
+            slug = session.get("tenant_slug") or "prp"
+            return redirect(url_for("sindico_login", slug=slug))
+        _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 
     return wrapped
@@ -182,8 +238,10 @@ def unidade_required(view):
         unidade = get_unidade_logada()
         if not unidade:
             flash("Autentique-se com bloco, apartamento e senha.", "warning")
-            slug = session.get("tenant_slug") or "prp"
-            return redirect(url_for("tenant_login", slug=slug))
+            return _redirect_login_tenant()
+        if unidade.condominio_id:
+            session["condominio_id"] = unidade.condominio_id
+            _gravar_tenant_slug_sessao(unidade.condominio_id)
         return view(unidade, *args, **kwargs)
 
     return wrapped
@@ -196,6 +254,14 @@ def portaria_required(view):
         if not usuario or usuario.role not in (Role.PORTEIRO, Role.ADMIN):
             flash("Acesso restrito à portaria.", "danger")
             return redirect(url_for("portaria_login"))
+        if not usuario.condominio_id:
+            flash(
+                "Conta de portaria sem condomínio vinculado. "
+                "Contate a administração.",
+                "danger",
+            )
+            return _redirect_login_tenant()
+        _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 
     return wrapped

@@ -23,6 +23,8 @@ from app import db
 from app.auth import (
     admin_required,
     admin_or_assistente_required,
+    condominio_esta_ativo,
+    condominio_id_obrigatorio,
     gerar_senha_aleatoria,
     get_current_user,
     get_unidade_logada,
@@ -30,7 +32,6 @@ from app.auth import (
     login_usuario,
     logout_unidade,
     logout_usuario,
-    condominio_esta_ativo,
     normalizar_slug,
     obter_condominio_por_slug,
     portaria_required,
@@ -136,6 +137,27 @@ def _buscar_unidade(bloco, apartamento, condominio_id=None):
     if condominio_id is not None:
         query = query.filter_by(condominio_id=condominio_id)
     return query.first()
+
+
+def _unidade_do_tenant(unidade_id, condominio_id):
+    """Carrega unidade garantindo isolamento multi-tenant (anti-IDOR)."""
+    return Unidade.query.filter_by(
+        id=unidade_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _usuario_do_tenant(usuario_id, condominio_id):
+    """Carrega usuário local do mesmo condomínio (anti-IDOR)."""
+    return Usuario.query.filter_by(
+        id=usuario_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _agendamento_do_tenant(agendamento_id, condominio_id):
+    """Carrega agendamento de mudança do mesmo condomínio (anti-IDOR)."""
+    return AgendamentoMudanca.query.filter_by(
+        id=agendamento_id, condominio_id=condominio_id
+    ).first_or_404()
 
 
 def _buscar_unidade_e_email_login(email):
@@ -1654,18 +1676,27 @@ def reservas():
                 .order_by(EspacoComum.nome)
                 .all()
             )
-            unidades_gestao = Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
+            condominio_id = condominio_id_obrigatorio(usuario)
+            unidades_gestao = (
+                Unidade.query.filter_by(condominio_id=condominio_id)
+                .order_by(Unidade.bloco, Unidade.apartamento)
+                .all()
+            )
         query_pendentes = Reserva.query.join(EspacoComum).filter(Reserva.status == "Pendente")
         query_historico = Reserva.query.join(EspacoComum).filter(
             Reserva.status != "Pendente"
         )
 
+        condominio_id = condominio_id_obrigatorio(usuario)
         if usuario.role == Role.SINDICO:
             chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
             filtro_jurisdicao = EspacoComum.bloco_vinculado.in_(chaves_agrupamento or [""])
             blocos_sindico = _blocos_codigo_sindico(usuario)
             unidades_gestao = (
-                Unidade.query.filter(Unidade.bloco.in_(blocos_sindico))
+                Unidade.query.filter(
+                    Unidade.condominio_id == condominio_id,
+                    Unidade.bloco.in_(blocos_sindico),
+                )
                 .order_by(Unidade.bloco, Unidade.apartamento)
                 .all()
                 if blocos_sindico
@@ -1674,13 +1705,19 @@ def reservas():
         else:
             filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
 
+        # Reservas de unidades do próprio condomínio (ou sem unidade vinculada).
+        filtro_tenant_reserva = or_(
+            Reserva.unidade_id.is_(None),
+            Reserva.unidade.has(Unidade.condominio_id == condominio_id),
+        )
+
         reservas_pendentes = (
-            query_pendentes.filter(filtro_jurisdicao)
+            query_pendentes.filter(filtro_jurisdicao, filtro_tenant_reserva)
             .order_by(Reserva.data_solicitacao.desc())
             .all()
         )
         reservas_historico = (
-            query_historico.filter(filtro_jurisdicao)
+            query_historico.filter(filtro_jurisdicao, filtro_tenant_reserva)
             .order_by(Reserva.data_reserva.desc())
             .all()
         )
@@ -1805,7 +1842,9 @@ def criar_reserva_gestao():
     unidade = None
     if unidade_id:
         try:
-            unidade = Unidade.query.get_or_404(int(unidade_id))
+            unidade = _unidade_do_tenant(
+                int(unidade_id), condominio_id_obrigatorio(usuario)
+            )
         except ValueError:
             flash("Unidade inválida para vinculação da reserva.", "danger")
             return redirect(url_for("reservas"))
@@ -2266,10 +2305,14 @@ def sindico_logout():
 @sindico_required
 def sindico_dashboard():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
     blocos_sindico = _blocos_codigo_sindico(usuario)
 
     unidades_cadastradas = (
-        Unidade.query.filter(Unidade.bloco.in_(blocos_sindico)).all()
+        Unidade.query.filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.bloco.in_(blocos_sindico),
+        ).all()
         if blocos_sindico
         else []
     )
@@ -2301,7 +2344,7 @@ def sindico_dashboard():
 @sindico_required
 def sindico_aprovar(unidade_id):
     usuario = get_current_user()
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
 
     if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
@@ -2320,7 +2363,7 @@ def sindico_aprovar(unidade_id):
 @sindico_required
 def sindico_reprovar(unidade_id):
     usuario = get_current_user()
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
 
     if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
@@ -2339,7 +2382,12 @@ def sindico_reprovar(unidade_id):
 @sindico_required
 def sindico_reprovar_pessoa(pessoa_id):
     usuario = get_current_user()
-    pessoa = Pessoa.query.get_or_404(pessoa_id)
+    condominio_id = condominio_id_obrigatorio(usuario)
+    pessoa = (
+        Pessoa.query.join(Unidade)
+        .filter(Pessoa.id == pessoa_id, Unidade.condominio_id == condominio_id)
+        .first_or_404()
+    )
     unidade = pessoa.unidade
 
     if not _sindico_gerencia_bloco(usuario, unidade.bloco):
@@ -2406,7 +2454,7 @@ def sindico_reprovar_pessoa(pessoa_id):
 @sindico_required
 def sindico_validar_unidade(unidade_id):
     usuario = get_current_user()
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
 
     if not _sindico_gerencia_bloco(usuario, unidade.bloco):
         flash("Você não tem permissão para esta unidade.", "danger")
@@ -2965,17 +3013,21 @@ def cadastro_inicial_legacy():
 @admin_required
 def admin_dashboard():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
     inicio_janela = datetime.utcnow() - timedelta(days=30)
 
-    total_aprovados = Unidade.query.filter_by(
+    # Isolamento multi-tenant: todas as métricas escopadas ao condomínio logado.
+    base_unidades = Unidade.query.filter(Unidade.condominio_id == condominio_id)
+
+    total_aprovados = base_unidades.filter_by(
         status=StatusUnidade.REGISTRADA
     ).count()
 
-    aguardando_registro = Unidade.query.filter_by(
+    aguardando_registro = base_unidades.filter_by(
         status=StatusUnidade.APROVADA
     ).count()
 
-    documentos_pendentes = Unidade.query.filter(
+    documentos_pendentes = base_unidades.filter(
         or_(
             Unidade.documento_status.in_(
                 [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
@@ -2997,7 +3049,8 @@ def admin_dashboard():
     cadastros_por_bloco_rows = (
         db.session.query(Unidade.bloco, func.count(Unidade.id).label("total"))
         .filter(
-            Unidade.status.in_([StatusUnidade.APROVADA, StatusUnidade.REGISTRADA])
+            Unidade.condominio_id == condominio_id,
+            Unidade.status.in_([StatusUnidade.APROVADA, StatusUnidade.REGISTRADA]),
         )
         .group_by(Unidade.bloco)
         .order_by(Unidade.bloco)
@@ -3012,7 +3065,10 @@ def admin_dashboard():
             func.date(Unidade.data_criacao).label("data"),
             func.count(Unidade.id).label("total"),
         )
-        .filter(Unidade.data_criacao >= inicio_janela)
+        .filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.data_criacao >= inicio_janela,
+        )
         .group_by(func.date(Unidade.data_criacao))
         .order_by(func.date(Unidade.data_criacao))
         .all()
@@ -3029,6 +3085,7 @@ def admin_dashboard():
 
     proporcao_status_rows = (
         db.session.query(Unidade.status, func.count(Unidade.id).label("total"))
+        .filter(Unidade.condominio_id == condominio_id)
         .group_by(Unidade.status)
         .order_by(Unidade.status)
         .all()
@@ -3052,24 +3109,31 @@ def admin_dashboard():
 @admin_or_assistente_required
 def admin_index():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+
     aguardando_registro = (
-        Unidade.query.filter_by(status=StatusUnidade.APROVADA)
+        Unidade.query.filter_by(
+            condominio_id=condominio_id, status=StatusUnidade.APROVADA
+        )
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
     finalizados = (
-        Unidade.query.filter_by(status=StatusUnidade.REGISTRADA)
+        Unidade.query.filter_by(
+            condominio_id=condominio_id, status=StatusUnidade.REGISTRADA
+        )
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
     sindicos = (
-        Usuario.query.filter_by(role="sindico")
+        Usuario.query.filter_by(role=Role.SINDICO, condominio_id=condominio_id)
         .order_by(Usuario.username)
         .all()
     )
     equipe_acessos = (
         Usuario.query.filter(
-            Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO])
+            Usuario.condominio_id == condominio_id,
+            Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]),
         )
         .order_by(Usuario.role, Usuario.username)
         .all()
@@ -3106,7 +3170,8 @@ def admin_clube_vantagens_analytics():
 
 @admin_or_assistente_required
 def admin_registrar(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    condominio_id = condominio_id_obrigatorio()
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
 
     if unidade.status != StatusUnidade.APROVADA:
         flash("Apenas unidades aprovadas podem ser registradas.", "warning")
@@ -3120,7 +3185,8 @@ def admin_registrar(unidade_id):
 
 @admin_or_assistente_required
 def admin_unidade_alterar_senha(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    condominio_id = condominio_id_obrigatorio()
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
     nova_senha = request.form.get("nova_senha", "").strip()
 
     if not nova_senha:
@@ -3143,7 +3209,8 @@ def admin_excluir_unidade(unidade_id):
         flash("Acesso negado.", "danger")
         return redirect(url_for("admin_index"))
 
-    unidade = Unidade.query.get_or_404(unidade_id)
+    condominio_id = condominio_id_obrigatorio(usuario)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
 
     db.session.delete(unidade)
     db.session.commit()
@@ -3157,7 +3224,7 @@ def admin_excluir_unidade(unidade_id):
 
 @admin_required
 def admin_validar_documento(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
     unidade.documento_status = StatusDocumento.ENTREGUE
     db.session.commit()
     flash(
@@ -3170,7 +3237,7 @@ def admin_validar_documento(unidade_id):
 
 @admin_required
 def admin_validar_contrato_locacao(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
 
     if unidade.contrato_locacao_status == StatusDocumento.NAO_APLICAVEL:
         flash(
@@ -3192,7 +3259,7 @@ def admin_validar_contrato_locacao(unidade_id):
 
 @admin_required
 def admin_validar_documentos(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
     unidade.documento_status = StatusDocumento.ENTREGUE
     if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
         unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
@@ -3208,7 +3275,7 @@ def admin_validar_documentos(unidade_id):
 
 @admin_required
 def admin_atualizar_status_documentos(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
     documento_status = request.form.get("documento_status", "").strip()
     contrato_status = request.form.get("contrato_locacao_status", "").strip()
     status_permitidos = {StatusDocumento.PENDENTE, StatusDocumento.ENTREGUE}
@@ -3233,6 +3300,7 @@ def admin_atualizar_status_documentos(unidade_id):
 
 @admin_required
 def admin_alterar_senha_sindico():
+    condominio_id = condominio_id_obrigatorio()
     username = request.form.get("username", "").strip()
     nova_senha = request.form.get("nova_senha", "").strip()
 
@@ -3244,7 +3312,11 @@ def admin_alterar_senha_sindico():
         flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
         return redirect(url_for("admin_index"))
 
-    sindico = Usuario.query.filter_by(username=username, role="sindico").first()
+    sindico = Usuario.query.filter_by(
+        username=username,
+        role=Role.SINDICO,
+        condominio_id=condominio_id,
+    ).first()
     if not sindico:
         flash("Síndico não encontrado.", "danger")
         return redirect(url_for("admin_index"))
@@ -3261,7 +3333,7 @@ def admin_alterar_senha_sindico():
 
 @admin_required
 def admin_salvar_proprietario(unidade_id):
-    unidade = Unidade.query.get_or_404(unidade_id)
+    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
     unidade.proprietario_nome = request.form.get("proprietario_nome", "").strip() or None
     unidade.proprietario_cpf = request.form.get("proprietario_cpf", "").strip() or None
     unidade.proprietario_telefone = (
@@ -3280,6 +3352,7 @@ def admin_salvar_proprietario(unidade_id):
 @admin_required
 def admin_criar_usuario():
     usuario_logado = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario_logado)
     blocos = [f"Bloco {indice}" for indice in range(1, 9)]
 
     if request.method == "POST":
@@ -3313,7 +3386,6 @@ def admin_criar_usuario():
             flash("Já existe um usuário com esse login.", "warning")
             return render_template("criar_usuario.html", blocos=blocos)
 
-        condominio_id = resolver_condominio_id(usuario=usuario_logado)
         novo_usuario = Usuario(
             username=username,
             role=role,
@@ -3343,7 +3415,8 @@ def admin_criar_usuario():
 @admin_required
 def admin_excluir_usuario(usuario_id):
     usuario_logado = get_current_user()
-    usuario_alvo = Usuario.query.get_or_404(usuario_id)
+    condominio_id = condominio_id_obrigatorio(usuario_logado)
+    usuario_alvo = _usuario_do_tenant(usuario_id, condominio_id)
 
     if usuario_alvo.id == usuario_logado.id:
         flash("Você não pode excluir o próprio acesso.", "danger")
@@ -3358,7 +3431,9 @@ def admin_excluir_usuario(usuario_id):
 
     username_alvo = usuario_alvo.username
     role_alvo = usuario_alvo.role
-    SindicoAgrupamento.query.filter_by(usuario_id=usuario_alvo.id).delete()
+    SindicoAgrupamento.query.filter_by(
+        usuario_id=usuario_alvo.id, condominio_id=condominio_id
+    ).delete()
     db.session.delete(usuario_alvo)
     _registrar_auditoria(
         usuario_logado,
@@ -3477,6 +3552,7 @@ def mudancas_morador(unidade):
 @sindico_required
 def sindico_mudancas():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
     blocos_sindico = _blocos_codigo_sindico(usuario)
 
     if request.method == "POST":
@@ -3486,6 +3562,7 @@ def sindico_mudancas():
             AgendamentoMudanca.query.join(Unidade)
             .filter(
                 AgendamentoMudanca.id == agendamento_id,
+                AgendamentoMudanca.condominio_id == condominio_id,
                 Unidade.bloco.in_(blocos_sindico or [""]),
             )
             .first()
@@ -3530,7 +3607,10 @@ def sindico_mudancas():
 
     solicitacoes = (
         AgendamentoMudanca.query.join(Unidade)
-        .filter(Unidade.bloco.in_(blocos_sindico or [""]))
+        .filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
+            Unidade.bloco.in_(blocos_sindico or [""]),
+        )
         .order_by(
             case(
                 (
@@ -3559,6 +3639,7 @@ def sindico_mudancas():
 @admin_or_assistente_required
 def admin_mudancas():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
 
     if request.method == "POST":
         acao = request.form.get("acao", "").strip()
@@ -3569,7 +3650,13 @@ def admin_mudancas():
             data_str = request.form.get("data_mudanca", "").strip()
             observacoes = request.form.get("observacoes", "").strip() or None
 
-            unidade = Unidade.query.get(unidade_id) if unidade_id else None
+            unidade = (
+                Unidade.query.filter_by(
+                    id=unidade_id, condominio_id=condominio_id
+                ).first()
+                if unidade_id
+                else None
+            )
             if not unidade:
                 flash("Selecione uma unidade válida.", "danger")
                 return redirect(url_for("admin_mudancas"))
@@ -3595,9 +3682,7 @@ def admin_mudancas():
                 data_mudanca=data_mudanca,
                 status=StatusAgendamentoMudanca.APROVADA,
                 observacoes=observacoes,
-                condominio_id=resolver_condominio_id(
-                    usuario=usuario, unidade=unidade
-                ),
+                condominio_id=condominio_id,
             )
             db.session.add(agendamento)
             _registrar_auditoria(
@@ -3614,7 +3699,13 @@ def admin_mudancas():
             return redirect(url_for("admin_mudancas"))
 
         agendamento_id = request.form.get("agendamento_id", type=int)
-        agendamento = AgendamentoMudanca.query.get(agendamento_id)
+        agendamento = (
+            AgendamentoMudanca.query.filter_by(
+                id=agendamento_id, condominio_id=condominio_id
+            ).first()
+            if agendamento_id
+            else None
+        )
 
         if not agendamento:
             flash("Solicitação não encontrada.", "danger")
@@ -3658,18 +3749,21 @@ def admin_mudancas():
 
     pendentes = (
         AgendamentoMudanca.query.filter_by(
-            status=StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO
+            condominio_id=condominio_id,
+            status=StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO,
         )
         .order_by(AgendamentoMudanca.data_mudanca.asc())
         .all()
     )
     historico = (
-        AgendamentoMudanca.query.order_by(
-            AgendamentoMudanca.data_solicitacao.desc()
-        ).all()
+        AgendamentoMudanca.query.filter_by(condominio_id=condominio_id)
+        .order_by(AgendamentoMudanca.data_solicitacao.desc())
+        .all()
     )
     unidades = (
-        Unidade.query.order_by(Unidade.bloco, Unidade.apartamento).all()
+        Unidade.query.filter_by(condominio_id=condominio_id)
+        .order_by(Unidade.bloco, Unidade.apartamento)
+        .all()
     )
     return render_template(
         "admin_mudancas.html",
@@ -3713,10 +3807,12 @@ def portaria_logout():
 @portaria_required
 def portaria_dashboard():
     hoje = date.today()
+    condominio_id = condominio_id_obrigatorio()
 
     mudancas = (
         AgendamentoMudanca.query.join(Unidade)
         .filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
             AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
             AgendamentoMudanca.data_mudanca >= hoje,
         )
@@ -3734,6 +3830,10 @@ def portaria_dashboard():
         .filter(
             Reserva.status == "Aprovada",
             Reserva.data_reserva >= hoje,
+            or_(
+                Reserva.unidade_id.is_(None),
+                Unidade.condominio_id == condominio_id,
+            ),
         )
         .order_by(Reserva.data_reserva.asc(), EspacoComum.nome)
         .all()
@@ -3763,7 +3863,9 @@ def _agora_sao_paulo():
 def portaria_mudanca_chegar(agendamento_id):
     usuario = get_current_user()
     hoje = date.today()
-    agendamento = AgendamentoMudanca.query.get_or_404(agendamento_id)
+    agendamento = _agendamento_do_tenant(
+        agendamento_id, condominio_id_obrigatorio(usuario)
+    )
 
     if agendamento.status != StatusAgendamentoMudanca.APROVADA:
         flash("Somente mudanças aprovadas podem ter chegada registrada.", "warning")
