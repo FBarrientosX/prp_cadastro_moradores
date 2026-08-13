@@ -163,6 +163,44 @@ def _garantir_colunas_reservas():
         db.session.commit()
 
 
+def _garantir_coluna_condominio_espacos_comuns():
+    """Isolamento multi-tenant: condominio_id em áreas comuns + backfill no cliente legado."""
+    inspetor = inspect(db.engine)
+    if "espacos_comuns" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("espacos_comuns")}
+    if "condominio_id" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE espacos_comuns ADD COLUMN condominio_id INTEGER")
+        )
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_espacos_comuns_condominio_id "
+                "ON espacos_comuns (condominio_id)"
+            )
+        )
+        db.session.commit()
+
+    from app.models import Condominio
+
+    condominio = Condominio.query.filter_by(slug="prp").first()
+    if condominio is None:
+        condominio = Condominio.query.order_by(Condominio.id).first()
+    if condominio is None:
+        return
+
+    db.session.execute(
+        text(
+            "UPDATE espacos_comuns "
+            "SET condominio_id = :condominio_id "
+            "WHERE condominio_id IS NULL"
+        ),
+        {"condominio_id": condominio.id},
+    )
+    db.session.commit()
+
+
 def _garantir_tabelas_parceiros(app):
     with app.app_context():
         db.create_all()
@@ -185,6 +223,12 @@ def _garantir_colunas_parceiros():
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN endereco VARCHAR(255)")
     if "usuario_login" not in colunas:
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN usuario_login VARCHAR(80)")
+    if "logo_arquivo" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN logo_arquivo VARCHAR(255)")
+    if "link_instagram" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN link_instagram VARCHAR(255)")
+    if "link_facebook" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN link_facebook VARCHAR(255)")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -280,6 +324,29 @@ def _garantir_tabela_agendamentos_mudanca():
             )
         )
         db.session.commit()
+
+
+def _garantir_colunas_registros_acesso():
+    """Garante porteiro_saida_id em registros_acesso (SQLite legado)."""
+    inspetor = inspect(db.engine)
+    if "registros_acesso" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("registros_acesso")}
+    if "porteiro_saida_id" in colunas:
+        return
+
+    db.session.execute(
+        text("ALTER TABLE registros_acesso ADD COLUMN porteiro_saida_id INTEGER")
+    )
+    db.session.commit()
+    db.session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_registros_acesso_porteiro_saida_id "
+            "ON registros_acesso (porteiro_saida_id)"
+        )
+    )
+    db.session.commit()
 
 
 def _garantir_colunas_multi_tenant():
@@ -523,6 +590,7 @@ def create_app(config=None):
     app = Flask(__name__)
 
     upload_logos = os.path.join(app.root_path, "static", "uploads", "logos")
+    upload_parceiros = os.path.join(app.root_path, "static", "uploads", "parceiros")
 
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me-in-production"),
@@ -533,6 +601,7 @@ def create_app(config=None):
         SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 15}},
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
         UPLOAD_LOGOS_FOLDER=upload_logos,
+        UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
     )
 
     if config:
@@ -551,17 +620,9 @@ def create_app(config=None):
         condominio_ctx = None
 
         if usuario:
-            from app.models import Unidade
-            from sqlalchemy import or_
-
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
             if usuario.condominio_id:
-                query = query.outerjoin(Unidade, Reserva.unidade_id == Unidade.id).filter(
-                    or_(
-                        Reserva.unidade_id.is_(None),
-                        Unidade.condominio_id == usuario.condominio_id,
-                    )
-                )
+                query = query.filter(EspacoComum.condominio_id == usuario.condominio_id)
             if usuario.role == "sindico":
                 blocos_sindico = [
                     agrup.nome_agrupamento for agrup in usuario.agrupamentos
@@ -622,9 +683,11 @@ def create_app(config=None):
         _garantir_colunas_unidades()
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
+        _garantir_coluna_condominio_espacos_comuns()
         _garantir_colunas_parceiros()
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
+        _garantir_colunas_registros_acesso()
 
     _garantir_tabelas_parceiros(app)
 

@@ -188,7 +188,7 @@
                     {% for sindico in sindicos %}
                     <tr>
                         <td>
-                            {% for agrup in sindico.agrupamentos %}
+                            {% for agrup in sindico.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
                                 {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
                             {% else %}
                                 —
@@ -197,7 +197,7 @@
                         <td>{{ sindico.username }}</td>
                         <td>
                             <form method="post" action="{{ url_for('admin_alterar_senha_sindico') }}" class="d-flex gap-2">
-                                <input type="hidden" name="username" value="{{ sindico.username }}">
+                                <input type="hidden" name="usuario_id" value="{{ sindico.id }}">
                                 <input type="text" class="form-control form-control-sm"
                                        name="nova_senha" minlength="6" required
                                        placeholder="Digite a nova senha">
@@ -236,7 +236,9 @@
                     <tr>
                         <td>{{ usuario.username }}</td>
                         <td>
-                            {% if usuario.role == 'assistente' %}
+                            {% if usuario.role == 'admin' %}
+                            Administrador Local
+                            {% elif usuario.role == 'assistente' %}
                             Assistente Administrativo
                             {% elif usuario.role == 'sindico' %}
                             Síndico de Bloco
@@ -248,7 +250,7 @@
                         </td>
                         <td>
                             {% if usuario.role == 'sindico' %}
-                                {% for agrup in usuario.agrupamentos %}
+                                {% for agrup in usuario.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
                                     {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
                                 {% else %}
                                     —
@@ -258,6 +260,7 @@
                             {% endif %}
                         </td>
                         <td class="text-end">
+                            {% if usuario.id != current_user.id and usuario.role != 'admin' %}
                             <form method="post"
                                   action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"
                                   class="d-inline"
@@ -266,6 +269,9 @@
                                     Revogar Acesso
                                 </button>
                             </form>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

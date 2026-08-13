@@ -1,7 +1,10 @@
 from datetime import date, datetime, timedelta
 from functools import wraps
+from html import escape
+from html.parser import HTMLParser
 import os
 import random
+import re
 import string
 import traceback
 
@@ -54,21 +57,26 @@ from app.models import (
     Condominio,
     ConfiguracaoCondominio,
     Cupom,
+    Encomenda,
     EspacoComum,
     LogAuditoria,
     Parceiro,
     Pessoa,
+    RegistroAcesso,
     Reserva,
     ResgateCupom,
     Role,
     SindicoAgrupamento,
     StatusAgendamentoMudanca,
     StatusDocumento,
+    StatusEncomenda,
     StatusUnidade,
+    TipoVisitante,
     Unidade,
     Usuario,
     Veiculo,
     VinculoPessoa,
+    Visitante,
 )
 from app.utils import (
     SALT_RECUPERACAO_MORADOR,
@@ -97,7 +105,18 @@ def _slug_sessao_ou_prp():
     return session.get("tenant_slug") or session.get("cadastro_slug") or "prp"
 
 
+def _slug_logout():
+    """Slug do tenant atual, capturado antes de limpar a sessão."""
+    usuario = get_current_user()
+    condominio = getattr(usuario, "condominio", None) if usuario else None
+    if condominio and condominio.slug:
+        return condominio.slug
+    return _slug_sessao_ou_prp()
+
+
 _LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
+_PARCEIRO_LOGO_EXTENSOES = {"png", "jpg", "jpeg", "webp"}
+_PARCEIRO_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 
 def _normalizar_cor_primaria(valor):
@@ -132,11 +151,101 @@ def _salvar_logo_condominio(arquivo, slug):
     return nome_final
 
 
+def _salvar_logo_parceiro(arquivo, prefixo="parceiro"):
+    """
+    Salva logotipo do parceiro.
+    Retorna (filename, erro): sem arquivo (None, None); inválido (None, msg); ok (nome, None).
+    """
+    if not arquivo or not arquivo.filename:
+        return None, None
+
+    nome_seguro = secure_filename(arquivo.filename)
+    if not nome_seguro or "." not in nome_seguro:
+        return None, "Envie um logotipo em PNG, JPG, JPEG ou WEBP."
+
+    extensao = nome_seguro.rsplit(".", 1)[-1].lower()
+    if extensao not in _PARCEIRO_LOGO_EXTENSOES:
+        return None, "Envie um logotipo em PNG, JPG, JPEG ou WEBP."
+
+    tamanho_header = getattr(arquivo, "content_length", None)
+    if tamanho_header and tamanho_header > _PARCEIRO_LOGO_MAX_BYTES:
+        return None, "O logotipo deve ter no máximo 2 MB."
+
+    arquivo.stream.seek(0, os.SEEK_END)
+    tamanho = arquivo.stream.tell()
+    arquivo.stream.seek(0)
+    if tamanho > _PARCEIRO_LOGO_MAX_BYTES:
+        return None, "O logotipo deve ter no máximo 2 MB."
+
+    pasta = current_app.config.get("UPLOAD_PARCEIROS_FOLDER") or os.path.join(
+        current_app.root_path, "static", "uploads", "parceiros"
+    )
+    os.makedirs(pasta, exist_ok=True)
+    token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    nome_final = f"{secure_filename(prefixo)}_{token}.{extensao}"
+    arquivo.save(os.path.join(pasta, nome_final))
+    return nome_final, None
+
+
+def _link_rede_social(valor):
+    texto = (valor or "").strip()
+    return texto[:255] if texto else None
+
+
+class _SanitizadorHtmlRico(HTMLParser):
+    """Mantém apenas tags permitidas pelo editor (negrito, itálico, sublinhado e quebras)."""
+
+    _PERMITIDAS = frozenset({"p", "br", "strong", "b", "em", "i", "u"})
+
+    def __init__(self):
+        super().__init__()
+        self._partes = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in self._PERMITIDAS:
+            return
+        self._partes.append(f"<{tag}>")
+
+    def handle_endtag(self, tag):
+        if tag not in self._PERMITIDAS or tag == "br":
+            return
+        self._partes.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "br":
+            self._partes.append("<br>")
+
+    def handle_data(self, data):
+        self._partes.append(escape(data))
+
+    def resultado(self):
+        return "".join(self._partes)
+
+
+def _html_rico_form(nome_campo):
+    """Lê HTML do Quill, sanitiza e trata editor vazio como string vazia."""
+    bruto = (request.form.get(nome_campo) or "").strip()
+    if not bruto:
+        return ""
+    parser = _SanitizadorHtmlRico()
+    parser.feed(bruto)
+    parser.close()
+    limpo = parser.resultado().strip()
+    texto = re.sub(r"<[^>]+>", "", limpo).replace("&nbsp;", " ").strip()
+    if not texto:
+        return ""
+    return limpo
+
+
 def _buscar_unidade(bloco, apartamento, condominio_id=None):
-    query = Unidade.query.filter_by(bloco=bloco, apartamento=apartamento)
-    if condominio_id is not None:
-        query = query.filter_by(condominio_id=condominio_id)
-    return query.first()
+    """Busca unidade apenas dentro do tenant. Sem condominio_id, não consulta."""
+    if not condominio_id:
+        return None
+    return Unidade.query.filter_by(
+        bloco=bloco,
+        apartamento=apartamento,
+        condominio_id=condominio_id,
+    ).first()
 
 
 def _unidade_do_tenant(unidade_id, condominio_id):
@@ -160,10 +269,80 @@ def _agendamento_do_tenant(agendamento_id, condominio_id):
     ).first_or_404()
 
 
-def _buscar_unidade_e_email_login(email):
-    """Localiza unidade e o e-mail cadastrado que corresponde ao login informado."""
+def _registro_acesso_do_tenant(registro_id, condominio_id):
+    """Carrega log de acesso do mesmo condomínio (anti-IDOR)."""
+    return RegistroAcesso.query.filter_by(
+        id=registro_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _encomenda_do_tenant(encomenda_id, condominio_id):
+    """Carrega encomenda do mesmo condomínio (anti-IDOR)."""
+    return Encomenda.query.filter_by(
+        id=encomenda_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _normalizar_documento_visitante(documento):
+    """Normaliza RG/CPF para busca única por tenant (remove pontuação)."""
+    bruto = (documento or "").strip().upper()
+    limpo = "".join(ch for ch in bruto if ch.isalnum())
+    return limpo[:20]
+
+
+def _condominio_id_portaria(usuario=None):
+    """Tenant da sessão de portaria; Super Admin só opera com condomínio na sessão."""
+    usuario = usuario or get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    if condominio_id:
+        return condominio_id
+    return session.get("condominio_id")
+
+
+def _espaco_do_tenant(espaco_id, condominio_id):
+    """Carrega área comum garantindo isolamento multi-tenant (anti-IDOR)."""
+    return EspacoComum.query.filter_by(
+        id=espaco_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _reserva_do_tenant(reserva_id, condominio_id):
+    """Carrega reserva cujo espaço pertence ao condomínio logado (anti-IDOR)."""
+    return (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            Reserva.id == reserva_id,
+            EspacoComum.condominio_id == condominio_id,
+        )
+        .first_or_404()
+    )
+
+
+def _pessoa_do_tenant(pessoa_id, condominio_id):
+    """Carrega morador (Pessoa) apenas se a unidade for do tenant (anti-IDOR)."""
+    return (
+        Pessoa.query.join(Unidade)
+        .filter(Pessoa.id == pessoa_id, Unidade.condominio_id == condominio_id)
+        .first_or_404()
+    )
+
+
+def _condominio_id_da_sessao():
+    """Tenant da sessão atual — sem fallback para o PRP (evita vazamento LGPD)."""
+    cid = session.get("condominio_id") or session.get("cadastro_condominio_id")
+    if cid:
+        return cid
+    slug = session.get("tenant_slug") or session.get("cadastro_slug")
+    if not slug:
+        return None
+    condominio = Condominio.query.filter_by(slug=normalizar_slug(slug)).first()
+    return condominio.id if condominio else None
+
+
+def _buscar_unidade_e_email_login(email, condominio_id=None):
+    """Localiza unidade e o e-mail cadastrado, estritamente no condomínio informado."""
     email_normalizado = email.strip().lower()
-    if not email_normalizado:
+    if not email_normalizado or not condominio_id:
         return None, None
 
     unidades = (
@@ -176,10 +355,11 @@ def _buscar_unidade_e_email_login(email):
             ),
         )
         .filter(
+            Unidade.condominio_id == condominio_id,
             or_(
                 func.lower(Unidade.proprietario_email) == email_normalizado,
                 func.lower(Pessoa.email) == email_normalizado,
-            )
+            ),
         )
         .all()
     )
@@ -209,7 +389,10 @@ def _agrupamentos_sindico(usuario):
     """Lista os nomes de agrupamento (blocos) sob jurisdição do síndico."""
     if not usuario:
         return []
-    return [agrup.nome_agrupamento for agrup in usuario.agrupamentos]
+    query = usuario.agrupamentos
+    if usuario.condominio_id:
+        query = query.filter_by(condominio_id=usuario.condominio_id)
+    return [agrup.nome_agrupamento for agrup in query]
 
 
 def _blocos_codigo_sindico(usuario):
@@ -728,7 +911,11 @@ def _requer_nova_aprovacao_sindico(unidade, pessoas_data, veiculos_data, dados_p
 def acesso_reservas_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if get_current_user() or get_unidade_logada():
+        usuario = get_current_user()
+        if usuario and usuario.role == Role.PORTEIRO:
+            flash("Acesso restrito à portaria.", "danger")
+            return redirect(url_for("portaria_dashboard"))
+        if usuario or get_unidade_logada():
             return view(*args, **kwargs)
         flash("Faça login para acessar o módulo de reservas.", "warning")
         return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
@@ -744,6 +931,12 @@ def gestao_espacos_required(view):
     def wrapped(*args, **kwargs):
         usuario = get_current_user()
         if usuario and usuario.role in (Role.ADMIN, Role.ASSISTENTE, Role.SINDICO):
+            if not usuario.condominio_id:
+                flash(
+                    "Conta sem condomínio vinculado. Contate a administração.",
+                    "danger",
+                )
+                return redirect(url_for("reservas"))
             return view(*args, **kwargs)
         flash("Acesso restrito para gestão de espaços.", "danger")
         return redirect(url_for("reservas"))
@@ -763,7 +956,9 @@ def parceiro_required(view):
 
 
 def _usuario_pode_gerenciar_espaco(usuario, espaco):
-    if not usuario:
+    if not usuario or not espaco:
+        return False
+    if not usuario.condominio_id or espaco.condominio_id != usuario.condominio_id:
         return False
     if usuario.role == Role.SINDICO:
         return _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado)
@@ -773,9 +968,15 @@ def _usuario_pode_gerenciar_espaco(usuario, espaco):
 
 
 def _reservas_pendentes_por_jurisdicao(usuario):
-    if not usuario:
+    if not usuario or not usuario.condominio_id:
         return []
-    query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
+    query = (
+        Reserva.query.join(Reserva.espaco)
+        .filter(
+            Reserva.status == "Pendente",
+            EspacoComum.condominio_id == usuario.condominio_id,
+        )
+    )
     if usuario.role == Role.SINDICO:
         chaves = _chaves_agrupamento_sindico(usuario)
         if not chaves:
@@ -870,7 +1071,10 @@ def tenant_login(slug):
         flash("Usuário ou senha inválidos.", "danger")
         return _render_tenant_login(condominio, active_tab="equipe")
 
-    return _render_tenant_login(condominio)
+    aba_equipe = request.args.get("tab") == "equipe"
+    return _render_tenant_login(
+        condominio, active_tab="equipe" if aba_equipe else "morador"
+    )
 
 
 def verificar_unidade(slug):
@@ -958,7 +1162,9 @@ def esqueci_senha():
             "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
         )
 
-        unidade, email_destino = _buscar_unidade_e_email_login(email_solicitado)
+        unidade, email_destino = _buscar_unidade_e_email_login(
+            email_solicitado, condominio_id=_condominio_id_da_sessao()
+        )
         if unidade and email_destino:
             try:
                 token = gerar_token_redefinicao(email_solicitado, SALT_RECUPERACAO_MORADOR)
@@ -987,7 +1193,9 @@ def redefinir_senha(token):
         flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
         return redirect(url_for("esqueci_senha"))
 
-    unidade, _ = _buscar_unidade_e_email_login(email)
+    unidade, _ = _buscar_unidade_e_email_login(
+        email, condominio_id=_condominio_id_da_sessao()
+    )
     if not unidade:
         flash("Unidade não encontrada para este e-mail.", "danger")
         return redirect(url_for("esqueci_senha"))
@@ -1526,7 +1734,7 @@ def parceiro_cupons_criar():
         return redirect(url_for("parceiro_cupons"))
 
     titulo = request.form.get("titulo", "").strip()
-    descricao = request.form.get("descricao", "").strip()
+    descricao = _html_rico_form("descricao")
     codigo_prefixo = request.form.get("codigo_prefixo", "").strip().upper()
     data_validade_str = request.form.get("data_validade", "").strip()
     limite_total = _parse_limite_total_form(request.form.get("limite_total"))
@@ -1624,7 +1832,9 @@ def parceiro_perfil_editar():
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
-    descricao = request.form.get("descricao", "").strip() or None
+    descricao = _html_rico_form("descricao") or None
+    link_instagram = _link_rede_social(request.form.get("link_instagram"))
+    link_facebook = _link_rede_social(request.form.get("link_facebook"))
 
     if not nome_empresa or not email or not categoria:
         flash("Preencha nome da empresa, e-mail e categoria.", "danger")
@@ -1638,12 +1848,24 @@ def parceiro_perfil_editar():
         flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
         return redirect(url_for("parceiro_perfil"))
 
+    novo_logo, erro_logo = _salvar_logo_parceiro(
+        request.files.get("logo"),
+        prefixo=parceiro.usuario_login or f"parceiro{parceiro.id}",
+    )
+    if erro_logo:
+        flash(erro_logo, "danger")
+        return redirect(url_for("parceiro_perfil"))
+
     parceiro.nome_empresa = nome_empresa
     parceiro.email = email
     parceiro.telefone = telefone
     parceiro.categoria = categoria
     parceiro.endereco = endereco
     parceiro.descricao = descricao
+    parceiro.link_instagram = link_instagram
+    parceiro.link_facebook = link_facebook
+    if novo_logo:
+        parceiro.logo_arquivo = novo_logo
     db.session.commit()
     flash("Perfil comercial atualizado com sucesso.", "success")
     return redirect(url_for("parceiro_perfil"))
@@ -1661,10 +1883,14 @@ def reservas():
     minhas_reservas = []
 
     if usuario:
+        condominio_id = condominio_id_obrigatorio(usuario)
         if usuario.role == Role.SINDICO:
             chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
             espacos = (
-                EspacoComum.query.filter(EspacoComum.bloco_vinculado.in_(chaves_agrupamento))
+                EspacoComum.query.filter(
+                    EspacoComum.condominio_id == condominio_id,
+                    EspacoComum.bloco_vinculado.in_(chaves_agrupamento),
+                )
                 .order_by(EspacoComum.nome)
                 .all()
                 if chaves_agrupamento
@@ -1672,22 +1898,27 @@ def reservas():
             )
         elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
             espacos = (
-                EspacoComum.query.filter_by(gerenciado_por="admin")
+                EspacoComum.query.filter_by(
+                    condominio_id=condominio_id, gerenciado_por="admin"
+                )
                 .order_by(EspacoComum.nome)
                 .all()
             )
-            condominio_id = condominio_id_obrigatorio(usuario)
             unidades_gestao = (
                 Unidade.query.filter_by(condominio_id=condominio_id)
                 .order_by(Unidade.bloco, Unidade.apartamento)
                 .all()
             )
-        query_pendentes = Reserva.query.join(EspacoComum).filter(Reserva.status == "Pendente")
+
+        query_pendentes = Reserva.query.join(EspacoComum).filter(
+            Reserva.status == "Pendente",
+            EspacoComum.condominio_id == condominio_id,
+        )
         query_historico = Reserva.query.join(EspacoComum).filter(
-            Reserva.status != "Pendente"
+            Reserva.status != "Pendente",
+            EspacoComum.condominio_id == condominio_id,
         )
 
-        condominio_id = condominio_id_obrigatorio(usuario)
         if usuario.role == Role.SINDICO:
             chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
             filtro_jurisdicao = EspacoComum.bloco_vinculado.in_(chaves_agrupamento or [""])
@@ -1705,30 +1936,26 @@ def reservas():
         else:
             filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
 
-        # Reservas de unidades do próprio condomínio (ou sem unidade vinculada).
-        filtro_tenant_reserva = or_(
-            Reserva.unidade_id.is_(None),
-            Reserva.unidade.has(Unidade.condominio_id == condominio_id),
-        )
-
         reservas_pendentes = (
-            query_pendentes.filter(filtro_jurisdicao, filtro_tenant_reserva)
+            query_pendentes.filter(filtro_jurisdicao)
             .order_by(Reserva.data_solicitacao.desc())
             .all()
         )
         reservas_historico = (
-            query_historico.filter(filtro_jurisdicao, filtro_tenant_reserva)
+            query_historico.filter(filtro_jurisdicao)
             .order_by(Reserva.data_reserva.desc())
             .all()
         )
 
     if unidade:
+        condominio_id = unidade.condominio_id
         espacos_disponiveis = (
             EspacoComum.query.filter(
+                EspacoComum.condominio_id == condominio_id,
                 or_(
                     EspacoComum.apenas_moradores_bloco.is_(False),
                     EspacoComum.bloco_vinculado == unidade.bloco,
-                )
+                ),
             )
             .order_by(EspacoComum.nome)
             .all()
@@ -1763,7 +1990,7 @@ def solicitar_reserva(unidade):
         return redirect(url_for("reservas"))
 
     try:
-        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        espaco = _espaco_do_tenant(int(espaco_id), unidade.condominio_id)
         data_reserva = datetime.strptime(data_reserva_str, "%Y-%m-%d").date()
     except ValueError:
         flash("Data de reserva inválida.", "danger")
@@ -1822,7 +2049,9 @@ def criar_reserva_gestao():
         return redirect(url_for("reservas"))
 
     try:
-        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        espaco = _espaco_do_tenant(
+            int(espaco_id), condominio_id_obrigatorio(usuario)
+        )
         data_reserva = datetime.strptime(data_reserva_str, "%d/%m/%Y").date()
     except ValueError:
         flash("Dados inválidos para criação da reserva.", "danger")
@@ -1873,7 +2102,7 @@ def criar_reserva_gestao():
 @gestao_espacos_required
 def responder_reserva(reserva_id):
     usuario = get_current_user()
-    reserva = Reserva.query.get_or_404(reserva_id)
+    reserva = _reserva_do_tenant(reserva_id, condominio_id_obrigatorio(usuario))
     acao = request.form.get("acao", "").strip().lower()
 
     if not _usuario_pode_gerenciar_espaco(usuario, reserva.espaco):
@@ -1918,14 +2147,17 @@ def responder_reserva(reserva_id):
 @gestao_espacos_required
 def api_reservas_eventos():
     usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
     if usuario.role == Role.SINDICO:
         chaves = _chaves_agrupamento_sindico(usuario)
         query = Reserva.query.join(EspacoComum).filter(
+            EspacoComum.condominio_id == condominio_id,
             EspacoComum.bloco_vinculado.in_(chaves or [""]),
             Reserva.status.in_(["Pendente", "Aprovada"]),
         )
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         query = Reserva.query.join(EspacoComum).filter(
+            EspacoComum.condominio_id == condominio_id,
             or_(
                 and_(
                     EspacoComum.gerenciado_por == "admin",
@@ -1935,7 +2167,7 @@ def api_reservas_eventos():
                     EspacoComum.gerenciado_por == "sindico",
                     Reserva.status == "Aprovada",
                 ),
-            )
+            ),
         )
     else:
         return jsonify([])
@@ -1970,7 +2202,7 @@ def api_reservas_eventos():
 @gestao_espacos_required
 def atualizar_pagamento_reserva(reserva_id):
     usuario = get_current_user()
-    reserva = Reserva.query.get_or_404(reserva_id)
+    reserva = _reserva_do_tenant(reserva_id, condominio_id_obrigatorio(usuario))
 
     if not _usuario_pode_gerenciar_espaco(usuario, reserva.espaco):
         flash("Você não tem permissão para atualizar este pagamento.", "danger")
@@ -1999,7 +2231,7 @@ def atualizar_pagamento_reserva(reserva_id):
 @gestao_espacos_required
 def cancelar_reserva(reserva_id):
     usuario = get_current_user()
-    reserva = Reserva.query.get_or_404(reserva_id)
+    reserva = _reserva_do_tenant(reserva_id, condominio_id_obrigatorio(usuario))
 
     if not _usuario_pode_gerenciar_espaco(usuario, reserva.espaco):
         flash("Você não tem permissão para cancelar esta reserva.", "danger")
@@ -2064,7 +2296,7 @@ def salvar_espaco_reserva():
         return redirect(url_for("reservas"))
 
     if espaco_id:
-        espaco = EspacoComum.query.get_or_404(int(espaco_id))
+        espaco = _espaco_do_tenant(int(espaco_id), condominio_id_obrigatorio(usuario))
         if usuario.role == Role.SINDICO:
             if not _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado):
                 flash("Você não tem permissão para editar este espaço.", "danger")
@@ -2074,7 +2306,10 @@ def salvar_espaco_reserva():
                 flash("Você só pode editar espaços gerenciados pela administração.", "danger")
                 return redirect(url_for("reservas"))
     else:
-        espaco = EspacoComum(tipo="SALAO_FESTAS")
+        espaco = EspacoComum(
+            tipo="SALAO_FESTAS",
+            condominio_id=condominio_id_obrigatorio(usuario),
+        )
         db.session.add(espaco)
 
     espaco.nome = nome
@@ -2101,7 +2336,7 @@ def salvar_espaco_reserva():
 
 
 def sair():
-    slug = _slug_sessao_ou_prp()
+    slug = _slug_logout()
     logout_unidade()
     logout_usuario()
     flash("Sessão encerrada.", "info")
@@ -2383,11 +2618,7 @@ def sindico_reprovar(unidade_id):
 def sindico_reprovar_pessoa(pessoa_id):
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
-    pessoa = (
-        Pessoa.query.join(Unidade)
-        .filter(Pessoa.id == pessoa_id, Unidade.condominio_id == condominio_id)
-        .first_or_404()
-    )
+    pessoa = _pessoa_do_tenant(pessoa_id, condominio_id)
     unidade = pessoa.unidade
 
     if not _sindico_gerencia_bloco(usuario, unidade.bloco):
@@ -2860,7 +3091,9 @@ def superadmin_parceiros_criar():
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
-    descricao = request.form.get("descricao", "").strip() or None
+    descricao = _html_rico_form("descricao") or None
+    link_instagram = _link_rede_social(request.form.get("link_instagram"))
+    link_facebook = _link_rede_social(request.form.get("link_facebook"))
 
     if not nome_empresa or not usuario_login or not email or not categoria:
         flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
@@ -2878,6 +3111,13 @@ def superadmin_parceiros_criar():
         flash("Já existe parceiro cadastrado com este e-mail.", "warning")
         return redirect(url_for("superadmin_parceiros"))
 
+    logo_arquivo, erro_logo = _salvar_logo_parceiro(
+        request.files.get("logo"), prefixo=usuario_login
+    )
+    if erro_logo:
+        flash(erro_logo, "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
     parceiro = Parceiro(
         nome_empresa=nome_empresa,
         usuario_login=usuario_login,
@@ -2887,6 +3127,9 @@ def superadmin_parceiros_criar():
         categoria=categoria,
         endereco=endereco,
         descricao=descricao,
+        logo_arquivo=logo_arquivo,
+        link_instagram=link_instagram,
+        link_facebook=link_facebook,
         ativo=True,
         status="Pendente",
     )
@@ -2908,7 +3151,9 @@ def superadmin_parceiro_editar(parceiro_id):
     telefone = request.form.get("telefone", "").strip() or None
     categoria = request.form.get("categoria", "").strip()
     endereco = request.form.get("endereco", "").strip() or None
-    descricao = request.form.get("descricao", "").strip() or None
+    descricao = _html_rico_form("descricao") or None
+    link_instagram = _link_rede_social(request.form.get("link_instagram"))
+    link_facebook = _link_rede_social(request.form.get("link_facebook"))
 
     if not nome_empresa or not usuario_login or not email or not categoria:
         flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
@@ -2934,6 +3179,13 @@ def superadmin_parceiro_editar(parceiro_id):
         flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
         return redirect(url_for("superadmin_parceiros"))
 
+    novo_logo, erro_logo = _salvar_logo_parceiro(
+        request.files.get("logo"), prefixo=usuario_login
+    )
+    if erro_logo:
+        flash(erro_logo, "danger")
+        return redirect(url_for("superadmin_parceiros"))
+
     parceiro.nome_empresa = nome_empresa
     parceiro.usuario_login = usuario_login
     parceiro.email = email
@@ -2941,6 +3193,10 @@ def superadmin_parceiro_editar(parceiro_id):
     parceiro.categoria = categoria
     parceiro.endereco = endereco
     parceiro.descricao = descricao
+    parceiro.link_instagram = link_instagram
+    parceiro.link_facebook = link_facebook
+    if novo_logo:
+        parceiro.logo_arquivo = novo_logo
     db.session.commit()
     flash("Parceiro atualizado com sucesso.", "success")
     return redirect(url_for("superadmin_parceiros"))
@@ -3133,7 +3389,9 @@ def admin_index():
     equipe_acessos = (
         Usuario.query.filter(
             Usuario.condominio_id == condominio_id,
-            Usuario.role.in_([Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]),
+            Usuario.role.in_(
+                [Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]
+            ),
         )
         .order_by(Usuario.role, Usuario.username)
         .all()
@@ -3151,7 +3409,12 @@ def admin_index():
 
 @admin_required
 def admin_clube_vantagens():
-    """Admin local: apenas Relatórios/Analytics do próprio condomínio."""
+    """
+    Admin local: apenas Relatórios/Analytics do próprio condomínio.
+
+    Clube de Vantagens é catálogo GLOBAL (Parceiro/Cupom sem condominio_id).
+    Mutação de parceiros fica exclusiva do Super Admin (/superadmin/parceiros).
+    """
     usuario = get_current_user()
     analytics = _montar_analytics_clube(condominio_id=usuario.condominio_id)
 
@@ -3301,10 +3564,10 @@ def admin_atualizar_status_documentos(unidade_id):
 @admin_required
 def admin_alterar_senha_sindico():
     condominio_id = condominio_id_obrigatorio()
-    username = request.form.get("username", "").strip()
+    usuario_id = request.form.get("usuario_id", type=int)
     nova_senha = request.form.get("nova_senha", "").strip()
 
-    if not username or not nova_senha:
+    if not usuario_id or not nova_senha:
         flash("Informe o síndico e a nova senha.", "danger")
         return redirect(url_for("admin_index"))
 
@@ -3312,12 +3575,8 @@ def admin_alterar_senha_sindico():
         flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
         return redirect(url_for("admin_index"))
 
-    sindico = Usuario.query.filter_by(
-        username=username,
-        role=Role.SINDICO,
-        condominio_id=condominio_id,
-    ).first()
-    if not sindico:
+    sindico = _usuario_do_tenant(usuario_id, condominio_id)
+    if sindico.role != Role.SINDICO:
         flash("Síndico não encontrado.", "danger")
         return redirect(url_for("admin_index"))
 
@@ -3480,10 +3739,13 @@ def mudancas_morador(unidade):
 
         if acao == "cancelar":
             agendamento_id = request.form.get("agendamento_id", type=int)
-            agendamento = AgendamentoMudanca.query.filter_by(
-                id=agendamento_id, unidade_id=unidade.id
-            ).first()
-            if not agendamento:
+            if not agendamento_id:
+                flash("Solicitação não encontrada.", "danger")
+                return redirect(url_for("mudancas_morador"))
+            agendamento = _agendamento_do_tenant(
+                agendamento_id, unidade.condominio_id
+            )
+            if agendamento.unidade_id != unidade.id:
                 flash("Solicitação não encontrada.", "danger")
             elif agendamento.status not in StatusAgendamentoMudanca.PENDENTES:
                 flash(
@@ -3521,7 +3783,7 @@ def mudancas_morador(unidade):
             data_mudanca=data_mudanca,
             status=StatusAgendamentoMudanca.PENDENTE_SINDICO,
             observacoes=observacoes,
-            condominio_id=resolver_condominio_id(unidade=unidade),
+            condominio_id=unidade.condominio_id,
         )
         db.session.add(agendamento)
         db.session.commit()
@@ -3532,7 +3794,9 @@ def mudancas_morador(unidade):
         return redirect(url_for("mudancas_morador"))
 
     historico = (
-        AgendamentoMudanca.query.filter_by(unidade_id=unidade.id)
+        AgendamentoMudanca.query.filter_by(
+            unidade_id=unidade.id, condominio_id=unidade.condominio_id
+        )
         .order_by(
             AgendamentoMudanca.data_mudanca.desc(),
             AgendamentoMudanca.data_solicitacao.desc(),
@@ -3558,17 +3822,11 @@ def sindico_mudancas():
     if request.method == "POST":
         agendamento_id = request.form.get("agendamento_id", type=int)
         acao = request.form.get("acao", "").strip()
-        agendamento = (
-            AgendamentoMudanca.query.join(Unidade)
-            .filter(
-                AgendamentoMudanca.id == agendamento_id,
-                AgendamentoMudanca.condominio_id == condominio_id,
-                Unidade.bloco.in_(blocos_sindico or [""]),
-            )
-            .first()
-        )
-
-        if not agendamento:
+        if not agendamento_id:
+            flash("Solicitação não encontrada no seu bloco.", "danger")
+            return redirect(url_for("sindico_mudancas"))
+        agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
+        if not _sindico_gerencia_bloco(usuario, agendamento.unidade.bloco):
             flash("Solicitação não encontrada no seu bloco.", "danger")
             return redirect(url_for("sindico_mudancas"))
 
@@ -3609,6 +3867,7 @@ def sindico_mudancas():
         AgendamentoMudanca.query.join(Unidade)
         .filter(
             AgendamentoMudanca.condominio_id == condominio_id,
+            Unidade.condominio_id == condominio_id,
             Unidade.bloco.in_(blocos_sindico or [""]),
         )
         .order_by(
@@ -3650,16 +3909,10 @@ def admin_mudancas():
             data_str = request.form.get("data_mudanca", "").strip()
             observacoes = request.form.get("observacoes", "").strip() or None
 
-            unidade = (
-                Unidade.query.filter_by(
-                    id=unidade_id, condominio_id=condominio_id
-                ).first()
-                if unidade_id
-                else None
-            )
-            if not unidade:
+            if not unidade_id:
                 flash("Selecione uma unidade válida.", "danger")
                 return redirect(url_for("admin_mudancas"))
+            unidade = _unidade_do_tenant(unidade_id, condominio_id)
 
             if tipo not in StatusAgendamentoMudanca.TIPOS:
                 flash("Selecione o tipo da mudança (Entrada ou Saída).", "danger")
@@ -3699,17 +3952,10 @@ def admin_mudancas():
             return redirect(url_for("admin_mudancas"))
 
         agendamento_id = request.form.get("agendamento_id", type=int)
-        agendamento = (
-            AgendamentoMudanca.query.filter_by(
-                id=agendamento_id, condominio_id=condominio_id
-            ).first()
-            if agendamento_id
-            else None
-        )
-
-        if not agendamento:
+        if not agendamento_id:
             flash("Solicitação não encontrada.", "danger")
             return redirect(url_for("admin_mudancas"))
+        agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
 
         if agendamento.status != StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO:
             flash(
@@ -3774,79 +4020,365 @@ def admin_mudancas():
     )
 
 
-def portaria_login():
-    usuario_logado = get_current_user()
-    if usuario_logado and usuario_logado.role in (Role.PORTEIRO, Role.ADMIN):
-        return redirect(url_for("portaria_dashboard"))
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-
-        usuario = Usuario.query.filter(
-            Usuario.username == username,
-            Usuario.role.in_([Role.PORTEIRO, Role.ADMIN]),
-        ).first()
-        if usuario and usuario.check_password(password):
-            login_usuario(usuario)
-            return redirect(url_for("portaria_dashboard"))
-
-        flash("Usuário ou senha inválidos.", "danger")
-
-    return render_template(
-        "login.html", titulo="Login da Portaria", action="portaria"
-    )
-
-
 def portaria_logout():
+    slug = _slug_logout()
     logout_usuario()
     flash("Sessão encerrada.", "info")
-    return redirect(url_for("portaria_login"))
+    return redirect(url_for("tenant_login", slug=slug, tab="equipe"))
+
+
+def _contagens_acesso_aberto(condominio_id):
+    if not condominio_id:
+        return 0, 0
+    base = (
+        RegistroAcesso.query.join(Visitante)
+        .filter(
+            RegistroAcesso.condominio_id == condominio_id,
+            RegistroAcesso.data_saida.is_(None),
+        )
+    )
+    visitantes_no_local = base.filter(
+        Visitante.tipo == TipoVisitante.VISITANTE
+    ).count()
+    prestadores_no_local = (
+        RegistroAcesso.query.join(Visitante)
+        .filter(
+            RegistroAcesso.condominio_id == condominio_id,
+            RegistroAcesso.data_saida.is_(None),
+            Visitante.tipo == TipoVisitante.PRESTADOR,
+        )
+        .count()
+    )
+    return visitantes_no_local, prestadores_no_local
 
 
 @portaria_required
 def portaria_dashboard():
-    hoje = date.today()
-    condominio_id = condominio_id_obrigatorio()
-
-    mudancas = (
-        AgendamentoMudanca.query.join(Unidade)
-        .filter(
-            AgendamentoMudanca.condominio_id == condominio_id,
-            AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
-            AgendamentoMudanca.data_mudanca >= hoje,
-        )
-        .order_by(
-            AgendamentoMudanca.data_mudanca.asc(),
-            Unidade.bloco,
-            Unidade.apartamento,
-        )
-        .all()
-    )
-
-    reservas = (
-        Reserva.query.join(EspacoComum)
-        .outerjoin(Unidade, Reserva.unidade_id == Unidade.id)
-        .filter(
-            Reserva.status == "Aprovada",
-            Reserva.data_reserva >= hoje,
-            or_(
-                Reserva.unidade_id.is_(None),
-                Unidade.condominio_id == condominio_id,
-            ),
-        )
-        .order_by(Reserva.data_reserva.asc(), EspacoComum.nome)
-        .all()
-    )
-
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    visitantes_no_local, prestadores_no_local = _contagens_acesso_aberto(condominio_id)
+    encomendas_pendentes = 0
+    if condominio_id:
+        encomendas_pendentes = Encomenda.query.filter_by(
+            condominio_id=condominio_id,
+            status=StatusEncomenda.PENDENTE,
+        ).count()
     return render_template(
-        "portaria_dashboard.html",
-        mudancas=mudancas,
-        reservas=reservas,
-        hoje=hoje,
-        current_user=get_current_user(),
-        nome_responsavel=_nome_responsavel_unidade,
+        "portaria/dashboard.html",
+        current_user=usuario,
+        visitantes_no_local=visitantes_no_local,
+        prestadores_no_local=prestadores_no_local,
+        encomendas_pendentes=encomendas_pendentes,
     )
+
+
+@portaria_required
+def portaria_acesso():
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    registros_abertos = (
+        RegistroAcesso.query.join(Visitante)
+        .join(Unidade)
+        .filter(
+            RegistroAcesso.condominio_id == condominio_id,
+            RegistroAcesso.data_saida.is_(None),
+        )
+        .order_by(RegistroAcesso.data_entrada.asc())
+        .all()
+    )
+    registros_historico = (
+        RegistroAcesso.query.join(Visitante)
+        .join(Unidade)
+        .filter(
+            RegistroAcesso.condominio_id == condominio_id,
+            RegistroAcesso.data_saida.isnot(None),
+        )
+        .order_by(RegistroAcesso.data_saida.desc())
+        .all()
+    )
+    unidades = (
+        Unidade.query.filter_by(condominio_id=condominio_id)
+        .order_by(Unidade.bloco, Unidade.apartamento)
+        .all()
+    )
+    return render_template(
+        "portaria/acesso.html",
+        current_user=usuario,
+        registros_abertos=registros_abertos,
+        registros_historico=registros_historico,
+        unidades=unidades,
+        tipos_visitante=TipoVisitante.CHOICES,
+    )
+
+
+@portaria_required
+def portaria_acesso_entrada():
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_acesso"))
+
+    documento = _normalizar_documento_visitante(request.form.get("documento", ""))
+    nome = (request.form.get("nome", "") or "").strip()
+    tipo = (request.form.get("tipo", "") or "").strip()
+    empresa = (request.form.get("empresa", "") or "").strip() or None
+    unidade_id_raw = (request.form.get("unidade_id", "") or "").strip()
+
+    if not documento or not nome or tipo not in TipoVisitante.CHOICES:
+        flash("Preencha documento, nome e tipo para registrar a entrada.", "danger")
+        return redirect(url_for("portaria_acesso"))
+
+    try:
+        unidade_id = int(unidade_id_raw)
+    except (TypeError, ValueError):
+        flash("Selecione a unidade de destino.", "danger")
+        return redirect(url_for("portaria_acesso"))
+
+    unidade = Unidade.query.filter_by(
+        id=unidade_id, condominio_id=condominio_id
+    ).first()
+    if unidade is None:
+        flash("Unidade inválida para este condomínio.", "danger")
+        return redirect(url_for("portaria_acesso"))
+
+    if tipo != TipoVisitante.PRESTADOR:
+        empresa = None
+
+    visitante = Visitante.query.filter_by(
+        condominio_id=condominio_id,
+        documento=documento,
+    ).first()
+    if visitante is None:
+        visitante = Visitante(
+            condominio_id=condominio_id,
+            documento=documento,
+            nome=nome,
+            tipo=tipo,
+            empresa=empresa,
+        )
+        db.session.add(visitante)
+        db.session.flush()
+    else:
+        visitante.nome = nome
+        visitante.tipo = tipo
+        visitante.empresa = empresa
+
+    entrada_aberta = RegistroAcesso.query.filter_by(
+        condominio_id=condominio_id,
+        visitante_id=visitante.id,
+        data_saida=None,
+    ).first()
+    if entrada_aberta:
+        nome_aberto = visitante.nome
+        unidade_aberta = entrada_aberta.unidade.identificador
+        db.session.rollback()
+        flash(
+            f"{nome_aberto} já possui entrada em aberto em {unidade_aberta}. "
+            "Registre a saída antes de uma nova entrada.",
+            "warning",
+        )
+        return redirect(url_for("portaria_acesso"))
+
+    agora = _agora_sao_paulo()
+    registro = RegistroAcesso(
+        condominio_id=condominio_id,
+        visitante_id=visitante.id,
+        unidade_id=unidade.id,
+        data_entrada=agora,
+        data_saida=None,
+        porteiro_id=usuario.id,
+    )
+    db.session.add(registro)
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' registrou entrada de {visitante.nome} "
+        f"({visitante.tipo}) na unidade {unidade.identificador}.",
+    )
+    db.session.commit()
+    flash(
+        f"Entrada registrada: {visitante.nome} → {unidade.identificador} "
+        f"às {agora.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_acesso"))
+
+
+@portaria_required
+def portaria_acesso_saida(registro_id):
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_acesso"))
+
+    registro = _registro_acesso_do_tenant(registro_id, condominio_id)
+    if registro.data_saida:
+        flash("Esta entrada já foi encerrada.", "info")
+        return redirect(url_for("portaria_acesso"))
+
+    registro.data_saida = _agora_sao_paulo()
+    registro.porteiro_saida_id = usuario.id
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' registrou saída de "
+        f"{registro.visitante.nome} da unidade {registro.unidade.identificador} "
+        f"às {registro.data_saida.strftime('%H:%M')}.",
+    )
+    db.session.commit()
+    flash(
+        f"Saída registrada: {registro.visitante.nome} "
+        f"às {registro.data_saida.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_acesso"))
+
+
+@portaria_required
+def portaria_encomendas():
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    pendentes = (
+        Encomenda.query.join(Unidade)
+        .filter(
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+        )
+        .order_by(Encomenda.data_recebimento.asc())
+        .all()
+    )
+    historico = (
+        Encomenda.query.join(Unidade)
+        .filter(
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.ENTREGUE,
+        )
+        .order_by(Encomenda.data_entrega.desc())
+        .all()
+    )
+    unidades = (
+        Unidade.query.filter_by(condominio_id=condominio_id)
+        .order_by(Unidade.bloco, Unidade.apartamento)
+        .all()
+    )
+    return render_template(
+        "portaria/encomendas.html",
+        current_user=usuario,
+        pendentes=pendentes,
+        historico=historico,
+        unidades=unidades,
+    )
+
+
+@portaria_required
+def portaria_encomendas_receber():
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_encomendas"))
+
+    destinatario = (request.form.get("destinatario", "") or "").strip() or None
+    transportadora = (request.form.get("transportadora", "") or "").strip() or None
+    unidade_id_raw = (request.form.get("unidade_id", "") or "").strip()
+
+    try:
+        unidade_id = int(unidade_id_raw)
+    except (TypeError, ValueError):
+        flash("Selecione a unidade destinatária da encomenda.", "danger")
+        return redirect(url_for("portaria_encomendas"))
+
+    unidade = Unidade.query.filter_by(
+        id=unidade_id, condominio_id=condominio_id
+    ).first()
+    if unidade is None:
+        flash("Unidade inválida para este condomínio.", "danger")
+        return redirect(url_for("portaria_encomendas"))
+
+    agora = _agora_sao_paulo()
+    encomenda = Encomenda(
+        condominio_id=condominio_id,
+        unidade_id=unidade.id,
+        destinatario=destinatario,
+        transportadora=transportadora,
+        status=StatusEncomenda.PENDENTE,
+        data_recebimento=agora,
+        data_entrega=None,
+        porteiro_recebimento_id=usuario.id,
+        porteiro_entrega_id=None,
+    )
+    db.session.add(encomenda)
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' recebeu encomenda para "
+        f"{unidade.identificador}"
+        + (f" ({destinatario})" if destinatario else "")
+        + ".",
+    )
+    db.session.commit()
+    flash(
+        f"Encomenda recebida para {unidade.identificador} "
+        f"às {agora.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_encomendas"))
+
+
+@portaria_required
+def portaria_encomendas_entregar(encomenda_id):
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_encomendas"))
+
+    encomenda = _encomenda_do_tenant(encomenda_id, condominio_id)
+    if encomenda.status == StatusEncomenda.ENTREGUE:
+        flash("Esta encomenda já foi entregue ao morador.", "info")
+        return redirect(url_for("portaria_encomendas"))
+
+    encomenda.status = StatusEncomenda.ENTREGUE
+    encomenda.data_entrega = _agora_sao_paulo()
+    encomenda.porteiro_entrega_id = usuario.id
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' entregou encomenda #{encomenda.id} "
+        f"da unidade {encomenda.unidade.identificador} "
+        f"às {encomenda.data_entrega.strftime('%H:%M')}.",
+    )
+    db.session.commit()
+    flash(
+        f"Entrega registrada para {encomenda.unidade.identificador} "
+        f"às {encomenda.data_entrega.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_encomendas"))
 
 
 def _agora_sao_paulo():
@@ -4325,15 +4857,15 @@ def init_app(app):
         methods=["GET", "POST"],
     )
     app.add_url_rule(
-        "/portaria/login",
-        "portaria_login",
-        portaria_login,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
         "/portaria/logout",
         "portaria_logout",
         portaria_logout,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria",
+        "portaria_index",
+        portaria_dashboard,
         methods=["GET"],
     )
     app.add_url_rule(
@@ -4341,6 +4873,42 @@ def init_app(app):
         "portaria_dashboard",
         portaria_dashboard,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/acesso",
+        "portaria_acesso",
+        portaria_acesso,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/acesso/entrada",
+        "portaria_acesso_entrada",
+        portaria_acesso_entrada,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/acesso/saida/<int:registro_id>",
+        "portaria_acesso_saida",
+        portaria_acesso_saida,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas",
+        "portaria_encomendas",
+        portaria_encomendas,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/receber",
+        "portaria_encomendas_receber",
+        portaria_encomendas_receber,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/entregar/<int:encomenda_id>",
+        "portaria_encomendas_entregar",
+        portaria_encomendas_entregar,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/portaria/mudanca/<int:agendamento_id>/chegar",

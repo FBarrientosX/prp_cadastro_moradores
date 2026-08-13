@@ -10,3 +10,5 @@ seed.py
 seed_parceiros
 app/static/uploads/logos/*
 !app/static/uploads/logos/.gitkeep
+app/static/uploads/parceiros/*
+!app/static/uploads/parceiros/.gitkeep

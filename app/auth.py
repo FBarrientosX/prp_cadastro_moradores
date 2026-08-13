@@ -119,7 +119,19 @@ def get_current_user():
     user_id = session.get("user_id")
     if not user_id:
         return None
-    return Usuario.query.get(user_id)
+    usuario = Usuario.query.get(user_id)
+    if usuario is None:
+        return None
+    if usuario.role == Role.SUPERADMIN:
+        return usuario
+    sessao_cid = session.get("condominio_id")
+    if (
+        sessao_cid
+        and usuario.condominio_id
+        and int(usuario.condominio_id) != int(sessao_cid)
+    ):
+        return None
+    return usuario
 
 
 def _redirect_login_tenant():
@@ -155,7 +167,17 @@ def get_unidade_logada():
     unidade_id = session.get("unidade_id")
     if not unidade_id:
         return None
-    return Unidade.query.get(unidade_id)
+    unidade = Unidade.query.get(unidade_id)
+    if unidade is None:
+        return None
+    sessao_cid = session.get("condominio_id")
+    if (
+        sessao_cid
+        and unidade.condominio_id
+        and int(unidade.condominio_id) != int(sessao_cid)
+    ):
+        return None
+    return unidade
 
 
 def superadmin_required(view):
@@ -248,12 +270,25 @@ def unidade_required(view):
 
 
 def portaria_required(view):
+    """Acesso à portaria: porteiro, admin do tenant ou Super Admin da plataforma."""
+
     @wraps(view)
     def wrapped(*args, **kwargs):
         usuario = get_current_user()
-        if not usuario or usuario.role not in (Role.PORTEIRO, Role.ADMIN):
+        if not usuario:
+            return _redirect_login_tenant()
+        if usuario.role not in (
+            Role.PORTEIRO,
+            Role.ADMIN,
+            Role.SUPERADMIN,
+        ):
             flash("Acesso restrito à portaria.", "danger")
-            return redirect(url_for("portaria_login"))
+            return _redirect_login_tenant()
+
+        # Super Admin opera a plataforma sem tenant obrigatório.
+        if usuario.role == Role.SUPERADMIN:
+            return view(*args, **kwargs)
+
         if not usuario.condominio_id:
             flash(
                 "Conta de portaria sem condomínio vinculado. "
@@ -261,6 +296,8 @@ def portaria_required(view):
                 "danger",
             )
             return _redirect_login_tenant()
+
+        # Isolamento: sessão sempre no condominio_id do próprio usuário.
         _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 

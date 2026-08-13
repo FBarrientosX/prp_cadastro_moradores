@@ -1,0 +1,208 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Controle de Acesso{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Controle de Acesso</h1>
+        <p class="text-muted mb-0">Check-in e check-out de visitantes e prestadores.</p>
+    </div>
+    <span class="badge text-bg-secondary fs-6">
+        {{ registros_abertos|length }} no condomínio
+    </span>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">
+            <i class="bi bi-box-arrow-in-right me-1"></i>Registrar entrada
+        </h2>
+        <form method="post" action="{{ url_for('portaria_acesso_entrada') }}" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label" for="documento">RG / CPF</label>
+                <input type="text" class="form-control" id="documento" name="documento"
+                       maxlength="20" required autocomplete="off">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="nome">Nome</label>
+                <input type="text" class="form-control" id="nome" name="nome"
+                       maxlength="200" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="tipo">Tipo</label>
+                <select class="form-select" id="tipo" name="tipo" required>
+                    {% for tipo in tipos_visitante %}
+                    <option value="{{ tipo }}">{{ tipo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4 d-none" id="campo-empresa">
+                <label class="form-label" for="empresa">Empresa</label>
+                <input type="text" class="form-control" id="empresa" name="empresa"
+                       maxlength="200" placeholder="Opcional para prestadores">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="unidade_id">Unidade de destino</label>
+                <select class="form-select" id="unidade_id" name="unidade_id" required>
+                    <option value="" selected disabled>Selecione a unidade...</option>
+                    {% for unidade in unidades %}
+                    <option value="{{ unidade.id }}">{{ unidade.identificador }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-8 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2-circle me-1"></i>Registrar entrada
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<ul class="nav nav-tabs" id="acessoTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="atuais-tab" data-bs-toggle="tab"
+                data-bs-target="#atuais" type="button" role="tab">
+            Visitantes atuais
+            <span class="badge bg-secondary ms-1">{{ registros_abertos|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="historico-acesso-tab" data-bs-toggle="tab"
+                data-bs-target="#historico-acesso" type="button" role="tab">
+            Histórico de acessos
+            <span class="badge bg-secondary ms-1">{{ registros_historico|length }}</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content pt-3">
+    <div class="tab-pane fade show active" id="atuais" role="tabpanel">
+        {% if registros_abertos %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>Tipo</th>
+                        <th>Documento</th>
+                        <th>Unidade destino</th>
+                        <th>Data/hora de entrada</th>
+                        <th>Porteiro (entrada)</th>
+                        <th class="text-end">Ação</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for registro in registros_abertos %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ registro.visitante.nome }}</div>
+                            {% if registro.visitante.empresa %}
+                            <div class="small text-muted">{{ registro.visitante.empresa }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if registro.visitante.tipo == 'Prestador' %}
+                            <span class="badge text-bg-warning">Prestador</span>
+                            {% else %}
+                            <span class="badge text-bg-primary">Visitante</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ registro.visitante.documento }}</td>
+                        <td>{{ registro.unidade.identificador }}</td>
+                        <td>{{ registro.data_entrada.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>{{ registro.porteiro.username if registro.porteiro else '—' }}</td>
+                        <td class="text-end">
+                            <form method="post"
+                                  action="{{ url_for('portaria_acesso_saida', registro_id=registro.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Confirmar saída de {{ registro.visitante.nome }}?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-box-arrow-right me-1"></i>Registrar saída
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhum visitante ou prestador no condomínio neste momento.</p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="historico-acesso" role="tabpanel">
+        {% if registros_historico %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>Tipo</th>
+                        <th>Unidade</th>
+                        <th>Data/hora de entrada</th>
+                        <th>Porteiro (entrada)</th>
+                        <th>Data/hora de saída</th>
+                        <th>Porteiro (saída)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for registro in registros_historico %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ registro.visitante.nome }}</div>
+                            {% if registro.visitante.empresa %}
+                            <div class="small text-muted">{{ registro.visitante.empresa }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if registro.visitante.tipo == 'Prestador' %}
+                            <span class="badge text-bg-warning">Prestador</span>
+                            {% else %}
+                            <span class="badge text-bg-primary">Visitante</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ registro.unidade.identificador }}</td>
+                        <td>{{ registro.data_entrada.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>{{ registro.porteiro.username if registro.porteiro else '—' }}</td>
+                        <td>
+                            {% if registro.data_saida %}
+                            {{ registro.data_saida.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{{ registro.porteiro_saida.username if registro.porteiro_saida else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhum check-out registrado ainda.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const tipo = document.getElementById("tipo");
+    const campoEmpresa = document.getElementById("campo-empresa");
+    const inputEmpresa = document.getElementById("empresa");
+    if (!tipo || !campoEmpresa) return;
+
+    function atualizarEmpresa() {
+        const ehPrestador = tipo.value === "Prestador";
+        campoEmpresa.classList.toggle("d-none", !ehPrestador);
+        if (!ehPrestador && inputEmpresa) inputEmpresa.value = "";
+    }
+
+    tipo.addEventListener("change", atualizarEmpresa);
+    atualizarEmpresa();
+})();
+</script>
+{% endblock %}

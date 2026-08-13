@@ -1,0 +1,151 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Encomendas{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Encomendas</h1>
+        <p class="text-muted mb-0">Recebimento na portaria e entrega ao morador.</p>
+    </div>
+    <span class="badge text-bg-warning fs-6">
+        {{ pendentes|length }} aguardando retirada
+    </span>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">
+            <i class="bi bi-box-arrow-in-down me-1"></i>Registrar recebimento
+        </h2>
+        <form method="post" action="{{ url_for('portaria_encomendas_receber') }}" class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label" for="unidade_id">Unidade</label>
+                <select class="form-select" id="unidade_id" name="unidade_id" required>
+                    <option value="" selected disabled>Selecione a unidade...</option>
+                    {% for unidade in unidades %}
+                    <option value="{{ unidade.id }}">{{ unidade.identificador }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="destinatario">Destinatário</label>
+                <input type="text" class="form-control" id="destinatario" name="destinatario"
+                       maxlength="200" placeholder="Opcional">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="transportadora">Transportadora</label>
+                <input type="text" class="form-control" id="transportadora" name="transportadora"
+                       maxlength="100" placeholder="Opcional">
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check2-circle me-1"></i>Registrar recebimento
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<ul class="nav nav-tabs" id="encomendasTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="pendentes-tab" data-bs-toggle="tab"
+                data-bs-target="#pendentes" type="button" role="tab">
+            Aguardando retirada
+            <span class="badge bg-warning text-dark ms-1">{{ pendentes|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="historico-tab" data-bs-toggle="tab"
+                data-bs-target="#historico" type="button" role="tab">
+            Histórico
+            <span class="badge bg-secondary ms-1">{{ historico|length }}</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content pt-3">
+    <div class="tab-pane fade show active" id="pendentes" role="tabpanel">
+        {% if pendentes %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Unidade</th>
+                        <th>Destinatário</th>
+                        <th>Transportadora</th>
+                        <th>Data/hora de recebimento</th>
+                        <th>Recebido por</th>
+                        <th class="text-end">Ação</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in pendentes %}
+                    <tr>
+                        <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                        <td>{{ item.destinatario or '—' }}</td>
+                        <td>{{ item.transportadora or '—' }}</td>
+                        <td>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
+                        <td class="text-end">
+                            <form method="post"
+                                  action="{{ url_for('portaria_encomendas_entregar', encomenda_id=item.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Confirmar entrega desta encomenda ao morador?');">
+                                <button type="submit" class="btn btn-sm btn-success">
+                                    <i class="bi bi-box-seam me-1"></i>Registrar entrega
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhuma encomenda aguardando retirada.</p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="historico" role="tabpanel">
+        {% if historico %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Unidade</th>
+                        <th>Destinatário</th>
+                        <th>Transportadora</th>
+                        <th>Data/hora de recebimento</th>
+                        <th>Recebido por</th>
+                        <th>Data/hora de entrega</th>
+                        <th>Entregue por</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in historico %}
+                    <tr>
+                        <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                        <td>{{ item.destinatario or '—' }}</td>
+                        <td>{{ item.transportadora or '—' }}</td>
+                        <td>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
+                        <td>
+                            {% if item.data_entrega %}
+                            {{ item.data_entrega.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{{ item.porteiro_entrega.username if item.porteiro_entrega else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhuma encomenda entregue ainda.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

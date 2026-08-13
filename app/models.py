@@ -46,6 +46,20 @@ class VinculoPessoa:
     CHOICES = (PROPRIETARIO, LOCATARIO, MORADOR)
 
 
+class TipoVisitante:
+    VISITANTE = "Visitante"
+    PRESTADOR = "Prestador"
+
+    CHOICES = (VISITANTE, PRESTADOR)
+
+
+class StatusEncomenda:
+    PENDENTE = "Pendente"
+    ENTREGUE = "Entregue"
+
+    CHOICES = (PENDENTE, ENTREGUE)
+
+
 class Condominio(db.Model):
     """Tenant raiz do SaaS multi-condomínio."""
 
@@ -235,6 +249,16 @@ class Unidade(db.Model):
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
+    registros_acesso = db.relationship(
+        "RegistroAcesso",
+        back_populates="unidade",
+        lazy="dynamic",
+    )
+    encomendas = db.relationship(
+        "Encomenda",
+        back_populates="unidade",
+        lazy="dynamic",
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -254,6 +278,10 @@ class EspacoComum(db.Model):
     __tablename__ = "espacos_comuns"
 
     id = db.Column(db.Integer, primary_key=True)
+    # Multi-tenant: nullable na transição; backfill no boot.
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
     nome = db.Column(db.String(150), nullable=False)
     tipo = db.Column(db.String(40), nullable=False, default="SALAO_FESTAS")
     gerenciado_por = db.Column(db.String(20), nullable=False)
@@ -266,6 +294,9 @@ class EspacoComum(db.Model):
     )
     valor_reserva = db.Column(db.Float, nullable=False, default=0.0)
 
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("espacos_comuns", lazy=True)
+    )
     reservas = db.relationship(
         "Reserva",
         back_populates="espaco",
@@ -314,6 +345,9 @@ class Parceiro(db.Model):
     categoria = db.Column(db.String(50), nullable=False)
     endereco = db.Column(db.String(255), nullable=True)
     descricao = db.Column(db.Text, nullable=True)
+    logo_arquivo = db.Column(db.String(255), nullable=True)
+    link_instagram = db.Column(db.String(255), nullable=True)
+    link_facebook = db.Column(db.String(255), nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -471,3 +505,120 @@ class AgendamentoMudanca(db.Model):
 
     def __repr__(self):
         return f"<AgendamentoMudanca {self.id} ({self.tipo} / {self.status})>"
+
+
+class Visitante(db.Model):
+    """Cadastro de visitante ou prestador de serviço (isolamento por condomínio)."""
+
+    __tablename__ = "visitantes"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "condominio_id",
+            "documento",
+            name="uq_visitante_documento_condominio",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(200), nullable=False)
+    # RG ou CPF; unicidade composta com condominio_id (não global).
+    documento = db.Column(db.String(20), nullable=False)
+    telefone = db.Column(db.String(20), nullable=True)
+    tipo = db.Column(db.String(20), nullable=False, default=TipoVisitante.VISITANTE)
+    empresa = db.Column(db.String(200), nullable=True)
+    data_criacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("visitantes", lazy=True)
+    )
+    registros_acesso = db.relationship(
+        "RegistroAcesso",
+        back_populates="visitante",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<Visitante {self.nome} ({self.tipo})>"
+
+
+class RegistroAcesso(db.Model):
+    """Log transacional de entrada/saída na portaria (imutável após criação)."""
+
+    __tablename__ = "registros_acesso"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    visitante_id = db.Column(
+        db.Integer, db.ForeignKey("visitantes.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    data_entrada = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    data_saida = db.Column(db.DateTime, nullable=True)
+    porteiro_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    porteiro_saida_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+    observacoes = db.Column(db.Text, nullable=True)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("registros_acesso", lazy=True)
+    )
+    visitante = db.relationship("Visitante", back_populates="registros_acesso")
+    unidade = db.relationship("Unidade", back_populates="registros_acesso")
+    porteiro = db.relationship("Usuario", foreign_keys=[porteiro_id])
+    porteiro_saida = db.relationship("Usuario", foreign_keys=[porteiro_saida_id])
+
+    def __repr__(self):
+        return f"<RegistroAcesso {self.id} visitante_id={self.visitante_id}>"
+
+
+class Encomenda(db.Model):
+    """Pacote recebido na portaria, isolado por condomínio."""
+
+    __tablename__ = "encomendas"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    destinatario = db.Column(db.String(200), nullable=True)
+    transportadora = db.Column(db.String(100), nullable=True)
+    status = db.Column(
+        db.String(20), nullable=False, default=StatusEncomenda.PENDENTE, index=True
+    )
+    data_recebimento = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, index=True
+    )
+    data_entrega = db.Column(db.DateTime, nullable=True)
+    porteiro_recebimento_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    porteiro_entrega_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("encomendas", lazy=True)
+    )
+    unidade = db.relationship("Unidade", back_populates="encomendas")
+    porteiro_recebimento = db.relationship(
+        "Usuario", foreign_keys=[porteiro_recebimento_id]
+    )
+    porteiro_entrega = db.relationship(
+        "Usuario", foreign_keys=[porteiro_entrega_id]
+    )
+
+    def __repr__(self):
+        return f"<Encomenda {self.id} ({self.status})>"

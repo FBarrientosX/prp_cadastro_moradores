@@ -55,12 +55,21 @@
             <div class="col">
                 <div class="card h-100 shadow-sm border-0">
                     <div class="card-header bg-white border-0 pb-0">
-                        <h2 class="h6 mb-1">{{ cupom.parceiro.nome_empresa }}</h2>
-                        <span class="badge text-bg-primary">{{ cupom.parceiro.categoria }}</span>
+                        <div class="d-flex align-items-center gap-3">
+                            {% if cupom.parceiro.logo_arquivo %}
+                            <img src="{{ url_for('static', filename='uploads/parceiros/' ~ cupom.parceiro.logo_arquivo) }}"
+                                 alt="Logo {{ cupom.parceiro.nome_empresa }}"
+                                 class="logo-parceiro-vitrine">
+                            {% endif %}
+                            <div class="min-w-0">
+                                <h2 class="h6 mb-1 text-truncate">{{ cupom.parceiro.nome_empresa }}</h2>
+                                <span class="badge text-bg-primary">{{ cupom.parceiro.categoria }}</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="card-body">
                         <h3 class="h6 fw-bold mb-2">{{ cupom.titulo }}</h3>
-                        <p class="text-muted small mb-0">{{ cupom.descricao }}</p>
+                        <div class="text-muted small mb-0 html-rico">{{ cupom.descricao | safe }}</div>
                     </div>
                     <div class="card-footer bg-white border-0 pt-0">
                         <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
@@ -93,17 +102,26 @@
             <div class="col">
                 <div class="card h-100 shadow-sm border-0">
                     <div class="card-header bg-white border-0 pb-0">
-                        <div class="d-flex justify-content-between align-items-start gap-2">
-                            <h2 class="h6 mb-1">{{ parceiro.nome_empresa }}</h2>
+                        <div class="d-flex align-items-start justify-content-between gap-2">
+                            <div class="d-flex align-items-center gap-3 min-w-0">
+                                {% if parceiro.logo_arquivo %}
+                                <img src="{{ url_for('static', filename='uploads/parceiros/' ~ parceiro.logo_arquivo) }}"
+                                     alt="Logo {{ parceiro.nome_empresa }}"
+                                     class="logo-parceiro-vitrine">
+                                {% endif %}
+                                <div class="min-w-0">
+                                    <h2 class="h6 mb-1 text-truncate">{{ parceiro.nome_empresa }}</h2>
+                                    <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
+                                </div>
+                            </div>
                             {% if parceiro.id in parceiros_com_cupons_ativos %}
-                            <span class="badge bg-success">Possui cupons ativos!</span>
+                            <span class="badge bg-success flex-shrink-0">Possui cupons ativos!</span>
                             {% endif %}
                         </div>
-                        <span class="badge text-bg-primary">{{ parceiro.categoria }}</span>
                     </div>
                     <div class="card-body">
                         {% if parceiro.descricao %}
-                        <p class="text-muted small mb-0">{{ parceiro.descricao }}</p>
+                        <div class="text-muted small mb-0 html-rico">{{ parceiro.descricao | safe }}</div>
                         {% else %}
                         <p class="text-muted mb-0">Nenhuma descrição informada.</p>
                         {% endif %}
@@ -130,7 +148,23 @@
                                 <i class="bi bi-envelope me-1"></i>{{ parceiro.email }}
                             </a>
                             {% endif %}
-                            {% if not parceiro.telefone and not parceiro.email %}
+                            {% if parceiro.link_instagram %}
+                            <a href="{{ parceiro.link_instagram }}"
+                               class="btn btn-sm btn-outline-danger"
+                               target="_blank"
+                               rel="noopener noreferrer">
+                                <i class="bi bi-instagram me-1"></i>Instagram
+                            </a>
+                            {% endif %}
+                            {% if parceiro.link_facebook %}
+                            <a href="{{ parceiro.link_facebook }}"
+                               class="btn btn-sm btn-outline-primary"
+                               target="_blank"
+                               rel="noopener noreferrer">
+                                <i class="bi bi-facebook me-1"></i>Facebook
+                            </a>
+                            {% endif %}
+                            {% if not parceiro.telefone and not parceiro.email and not parceiro.link_instagram and not parceiro.link_facebook %}
                             <span class="small text-muted">Contatos não informados.</span>
                             {% endif %}
                         </div>
@@ -151,8 +185,17 @@
             <div class="col">
                 <div class="card h-100 shadow-sm border-0">
                     <div class="card-header bg-white border-0 pb-0">
-                        <h2 class="h6 mb-1">{{ resgate.cupom.parceiro.nome_empresa }}</h2>
-                        <span class="badge text-bg-success">Aguardando uso</span>
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <div class="d-flex align-items-center gap-3 min-w-0">
+                                {% if resgate.cupom.parceiro.logo_arquivo %}
+                                <img src="{{ url_for('static', filename='uploads/parceiros/' ~ resgate.cupom.parceiro.logo_arquivo) }}"
+                                     alt="Logo {{ resgate.cupom.parceiro.nome_empresa }}"
+                                     class="logo-parceiro-vitrine">
+                                {% endif %}
+                                <h2 class="h6 mb-0 text-truncate">{{ resgate.cupom.parceiro.nome_empresa }}</h2>
+                            </div>
+                            <span class="badge text-bg-success flex-shrink-0">Aguardando uso</span>
+                        </div>
                     </div>
                     <div class="card-body">
                         <h3 class="h6 fw-bold mb-2">{{ resgate.cupom.titulo }}</h3>

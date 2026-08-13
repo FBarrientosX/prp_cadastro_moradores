@@ -19,7 +19,7 @@
         </div>
 
         <form method="post"
-              action="{% if action == 'superadmin' %}{{ url_for('superadmin_login') }}{% elif action == 'admin' %}{{ url_for('tenant_login', slug=slug or 'prp') }}{% elif action == 'portaria' %}{{ url_for('portaria_login') }}{% else %}{{ url_for('sindico_login', slug=slug or 'prp') }}{% endif %}">
+              action="{% if action == 'superadmin' %}{{ url_for('superadmin_login') }}{% elif action == 'admin' %}{{ url_for('tenant_login', slug=slug or 'prp') }}{% else %}{{ url_for('sindico_login', slug=slug or 'prp') }}{% endif %}">
             {% if action == 'admin' %}
             <input type="hidden" name="perfil" value="equipe">
             {% endif %}

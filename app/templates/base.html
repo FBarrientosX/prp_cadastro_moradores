@@ -32,6 +32,24 @@
             object-fit: contain;
         }
 
+        .html-rico p {
+            margin-bottom: 0.35rem;
+        }
+
+        .html-rico p:last-child {
+            margin-bottom: 0;
+        }
+
+        .logo-parceiro-vitrine {
+            width: 60px;
+            height: 60px;
+            object-fit: contain;
+            border-radius: 0.75rem;
+            border: 1px solid var(--bs-border-color);
+            background: #fff;
+            flex-shrink: 0;
+        }
+
         @media (min-width: 992px) {
             .app-sidebar {
                 position: fixed;
@@ -140,7 +158,7 @@
                 </a>
             {% elif sidebar_user and sidebar_user.role == 'porteiro' %}
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_dashboard' %}active{% endif %}" href="{{ url_for('portaria_dashboard') }}">
-                    <i class="bi bi-truck me-2"></i>Painel da Portaria
+                    <i class="bi bi-shield-check me-2"></i>Painel da Portaria
                 </a>
             {# Painel do cliente: admin/assistente locais — sem menus Super Admin (plataforma). #}
             {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
@@ -161,6 +179,9 @@
                 </a>
                 <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('admin_index') }}#equipe">
                     <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                </a>
+                <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
+                    <i class="bi bi-shield-check me-2"></i>Portaria
                 </a>
                 {% endif %}
                 <a class="nav-link text-white d-flex justify-content-between align-items-center{% if request.endpoint == 'reservas' %} active{% endif %}" href="{{ url_for('reservas') }}">
@@ -185,7 +206,7 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug) }}">
                     <i class="bi bi-briefcase me-2"></i>Administração
                 </a>
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_login' %}active{% endif %}" href="{{ url_for('portaria_login') }}">
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug, tab='equipe') }}">
                     <i class="bi bi-shield-check me-2"></i>Portaria
                 </a>
             {% endif %}
@@ -244,7 +265,7 @@
                     </a>
                 {% elif sidebar_user and sidebar_user.role == 'porteiro' %}
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_dashboard' %}active{% endif %}" href="{{ url_for('portaria_dashboard') }}">
-                        <i class="bi bi-truck me-2"></i>Painel da Portaria
+                        <i class="bi bi-shield-check me-2"></i>Painel da Portaria
                     </a>
                 {% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
                     {% if sidebar_user.role == 'admin' %}
@@ -264,6 +285,9 @@
                     </a>
                     <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('admin_index') }}#equipe">
                         <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
+                        <i class="bi bi-shield-check me-2"></i>Portaria
                     </a>
                     {% endif %}
                     <a class="nav-link text-white d-flex justify-content-between align-items-center{% if request.endpoint == 'reservas' %} active{% endif %}" href="{{ url_for('reservas') }}">
@@ -287,7 +311,7 @@
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug_mobile) }}">
                         <i class="bi bi-briefcase me-2"></i>Administração
                     </a>
-                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_login' %}active{% endif %}" href="{{ url_for('portaria_login') }}">
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'tenant_login' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug_mobile, tab='equipe') }}">
                         <i class="bi bi-shield-check me-2"></i>Portaria
                     </a>
                 {% endif %}
