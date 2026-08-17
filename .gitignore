@@ -12,3 +12,7 @@ app/static/uploads/logos/*
 !app/static/uploads/logos/.gitkeep
 app/static/uploads/parceiros/*
 !app/static/uploads/parceiros/.gitkeep
+app/static/uploads/ocorrencias/*
+!app/static/uploads/ocorrencias/.gitkeep
+app/static/uploads/encomendas/*
+!app/static/uploads/encomendas/.gitkeep

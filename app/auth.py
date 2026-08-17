@@ -140,11 +140,17 @@ def _redirect_login_tenant():
 
 
 def login_unidade(unidade):
+    # Limpa sessão anterior — mesma razão de login_usuario(): sem isso, uma
+    # sessão de staff (inclusive Super Admin) já autenticada podia logar como
+    # unidade por cima e ficar com uma sessão "mista" operando o condomínio
+    # errado, ou um morador anterior deixar resíduo de sessão para o próximo.
+    session.clear()
     session["unidade_id"] = unidade.id
     session["unidade_bloco"] = unidade.bloco
     session["unidade_apartamento"] = unidade.apartamento
     session["condominio_id"] = unidade.condominio_id
     _gravar_tenant_slug_sessao(unidade.condominio_id)
+    session.permanent = True
 
 
 def logout_unidade():
@@ -248,6 +254,27 @@ def sindico_required(view):
             )
             slug = session.get("tenant_slug") or "prp"
             return redirect(url_for("sindico_login", slug=slug))
+        _sincronizar_sessao_tenant(usuario)
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def admin_or_sindico_required(view):
+    """Acesso ao Kanban de ocorrências: admin ou síndico do mesmo tenant."""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if not usuario or usuario.role not in (Role.ADMIN, Role.SINDICO):
+            flash("Acesso restrito à administração e ao síndico.", "danger")
+            return _redirect_login_tenant()
+        if not usuario.condominio_id:
+            flash(
+                "Conta sem condomínio vinculado. Contate a administração.",
+                "danger",
+            )
+            return _redirect_login_tenant()
         _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 

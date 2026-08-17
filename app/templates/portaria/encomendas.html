@@ -18,8 +18,9 @@
         <h2 class="h5 mb-3">
             <i class="bi bi-box-arrow-in-down me-1"></i>Registrar recebimento
         </h2>
-        <form method="post" action="{{ url_for('portaria_encomendas_receber') }}" class="row g-3">
-            <div class="col-md-4">
+        <form method="post" action="{{ url_for('portaria_encomendas_receber') }}"
+              class="row g-3" enctype="multipart/form-data">
+            <div class="col-md-3">
                 <label class="form-label" for="unidade_id">Unidade</label>
                 <select class="form-select" id="unidade_id" name="unidade_id" required>
                     <option value="" selected disabled>Selecione a unidade...</option>
@@ -28,15 +29,38 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <label class="form-label" for="destinatario">Destinatário</label>
                 <input type="text" class="form-control" id="destinatario" name="destinatario"
                        maxlength="200" placeholder="Opcional">
             </div>
-            <div class="col-md-4">
-                <label class="form-label" for="transportadora">Transportadora</label>
+            <div class="col-md-3">
+                <label class="form-label" for="transportadora">Transportadora / Loja</label>
                 <input type="text" class="form-control" id="transportadora" name="transportadora"
                        maxlength="100" placeholder="Opcional">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="codigo_rastreio">Código de rastreio</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="codigo_rastreio" name="codigo_rastreio"
+                           maxlength="100" placeholder="Opcional" autocomplete="off">
+                    <button type="button" class="btn btn-outline-primary" id="btnEscanearCodigo"
+                            title="Escanear Código">
+                        <i class="bi bi-camera me-1"></i>Escanear Código
+                    </button>
+                </div>
+                <div id="readerWrap" class="mt-2" style="display: none;">
+                    <div id="reader" class="rounded border bg-dark" style="width: 100%;"></div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="btnFecharCamera">
+                        <i class="bi bi-x-circle me-1"></i>Fechar câmera
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="foto_pacote">Foto do pacote</label>
+                <input type="file" class="form-control" id="foto_pacote" name="foto_pacote"
+                       accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                <div class="form-text">PNG, JPG, JPEG ou WEBP. Máximo 2 MB.</div>
             </div>
             <div class="col-12">
                 <button type="submit" class="btn btn-primary">
@@ -45,6 +69,12 @@
             </div>
         </form>
     </div>
+</div>
+
+<div class="mb-3">
+    <label class="form-label" for="filtroEncomendas">Buscar</label>
+    <input type="text" class="form-control" id="filtroEncomendas"
+           placeholder="Filtrar por unidade ou destinatário...">
 </div>
 
 <ul class="nav nav-tabs" id="encomendasTabs" role="tablist">
@@ -68,7 +98,7 @@
     <div class="tab-pane fade show active" id="pendentes" role="tabpanel">
         {% if pendentes %}
         <div class="table-responsive card shadow-sm">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-hover align-middle mb-0" id="tabelaPendentes">
                 <thead class="table-light">
                     <tr>
                         <th>Unidade</th>
@@ -81,21 +111,29 @@
                 </thead>
                 <tbody>
                     {% for item in pendentes %}
-                    <tr>
+                    <tr data-unidade="{{ item.unidade.identificador|e }}"
+                        data-destinatario="{{ (item.destinatario or '')|e }}">
                         <td class="fw-semibold">{{ item.unidade.identificador }}</td>
                         <td>{{ item.destinatario or '—' }}</td>
                         <td>{{ item.transportadora or '—' }}</td>
                         <td>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</td>
                         <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
                         <td class="text-end">
-                            <form method="post"
-                                  action="{{ url_for('portaria_encomendas_entregar', encomenda_id=item.id) }}"
-                                  class="d-inline"
-                                  onsubmit="return confirm('Confirmar entrega desta encomenda ao morador?');">
-                                <button type="submit" class="btn btn-sm btn-success">
-                                    <i class="bi bi-box-seam me-1"></i>Registrar entrega
+                            <div class="d-inline-flex flex-wrap gap-1 justify-content-end">
+                                <button type="button" class="btn btn-sm btn-primary"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalDetalhes{{ item.id }}">
+                                    <i class="bi bi-info-circle me-1"></i>Detalhes
                                 </button>
-                            </form>
+                                <form method="post"
+                                      action="{{ url_for('portaria_encomendas_entregar', encomenda_id=item.id) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Confirmar entrega desta encomenda ao morador?');">
+                                    <button type="submit" class="btn btn-sm btn-success">
+                                        <i class="bi bi-box-seam me-1"></i>Registrar entrega
+                                    </button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -110,7 +148,7 @@
     <div class="tab-pane fade" id="historico" role="tabpanel">
         {% if historico %}
         <div class="table-responsive card shadow-sm">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-hover align-middle mb-0" id="tabelaHistorico">
                 <thead class="table-light">
                     <tr>
                         <th>Unidade</th>
@@ -124,7 +162,8 @@
                 </thead>
                 <tbody>
                     {% for item in historico %}
-                    <tr>
+                    <tr data-unidade="{{ item.unidade.identificador|e }}"
+                        data-destinatario="{{ (item.destinatario or '')|e }}">
                         <td class="fw-semibold">{{ item.unidade.identificador }}</td>
                         <td>{{ item.destinatario or '—' }}</td>
                         <td>{{ item.transportadora or '—' }}</td>
@@ -148,4 +187,262 @@
         {% endif %}
     </div>
 </div>
+
+{% for item in pendentes %}
+<div class="modal fade" id="modalDetalhes{{ item.id }}" tabindex="-1"
+     aria-labelledby="modalDetalhesLabel{{ item.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalDetalhesLabel{{ item.id }}">
+                    Detalhes da encomenda
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <div class="card border-0 bg-light mb-3">
+                    <div class="card-body py-3">
+                        Encomenda cadastrada por
+                        <strong>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</strong>
+                        em {{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}.
+                    </div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h3 class="h6 text-muted text-uppercase mb-3">Destinatário</h3>
+                                <p class="mb-1">
+                                    <strong>Nome:</strong> {{ item.destinatario or '—' }}
+                                </p>
+                                <p class="mb-0">
+                                    <strong>Unidade:</strong> {{ item.unidade.identificador }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h3 class="h6 text-muted text-uppercase mb-3">Remetente</h3>
+                                <p class="mb-1">
+                                    <strong>Transportadora/Loja:</strong>
+                                    {{ item.transportadora or '—' }}
+                                </p>
+                                <p class="mb-0">
+                                    <strong>Código de rastreio:</strong>
+                                    {{ item.codigo_rastreio or '—' }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% if item.foto_pacote %}
+                <div class="mt-3">
+                    <h3 class="h6 text-muted text-uppercase mb-2">Anexo</h3>
+                    <img src="{{ url_for('static', filename='uploads/encomendas/' ~ item.foto_pacote) }}"
+                         alt="Foto do pacote"
+                         class="img-fluid border rounded bg-white p-1"
+                         style="max-height: 200px; object-fit: contain;">
+                </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+                <form method="post"
+                      action="{{ url_for('portaria_encomendas_notificar', id=item.id) }}"
+                      class="d-inline">
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-envelope me-1"></i>Reenviar Notificação
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="toastRastreioLido" class="toast align-items-center text-bg-success border-0" role="alert"
+         aria-live="polite" aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body">Código de rastreio lido com sucesso.</div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"
+                    aria-label="Fechar"></button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+(function () {
+    var campo = document.getElementById("filtroEncomendas");
+    if (campo) {
+        campo.addEventListener("input", function () {
+            var termo = (campo.value || "").trim().toLowerCase();
+            document.querySelectorAll("#tabelaPendentes tbody tr, #tabelaHistorico tbody tr").forEach(function (linha) {
+                var unidade = (linha.getAttribute("data-unidade") || "").toLowerCase();
+                var destinatario = (linha.getAttribute("data-destinatario") || "").toLowerCase();
+                var visivel = !termo || unidade.indexOf(termo) !== -1 || destinatario.indexOf(termo) !== -1;
+                linha.style.display = visivel ? "" : "none";
+            });
+        });
+    }
+
+    var inputRastreio = document.getElementById("codigo_rastreio");
+    var btnEscanear = document.getElementById("btnEscanearCodigo");
+    var btnFechar = document.getElementById("btnFecharCamera");
+    var readerWrap = document.getElementById("readerWrap");
+    var toastEl = document.getElementById("toastRastreioLido");
+    var scanner = null;
+    var scanHandled = false;
+
+    if (!btnEscanear || !inputRastreio || typeof Html5Qrcode === "undefined") {
+        return;
+    }
+
+    var configLeitura = {
+        fps: 10,
+        qrbox: { width: 250, height: 120 },
+        formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.QR_CODE
+        ]
+    };
+
+    function tocarBip() {
+        try {
+            var Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) {
+                return;
+            }
+            var ctx = new Ctx();
+            var osc = ctx.createOscillator();
+            var gain = ctx.createGain();
+            osc.type = "square";
+            osc.frequency.value = 880;
+            gain.gain.value = 0.08;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            setTimeout(function () {
+                osc.stop();
+                ctx.close();
+            }, 140);
+        } catch (e) {
+            // Sem áudio no dispositivo — o toast já confirma a leitura.
+        }
+    }
+
+    function mostrarToastSucesso() {
+        if (!toastEl || !window.bootstrap) {
+            return;
+        }
+        bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 2500 }).show();
+    }
+
+    function pararScanner() {
+        if (!scanner) {
+            if (readerWrap) {
+                readerWrap.style.display = "none";
+            }
+            return Promise.resolve();
+        }
+        var instancia = scanner;
+        scanner = null;
+        return instancia.stop().then(function () {
+            return instancia.clear();
+        }).catch(function () {
+            var reader = document.getElementById("reader");
+            if (reader) {
+                reader.innerHTML = "";
+            }
+        }).finally(function () {
+            if (readerWrap) {
+                readerWrap.style.display = "none";
+            }
+            btnEscanear.disabled = false;
+        });
+    }
+
+    function onScanSuccess(decodedText) {
+        if (scanHandled) {
+            return;
+        }
+        scanHandled = true;
+        inputRastreio.value = (decodedText || "").trim().slice(0, 100);
+        inputRastreio.classList.add("border-success");
+        tocarBip();
+        mostrarToastSucesso();
+        pararScanner().then(function () {
+            inputRastreio.focus();
+        });
+    }
+
+    function iniciarScanner(cameraConfig) {
+        scanner = new Html5Qrcode("reader", {
+            formatsToSupport: configLeitura.formatsToSupport,
+            verbose: false
+        });
+        return scanner.start(
+            cameraConfig,
+            { fps: configLeitura.fps, qrbox: configLeitura.qrbox },
+            onScanSuccess,
+            function () {}
+        );
+    }
+
+    function limparInstanciaFalhou() {
+        var instancia = scanner;
+        scanner = null;
+        if (!instancia) {
+            return Promise.resolve();
+        }
+        return instancia.stop().catch(function () {
+            return instancia.clear();
+        }).catch(function () {
+            var reader = document.getElementById("reader");
+            if (reader) {
+                reader.innerHTML = "";
+            }
+        });
+    }
+
+    btnEscanear.addEventListener("click", function () {
+        if (scanner) {
+            return;
+        }
+        scanHandled = false;
+        btnEscanear.disabled = true;
+        readerWrap.style.display = "block";
+        iniciarScanner({ facingMode: "environment" }).catch(function () {
+            return limparInstanciaFalhou().then(function () {
+                return Html5Qrcode.getCameras();
+            }).then(function (cameras) {
+                if (!cameras || !cameras.length) {
+                    throw new Error("Nenhuma câmera encontrada.");
+                }
+                return iniciarScanner(cameras[0].id);
+            });
+        }).catch(function () {
+            pararScanner();
+            window.alert("Não foi possível abrir a câmera. Verifique a permissão do navegador.");
+        });
+    });
+
+    if (btnFechar) {
+        btnFechar.addEventListener("click", function () {
+            scanHandled = true;
+            pararScanner();
+        });
+    }
+
+    window.addEventListener("pagehide", function () {
+        pararScanner();
+    });
+})();
+</script>
 {% endblock %}

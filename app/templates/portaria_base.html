@@ -28,6 +28,10 @@
             border-radius: 0.375rem;
         }
 
+        .sino-notificacoes .badge {
+            font-size: 0.65rem;
+        }
+
         @media (min-width: 992px) {
             .portaria-sidebar {
                 position: fixed;
@@ -53,7 +57,11 @@
                 Menu
             </button>
             <span class="fw-semibold small">Portaria · {{ brand_nome }}</span>
+            {% if notificacoes_habilitadas %}
+            <span class="sino-notificacoes">{% include "includes/sino_notificacoes.html" %}</span>
+            {% else %}
             <span></span>
+            {% endif %}
         </div>
     </header>
 
@@ -67,7 +75,7 @@
                href="{{ url_for('portaria_dashboard') }}">
                 <i class="bi bi-speedometer2 me-2"></i>Dashboard
             </a>
-            <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_acesso' %}active{% endif %}"
+            <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['portaria_acesso', 'portaria_acesso_autorizada'] %}active{% endif %}"
                href="{{ url_for('portaria_acesso') }}">
                 <i class="bi bi-person-vcard me-2"></i>Controle de Acesso
             </a>
@@ -97,7 +105,7 @@
                    href="{{ url_for('portaria_dashboard') }}">
                     <i class="bi bi-speedometer2 me-2"></i>Dashboard
                 </a>
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_acesso' %}active{% endif %}"
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['portaria_acesso', 'portaria_acesso_autorizada'] %}active{% endif %}"
                    href="{{ url_for('portaria_acesso') }}">
                     <i class="bi bi-person-vcard me-2"></i>Controle de Acesso
                 </a>
@@ -116,6 +124,12 @@
     </div>
 
     <main class="portaria-main">
+        {% if notificacoes_habilitadas %}
+        <div class="d-none d-lg-flex justify-content-end align-items-center px-4 py-2 border-bottom bg-white sticky-top">
+            {% set sino_btn_class = "btn-link text-dark" %}
+            <span class="sino-notificacoes">{% include "includes/sino_notificacoes.html" %}</span>
+        </div>
+        {% endif %}
         <div class="container-fluid py-4">
             {% if usuario_portaria and usuario_portaria.role == 'admin' %}
             <div class="mb-3">

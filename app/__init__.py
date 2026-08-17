@@ -51,6 +51,10 @@ def _garantir_colunas_unidades():
         )
     if "notificacao_sindico" not in colunas:
         alteracoes.append("ALTER TABLE unidades ADD COLUMN notificacao_sindico TEXT")
+    if "senha_atualizada_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN senha_atualizada_em DATETIME"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -162,6 +166,36 @@ def _garantir_colunas_reservas():
         )
         db.session.commit()
 
+    # Índice único parcial: impede duplo-booking do mesmo espaço/data sob
+    # concorrência. Só cria se não houver violações herdadas (banco legado
+    # com reservas duplicadas de uma corrida anterior a esta correção).
+    duplicados = db.session.execute(
+        text(
+            """
+            SELECT espaco_id, data_reserva, COUNT(*) AS total
+            FROM reservas
+            WHERE status IN ('Pendente', 'Aprovada')
+            GROUP BY espaco_id, data_reserva
+            HAVING COUNT(*) > 1
+            """
+        )
+    ).fetchall()
+    if duplicados:
+        print(
+            "AVISO: existem reservas duplicadas (mesmo espaço/data, ambas "
+            "Pendente/Aprovada) — resolva manualmente antes que o índice "
+            "único de proteção contra duplo-booking possa ser criado."
+        )
+    else:
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_reserva_espaco_data_ativa "
+                "ON reservas (espaco_id, data_reserva) "
+                "WHERE status IN ('Pendente', 'Aprovada')"
+            )
+        )
+        db.session.commit()
+
 
 def _garantir_coluna_condominio_espacos_comuns():
     """Isolamento multi-tenant: condominio_id em áreas comuns + backfill no cliente legado."""
@@ -229,6 +263,10 @@ def _garantir_colunas_parceiros():
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN link_instagram VARCHAR(255)")
     if "link_facebook" not in colunas:
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN link_facebook VARCHAR(255)")
+    if "senha_atualizada_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN senha_atualizada_em DATETIME"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -276,12 +314,34 @@ def _garantir_colunas_cupom():
         )
     if "data_desativacao" not in colunas:
         alteracoes.append("ALTER TABLE cupom ADD COLUMN data_desativacao DATETIME")
+    adicionou_contador = False
+    if "total_resgatado" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE cupom ADD COLUMN total_resgatado INTEGER NOT NULL DEFAULT 0"
+        )
+        adicionou_contador = True
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     for atualizacao in atualizacoes:
         db.session.execute(text(atualizacao))
     if alteracoes or atualizacoes:
+        db.session.commit()
+
+    if adicionou_contador:
+        # Backfill: contador atômico precisa refletir os resgates já
+        # existentes, senão o limite_total poderia ser furado a partir daqui.
+        db.session.execute(
+            text(
+                """
+                UPDATE cupom
+                SET total_resgatado = (
+                    SELECT COUNT(*) FROM resgate_cupom
+                    WHERE resgate_cupom.cupom_id = cupom.id
+                )
+                """
+            )
+        )
         db.session.commit()
 
 
@@ -326,6 +386,30 @@ def _garantir_tabela_agendamentos_mudanca():
         db.session.commit()
 
 
+def _garantir_colunas_encomendas():
+    """Garante codigo_rastreio e foto_pacote em encomendas (SQLite legado)."""
+    inspetor = inspect(db.engine)
+    if "encomendas" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("encomendas")}
+    alteracoes = []
+
+    if "codigo_rastreio" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN codigo_rastreio VARCHAR(100)"
+        )
+    if "foto_pacote" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN foto_pacote VARCHAR(255)"
+        )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
 def _garantir_colunas_registros_acesso():
     """Garante porteiro_saida_id em registros_acesso (SQLite legado)."""
     inspetor = inspect(db.engine)
@@ -333,20 +417,47 @@ def _garantir_colunas_registros_acesso():
         return
 
     colunas = {coluna["name"] for coluna in inspetor.get_columns("registros_acesso")}
-    if "porteiro_saida_id" in colunas:
-        return
-
-    db.session.execute(
-        text("ALTER TABLE registros_acesso ADD COLUMN porteiro_saida_id INTEGER")
-    )
-    db.session.commit()
-    db.session.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_registros_acesso_porteiro_saida_id "
-            "ON registros_acesso (porteiro_saida_id)"
+    if "porteiro_saida_id" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE registros_acesso ADD COLUMN porteiro_saida_id INTEGER")
         )
-    )
-    db.session.commit()
+        db.session.commit()
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_registros_acesso_porteiro_saida_id "
+                "ON registros_acesso (porteiro_saida_id)"
+            )
+        )
+        db.session.commit()
+
+    # Índice único parcial: impede duas "entradas abertas" simultâneas do
+    # mesmo visitante sob concorrência. Só cria se não houver violações
+    # herdadas (banco legado com uma corrida anterior a esta correção).
+    duplicados = db.session.execute(
+        text(
+            """
+            SELECT visitante_id, COUNT(*) AS total
+            FROM registros_acesso
+            WHERE data_saida IS NULL
+            GROUP BY visitante_id
+            HAVING COUNT(*) > 1
+            """
+        )
+    ).fetchall()
+    if duplicados:
+        print(
+            "AVISO: existem visitantes com mais de uma entrada em aberto — "
+            "resolva manualmente antes que o índice único de proteção possa "
+            "ser criado."
+        )
+    else:
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_registro_acesso_aberto "
+                "ON registros_acesso (visitante_id) WHERE data_saida IS NULL"
+            )
+        )
+        db.session.commit()
 
 
 def _garantir_colunas_multi_tenant():
@@ -591,9 +702,21 @@ def create_app(config=None):
 
     upload_logos = os.path.join(app.root_path, "static", "uploads", "logos")
     upload_parceiros = os.path.join(app.root_path, "static", "uploads", "parceiros")
+    upload_ocorrencias = os.path.join(app.root_path, "static", "uploads", "ocorrencias")
+    upload_encomendas = os.path.join(app.root_path, "static", "uploads", "encomendas")
+
+    secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError(
+            "SECRET_KEY não definida. Configure a variável de ambiente SECRET_KEY "
+            "(ex.: no arquivo .env) antes de iniciar a aplicação — nunca use um "
+            "valor fixo no código, pois ele assina sessões e tokens de redefinição "
+            "de senha. Gere um valor aleatório com: "
+            'python -c "import secrets; print(secrets.token_hex(32))"'
+        )
 
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me-in-production"),
+        SECRET_KEY=secret_key,
         SQLALCHEMY_DATABASE_URI=os.environ.get(
             "DATABASE_URL", "sqlite:///condominio.db"
         ),
@@ -602,6 +725,8 @@ def create_app(config=None):
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
         UPLOAD_LOGOS_FOLDER=upload_logos,
         UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
+        UPLOAD_OCORRENCIAS_FOLDER=upload_ocorrencias,
+        UPLOAD_ENCOMENDAS_FOLDER=upload_encomendas,
     )
 
     if config:
@@ -612,12 +737,21 @@ def create_app(config=None):
     @app.context_processor
     def inject_nav_context():
         from app.auth import get_current_user, get_unidade_logada
-        from app.models import Condominio, EspacoComum, Reserva
+        from app.models import (
+            Condominio,
+            EspacoComum,
+            Notificacao,
+            PerfilDestinoNotificacao,
+            Reserva,
+            Role,
+        )
 
         usuario = get_current_user()
         unidade = get_unidade_logada()
         reservas_pendentes_count = 0
         condominio_ctx = None
+        notificacoes_nao_lidas = 0
+        notificacoes_habilitadas = False
 
         if usuario:
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
@@ -638,8 +772,25 @@ def create_app(config=None):
 
             if usuario.condominio_id:
                 condominio_ctx = usuario.condominio
+
+            if usuario.role in (Role.PORTEIRO, Role.ADMIN, Role.SUPERADMIN):
+                cid_notif = usuario.condominio_id
+                if cid_notif:
+                    notificacoes_habilitadas = True
+                    notificacoes_nao_lidas = Notificacao.query.filter_by(
+                        condominio_id=cid_notif,
+                        perfil_destino=PerfilDestinoNotificacao.PORTARIA,
+                        lida=False,
+                    ).filter(Notificacao.unidade_id.is_(None)).count()
         elif unidade and unidade.condominio_id:
             condominio_ctx = unidade.condominio
+            notificacoes_habilitadas = True
+            notificacoes_nao_lidas = Notificacao.query.filter_by(
+                condominio_id=unidade.condominio_id,
+                unidade_id=unidade.id,
+                perfil_destino=PerfilDestinoNotificacao.MORADOR,
+                lida=False,
+            ).count()
 
         # Fallback: slug do tenant na sessão (portas públicas).
         if condominio_ctx is None:
@@ -663,6 +814,8 @@ def create_app(config=None):
             "reservas_pendentes_count": reservas_pendentes_count,
             "condominio": condominio_ctx,
             "cor_primaria_rgb": _hex_para_rgb(cor_primaria),
+            "notificacoes_nao_lidas": notificacoes_nao_lidas,
+            "notificacoes_habilitadas": notificacoes_habilitadas,
         }
 
     from app import routes
@@ -688,6 +841,7 @@ def create_app(config=None):
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
         _garantir_colunas_registros_acesso()
+        _garantir_colunas_encomendas()
 
     _garantir_tabelas_parceiros(app)
 

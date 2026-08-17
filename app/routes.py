@@ -18,17 +18,14 @@ from flask import (
     session,
     url_for,
 )
-from sqlalchemy import and_, case, func, or_
-from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy import and_, func, or_, text
+from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
 from app import db
 from app.auth import (
-    admin_required,
-    admin_or_assistente_required,
     condominio_esta_ativo,
     condominio_id_obrigatorio,
-    gerar_senha_aleatoria,
     get_current_user,
     get_unidade_logada,
     login_unidade,
@@ -37,52 +34,47 @@ from app.auth import (
     logout_usuario,
     normalizar_slug,
     obter_condominio_por_slug,
-    portaria_required,
     resolver_condominio_id,
-    sindico_required,
-    superadmin_required,
     unidade_required,
-    validar_slug,
+    _redirect_login_tenant,
 )
 from app.email_service import (
     enviar_email_nova_reserva,
     enviar_email_redefinicao_senha,
-    enviar_email_reprovacao,
     enviar_email_resposta_reserva,
-    enviar_email_validacao_parcial,
-    enviar_email_validacao_sucesso,
 )
 from app.models import (
     AgendamentoMudanca,
+    AutorizacaoAcesso,
+    CategoriaOcorrencia,
     Condominio,
-    ConfiguracaoCondominio,
     Cupom,
-    Encomenda,
     EspacoComum,
     LogAuditoria,
+    Notificacao,
+    Ocorrencia,
     Parceiro,
+    PerfilDestinoNotificacao,
     Pessoa,
-    RegistroAcesso,
     Reserva,
     ResgateCupom,
     Role,
-    SindicoAgrupamento,
     StatusAgendamentoMudanca,
+    StatusAutorizacaoAcesso,
     StatusDocumento,
-    StatusEncomenda,
+    StatusOcorrencia,
     StatusUnidade,
     TipoVisitante,
     Unidade,
     Usuario,
     Veiculo,
     VinculoPessoa,
-    Visitante,
 )
 from app.utils import (
+    PARCEIRO_LOGO_EXTENSOES,
+    PARCEIRO_LOGO_MAX_BYTES,
     SALT_RECUPERACAO_MORADOR,
-    SALT_RECUPERACAO_PARCEIRO,
     gerar_token_redefinicao,
-    get_apartamentos_bloco,
     get_condominio_estrutura,
     normalizar_bloco_apartamento,
     normalizar_bloco_codigo,
@@ -114,72 +106,33 @@ def _slug_logout():
     return _slug_sessao_ou_prp()
 
 
-_LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
-_PARCEIRO_LOGO_EXTENSOES = {"png", "jpg", "jpeg", "webp"}
-_PARCEIRO_LOGO_MAX_BYTES = 2 * 1024 * 1024
-
-
-def _normalizar_cor_primaria(valor):
-    cor = str(valor or "").strip()
-    if len(cor) == 7 and cor.startswith("#"):
-        try:
-            int(cor[1:], 16)
-            return cor.lower()
-        except ValueError:
-            pass
-    return "#0d6efd"
-
-
-def _salvar_logo_condominio(arquivo, slug):
-    """Salva logo em static/uploads/logos e retorna o filename, ou None."""
-    if not arquivo or not arquivo.filename:
-        return None
-
-    nome_seguro = secure_filename(arquivo.filename)
-    if not nome_seguro or "." not in nome_seguro:
-        return None
-
-    extensao = nome_seguro.rsplit(".", 1)[-1].lower()
-    if extensao not in _LOGO_EXTENSIONS:
-        return None
-
-    pasta = current_app.config["UPLOAD_LOGOS_FOLDER"]
-    os.makedirs(pasta, exist_ok=True)
-    token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    nome_final = f"{slug}_{token}.{extensao}"
-    arquivo.save(os.path.join(pasta, nome_final))
-    return nome_final
-
-
-def _salvar_logo_parceiro(arquivo, prefixo="parceiro"):
+def _salvar_imagem_upload(arquivo, pasta, prefixo="foto"):
     """
-    Salva logotipo do parceiro.
-    Retorna (filename, erro): sem arquivo (None, None); inválido (None, msg); ok (nome, None).
+    Blindagem de imagem (mesma regra do Clube de Vantagens / Ocorrências):
+    PNG/JPG/JPEG/WEBP, máximo 2 MB. Salva em `pasta`.
+    Retorna (filename, erro).
     """
     if not arquivo or not arquivo.filename:
         return None, None
 
     nome_seguro = secure_filename(arquivo.filename)
     if not nome_seguro or "." not in nome_seguro:
-        return None, "Envie um logotipo em PNG, JPG, JPEG ou WEBP."
+        return None, "Envie uma foto em PNG, JPG, JPEG ou WEBP."
 
     extensao = nome_seguro.rsplit(".", 1)[-1].lower()
-    if extensao not in _PARCEIRO_LOGO_EXTENSOES:
-        return None, "Envie um logotipo em PNG, JPG, JPEG ou WEBP."
+    if extensao not in PARCEIRO_LOGO_EXTENSOES:
+        return None, "Envie uma foto em PNG, JPG, JPEG ou WEBP."
 
     tamanho_header = getattr(arquivo, "content_length", None)
-    if tamanho_header and tamanho_header > _PARCEIRO_LOGO_MAX_BYTES:
-        return None, "O logotipo deve ter no máximo 2 MB."
+    if tamanho_header and tamanho_header > PARCEIRO_LOGO_MAX_BYTES:
+        return None, "A foto deve ter no máximo 2 MB."
 
     arquivo.stream.seek(0, os.SEEK_END)
     tamanho = arquivo.stream.tell()
     arquivo.stream.seek(0)
-    if tamanho > _PARCEIRO_LOGO_MAX_BYTES:
-        return None, "O logotipo deve ter no máximo 2 MB."
+    if tamanho > PARCEIRO_LOGO_MAX_BYTES:
+        return None, "A foto deve ter no máximo 2 MB."
 
-    pasta = current_app.config.get("UPLOAD_PARCEIROS_FOLDER") or os.path.join(
-        current_app.root_path, "static", "uploads", "parceiros"
-    )
     os.makedirs(pasta, exist_ok=True)
     token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     nome_final = f"{secure_filename(prefixo)}_{token}.{extensao}"
@@ -187,54 +140,12 @@ def _salvar_logo_parceiro(arquivo, prefixo="parceiro"):
     return nome_final, None
 
 
-def _link_rede_social(valor):
-    texto = (valor or "").strip()
-    return texto[:255] if texto else None
-
-
-class _SanitizadorHtmlRico(HTMLParser):
-    """Mantém apenas tags permitidas pelo editor (negrito, itálico, sublinhado e quebras)."""
-
-    _PERMITIDAS = frozenset({"p", "br", "strong", "b", "em", "i", "u"})
-
-    def __init__(self):
-        super().__init__()
-        self._partes = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag not in self._PERMITIDAS:
-            return
-        self._partes.append(f"<{tag}>")
-
-    def handle_endtag(self, tag):
-        if tag not in self._PERMITIDAS or tag == "br":
-            return
-        self._partes.append(f"</{tag}>")
-
-    def handle_startendtag(self, tag, attrs):
-        if tag == "br":
-            self._partes.append("<br>")
-
-    def handle_data(self, data):
-        self._partes.append(escape(data))
-
-    def resultado(self):
-        return "".join(self._partes)
-
-
-def _html_rico_form(nome_campo):
-    """Lê HTML do Quill, sanitiza e trata editor vazio como string vazia."""
-    bruto = (request.form.get(nome_campo) or "").strip()
-    if not bruto:
-        return ""
-    parser = _SanitizadorHtmlRico()
-    parser.feed(bruto)
-    parser.close()
-    limpo = parser.resultado().strip()
-    texto = re.sub(r"<[^>]+>", "", limpo).replace("&nbsp;", " ").strip()
-    if not texto:
-        return ""
-    return limpo
+def _salvar_foto_ocorrencia(arquivo, prefixo="ocorrencia"):
+    """Salva foto do chamado em static/uploads/ocorrencias/."""
+    pasta = current_app.config.get("UPLOAD_OCORRENCIAS_FOLDER") or os.path.join(
+        current_app.root_path, "static", "uploads", "ocorrencias"
+    )
+    return _salvar_imagem_upload(arquivo, pasta, prefixo=prefixo)
 
 
 def _buscar_unidade(bloco, apartamento, condominio_id=None):
@@ -269,25 +180,11 @@ def _agendamento_do_tenant(agendamento_id, condominio_id):
     ).first_or_404()
 
 
-def _registro_acesso_do_tenant(registro_id, condominio_id):
-    """Carrega log de acesso do mesmo condomínio (anti-IDOR)."""
-    return RegistroAcesso.query.filter_by(
-        id=registro_id, condominio_id=condominio_id
-    ).first_or_404()
-
-
-def _encomenda_do_tenant(encomenda_id, condominio_id):
-    """Carrega encomenda do mesmo condomínio (anti-IDOR)."""
-    return Encomenda.query.filter_by(
-        id=encomenda_id, condominio_id=condominio_id
-    ).first_or_404()
-
-
-def _normalizar_documento_visitante(documento):
-    """Normaliza RG/CPF para busca única por tenant (remove pontuação)."""
-    bruto = (documento or "").strip().upper()
-    limpo = "".join(ch for ch in bruto if ch.isalnum())
-    return limpo[:20]
+def _ocorrencia_do_tenant(ocorrencia_id, condominio_id):
+    """Carrega ocorrência do mesmo condomínio (anti-IDOR)."""
+    return Ocorrencia.query.filter_by(
+        id=ocorrencia_id, condominio_id=condominio_id
+    ).first()
 
 
 def _condominio_id_portaria(usuario=None):
@@ -435,6 +332,55 @@ def _registrar_auditoria(usuario, mensagem):
     )
 
 
+def _criar_notificacao(
+    condominio_id, perfil_destino, titulo, mensagem, unidade_id=None
+):
+    """Enfileira notificação na sessão atual (commit fica a cargo do chamador)."""
+    if not condominio_id or perfil_destino not in PerfilDestinoNotificacao.CHOICES:
+        return
+    if perfil_destino == PerfilDestinoNotificacao.MORADOR and not unidade_id:
+        return
+    db.session.add(
+        Notificacao(
+            condominio_id=condominio_id,
+            unidade_id=unidade_id,
+            perfil_destino=perfil_destino,
+            titulo=titulo,
+            mensagem=mensagem,
+            lida=False,
+        )
+    )
+
+
+def _destinatario_notificacoes():
+    """Escopo do usuário atual: (perfil, condominio_id, unidade_id) ou Nones."""
+    unidade = get_unidade_logada()
+    usuario = get_current_user()
+    if unidade and not usuario:
+        return (
+            PerfilDestinoNotificacao.MORADOR,
+            unidade.condominio_id,
+            unidade.id,
+        )
+    if usuario and usuario.role in (Role.PORTEIRO, Role.ADMIN, Role.SUPERADMIN):
+        condominio_id = _condominio_id_portaria(usuario)
+        if condominio_id:
+            return (PerfilDestinoNotificacao.PORTARIA, condominio_id, None)
+    return None, None, None
+
+
+def _query_notificacoes(perfil, condominio_id, unidade_id):
+    query = Notificacao.query.filter_by(
+        condominio_id=condominio_id,
+        perfil_destino=perfil,
+    )
+    if perfil == PerfilDestinoNotificacao.MORADOR:
+        query = query.filter_by(unidade_id=unidade_id)
+    else:
+        query = query.filter(Notificacao.unidade_id.is_(None))
+    return query.order_by(Notificacao.lida.asc(), Notificacao.created_at.desc())
+
+
 def _adicionar_notificacao_sindico(unidade, nome_morador, motivo):
     nova_linha = (
         f"O cadastro do morador {nome_morador} foi reprovado e removido pelo síndico "
@@ -463,202 +409,6 @@ def _emails_unicos(pessoas):
         vistos.add(chave)
         emails.append(email)
     return emails
-
-
-def _aplicar_filtro_resgates_condominio(query, condominio_id, unidade_ja_joinada=False):
-    """Restringe métricas de resgate às unidades do condomínio (admin local)."""
-    if condominio_id is None:
-        return query
-    if not unidade_ja_joinada:
-        query = query.join(Unidade, ResgateCupom.unidade_id == Unidade.id)
-    return query.filter(Unidade.condominio_id == condominio_id)
-
-
-def _montar_analytics_clube(condominio_id=None):
-    total_resgates_q = db.session.query(func.count(ResgateCupom.id))
-    total_resgates_q = _aplicar_filtro_resgates_condominio(total_resgates_q, condominio_id)
-    total_resgates = total_resgates_q.scalar() or 0
-
-    total_cupons_ativos = (
-        db.session.query(func.count(Cupom.id)).filter(Cupom.ativo.is_(True)).scalar() or 0
-    )
-
-    cupons_por_parceiro_rows = (
-        db.session.query(
-            Parceiro.nome_empresa,
-            func.count(Cupom.id).label("total"),
-        )
-        .outerjoin(Cupom, Cupom.parceiro_id == Parceiro.id)
-        .group_by(Parceiro.id, Parceiro.nome_empresa)
-        .order_by(Parceiro.nome_empresa)
-        .all()
-    )
-
-    resgates_por_bloco_q = (
-        db.session.query(
-            Unidade.bloco,
-            func.count(ResgateCupom.id).label("total"),
-        )
-        .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
-    )
-    resgates_por_bloco_q = _aplicar_filtro_resgates_condominio(
-        resgates_por_bloco_q, condominio_id, unidade_ja_joinada=True
-    )
-    resgates_por_bloco_rows = (
-        resgates_por_bloco_q.group_by(Unidade.bloco)
-        .order_by(func.count(ResgateCupom.id).desc())
-        .all()
-    )
-
-    top_unidades_q = (
-        db.session.query(
-            Unidade.bloco,
-            Unidade.apartamento,
-            func.count(ResgateCupom.id).label("total"),
-        )
-        .join(ResgateCupom, ResgateCupom.unidade_id == Unidade.id)
-    )
-    top_unidades_q = _aplicar_filtro_resgates_condominio(
-        top_unidades_q, condominio_id, unidade_ja_joinada=True
-    )
-    top_unidades_rows = (
-        top_unidades_q.group_by(Unidade.id, Unidade.bloco, Unidade.apartamento)
-        .order_by(func.count(ResgateCupom.id).desc())
-        .limit(10)
-        .all()
-    )
-
-    status_q = db.session.query(ResgateCupom.status, func.count(ResgateCupom.id))
-    status_q = _aplicar_filtro_resgates_condominio(status_q, condominio_id)
-    status_rows = status_q.group_by(ResgateCupom.status).all()
-    status_map = {status: quantidade for status, quantidade in status_rows}
-    resgates_ativos = status_map.get("Ativo", 0)
-    resgates_utilizados = status_map.get("Utilizado", 0)
-    taxa_conversao = (
-        round((resgates_utilizados / total_resgates) * 100, 1) if total_resgates else 0.0
-    )
-
-    evolucao_q = db.session.query(
-        func.date(ResgateCupom.data_resgate).label("data"),
-        func.count(ResgateCupom.id).label("total"),
-    )
-    evolucao_q = _aplicar_filtro_resgates_condominio(evolucao_q, condominio_id)
-    evolucao_rows = (
-        evolucao_q.group_by(func.date(ResgateCupom.data_resgate))
-        .order_by(func.date(ResgateCupom.data_resgate))
-        .all()
-    )
-
-    parceiro_popular_q = (
-        db.session.query(
-            Parceiro.nome_empresa,
-            func.count(ResgateCupom.id).label("total"),
-        )
-        .join(Cupom, Cupom.parceiro_id == Parceiro.id)
-        .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
-    )
-    parceiro_popular_q = _aplicar_filtro_resgates_condominio(
-        parceiro_popular_q, condominio_id
-    )
-    parceiro_popular_row = (
-        parceiro_popular_q.group_by(Parceiro.id, Parceiro.nome_empresa)
-        .order_by(func.count(ResgateCupom.id).desc())
-        .first()
-    )
-
-    cupons_conversao_q = (
-        db.session.query(
-            Cupom.titulo,
-            Parceiro.nome_empresa,
-            func.count(ResgateCupom.id).label("total_resgates"),
-            func.sum(
-                case((ResgateCupom.status == "Utilizado", 1), else_=0)
-            ).label("utilizados"),
-        )
-        .join(Parceiro, Cupom.parceiro_id == Parceiro.id)
-        .join(ResgateCupom, ResgateCupom.cupom_id == Cupom.id)
-    )
-    cupons_conversao_q = _aplicar_filtro_resgates_condominio(
-        cupons_conversao_q, condominio_id
-    )
-    cupons_conversao_rows = cupons_conversao_q.group_by(
-        Cupom.id, Cupom.titulo, Parceiro.nome_empresa
-    ).all()
-
-    cupons_conversao = []
-    for titulo, parceiro_nome, total_cupom_resgates, utilizados in cupons_conversao_rows:
-        utilizados = int(utilizados or 0)
-        taxa_cupom = (
-            round((utilizados / total_cupom_resgates) * 100, 1)
-            if total_cupom_resgates
-            else 0.0
-        )
-        cupons_conversao.append(
-            {
-                "titulo": titulo,
-                "parceiro": parceiro_nome,
-                "resgates": total_cupom_resgates,
-                "utilizados": utilizados,
-                "taxa": taxa_cupom,
-            }
-        )
-    cupons_conversao.sort(key=lambda item: (item["taxa"], item["utilizados"]), reverse=True)
-
-    unidade_destaque = top_unidades_rows[0] if top_unidades_rows else None
-
-    return {
-        "charts": {
-            "cupons_por_parceiro": {
-                "labels": [row[0] for row in cupons_por_parceiro_rows],
-                "values": [row[1] for row in cupons_por_parceiro_rows],
-            },
-            "resgates_por_bloco": {
-                "labels": [f"Bloco {row[0]}" for row in resgates_por_bloco_rows],
-                "values": [row[1] for row in resgates_por_bloco_rows],
-            },
-            "evolucao_resgates": {
-                "labels": [
-                    datetime.strptime(str(row[0]), "%Y-%m-%d").strftime("%d/%m/%Y")
-                    for row in evolucao_rows
-                ],
-                "values": [row[1] for row in evolucao_rows],
-            },
-        },
-        "status_resgates": {
-            "ativo": resgates_ativos,
-            "utilizado": resgates_utilizados,
-            "taxa_conversao": taxa_conversao,
-        },
-        "metricas": {
-            "total_cupons_ativos": total_cupons_ativos,
-            "total_resgates": total_resgates,
-            "parceiro_popular": parceiro_popular_row[0] if parceiro_popular_row else "—",
-            "parceiro_popular_count": parceiro_popular_row[1] if parceiro_popular_row else 0,
-            "unidade_engajada": (
-                f"Bloco {unidade_destaque[0]} / Apto {unidade_destaque[1]}"
-                if unidade_destaque
-                else "—"
-            ),
-            "unidade_engajada_count": unidade_destaque[2] if unidade_destaque else 0,
-        },
-        "top5_unidades": [
-            {
-                "bloco": row[0],
-                "apartamento": row[1],
-                "total": row[2],
-            }
-            for row in top_unidades_rows[:5]
-        ],
-        "top10_unidades": [
-            {
-                "bloco": row[0],
-                "apartamento": row[1],
-                "total": row[2],
-            }
-            for row in top_unidades_rows
-        ],
-        "cupons_conversao": cupons_conversao,
-    }
 
 
 def _parse_data(data_str):
@@ -944,17 +694,6 @@ def gestao_espacos_required(view):
     return wrapped
 
 
-def parceiro_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if session.get("parceiro_id"):
-            return view(*args, **kwargs)
-        flash("Faça login para acessar o Portal do Parceiro.", "warning")
-        return redirect(url_for("parceiro_login"))
-
-    return wrapped
-
-
 def _usuario_pode_gerenciar_espaco(usuario, espaco):
     if not usuario or not espaco:
         return False
@@ -1162,12 +901,17 @@ def esqueci_senha():
             "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
         )
 
+        condominio_id_solicitacao = _condominio_id_da_sessao()
         unidade, email_destino = _buscar_unidade_e_email_login(
-            email_solicitado, condominio_id=_condominio_id_da_sessao()
+            email_solicitado, condominio_id=condominio_id_solicitacao
         )
         if unidade and email_destino:
             try:
-                token = gerar_token_redefinicao(email_solicitado, SALT_RECUPERACAO_MORADOR)
+                token = gerar_token_redefinicao(
+                    email_solicitado,
+                    SALT_RECUPERACAO_MORADOR,
+                    condominio_id=condominio_id_solicitacao,
+                )
                 link = url_for("redefinir_senha", token=token, _external=True)
                 enviar_email_redefinicao_senha(email_destino, link, perfil="morador")
             except Exception:
@@ -1188,17 +932,35 @@ def esqueci_senha():
 
 
 def redefinir_senha(token):
-    email = verificar_token_redefinicao(token, SALT_RECUPERACAO_MORADOR)
-    if not email:
+    email, condominio_id_token, emitido_em = verificar_token_redefinicao(
+        token, SALT_RECUPERACAO_MORADOR
+    )
+    # Sem condominio_id no token: ou é um link antigo (formato anterior a esta
+    # correção) ou foi solicitado fora de qualquer tenant — em ambos os casos
+    # não é seguro resolver a unidade pelo estado da sessão atual (poderia
+    # pertencer a outro condomínio). Pede para solicitar um link novo.
+    if not email or not condominio_id_token:
         flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
         return redirect(url_for("esqueci_senha"))
 
     unidade, _ = _buscar_unidade_e_email_login(
-        email, condominio_id=_condominio_id_da_sessao()
+        email, condominio_id=condominio_id_token
     )
     if not unidade:
         flash("Unidade não encontrada para este e-mail.", "danger")
         return redirect(url_for("esqueci_senha"))
+
+    if unidade.senha_atualizada_em and emitido_em:
+        emitido_em_naive = (
+            emitido_em.replace(tzinfo=None) if emitido_em.tzinfo else emitido_em
+        )
+        if unidade.senha_atualizada_em >= emitido_em_naive:
+            flash(
+                "Este link já foi utilizado ou não é mais válido. "
+                "Solicite uma nova redefinição de senha.",
+                "danger",
+            )
+            return redirect(url_for("esqueci_senha"))
 
     if request.method == "POST":
         senha = request.form.get("senha", "").strip()
@@ -1280,36 +1042,6 @@ def atualizar_dados(unidade):
     )
 
 
-def _buscar_parceiro_logado():
-    parceiro_id = session.get("parceiro_id")
-    if not parceiro_id:
-        return None
-    return Parceiro.query.get(parceiro_id)
-
-
-def _parse_limite_total_form(valor):
-    if valor is None:
-        return None
-    valor = str(valor).strip()
-    if not valor:
-        return None
-    try:
-        limite = int(valor)
-    except ValueError:
-        return None
-    return limite if limite > 0 else None
-
-
-def _parse_limite_por_unidade_form(valor, padrao=1):
-    if valor is None or not str(valor).strip():
-        return padrao
-    try:
-        limite = int(str(valor).strip())
-    except ValueError:
-        return padrao
-    return limite if limite > 0 else padrao
-
-
 def _contagem_resgates_por_cupom(cupom_ids):
     if not cupom_ids:
         return {}
@@ -1320,32 +1052,6 @@ def _contagem_resgates_por_cupom(cupom_ids):
         .all()
     )
     return {cupom_id: total for cupom_id, total in rows}
-
-
-def _metricas_resgates_por_cupom(cupom_ids):
-    if not cupom_ids:
-        return {}
-    rows = (
-        db.session.query(
-            ResgateCupom.cupom_id,
-            func.count(ResgateCupom.id).label("total_resgatados"),
-            func.sum(
-                case((ResgateCupom.status == "Utilizado", 1), else_=0)
-            ).label("total_validados"),
-        )
-        .filter(ResgateCupom.cupom_id.in_(cupom_ids))
-        .group_by(ResgateCupom.cupom_id)
-        .all()
-    )
-    metricas = {
-        cupom_id: {"total_resgatados": 0, "total_validados": 0} for cupom_id in cupom_ids
-    }
-    for cupom_id, total_resgatados, total_validados in rows:
-        metricas[cupom_id] = {
-            "total_resgatados": total_resgatados,
-            "total_validados": int(total_validados or 0),
-        }
-    return metricas
 
 
 @unidade_required
@@ -1439,16 +1145,39 @@ def clube_vantagens_resgatar(unidade, cupom_id):
         flash("Este cupom expirou.", "warning")
         return redirect(url_for("clube_vantagens"))
 
-    total_resgates = ResgateCupom.query.filter_by(cupom_id=cupom.id).count()
-    if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
-        flash("Oferta esgotada.", "danger")
-        return redirect(url_for("clube_vantagens"))
-
     resgates_unidade = ResgateCupom.query.filter_by(
         cupom_id=cupom.id,
         unidade_id=unidade.id,
     ).count()
     if resgates_unidade >= cupom.limite_por_unidade:
+        flash("Você atingiu o limite de resgates para esta oferta.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    # Reserva atomicamente uma "vaga" no limite total do cupom: um único
+    # UPDATE é indivisível mesmo sob concorrência — diferente de um
+    # COUNT() seguido de INSERT em requisições separadas, que permitiria
+    # duas requisições simultâneas passarem pela checagem ao mesmo tempo.
+    resultado = db.session.execute(
+        text(
+            "UPDATE cupom SET total_resgatado = total_resgatado + 1 "
+            "WHERE id = :id AND (limite_total IS NULL OR total_resgatado < limite_total)"
+        ),
+        {"id": cupom.id},
+    )
+    if resultado.rowcount == 0:
+        db.session.rollback()
+        flash("Oferta esgotada.", "danger")
+        return redirect(url_for("clube_vantagens"))
+
+    # Revalida o limite por unidade dentro da mesma transação: o UPDATE acima
+    # já tomou o lock de escrita do SQLite para este cupom, então nenhuma
+    # outra requisição concorrente consegue avançar até este commit/rollback.
+    resgates_unidade_atual = ResgateCupom.query.filter_by(
+        cupom_id=cupom.id,
+        unidade_id=unidade.id,
+    ).count()
+    if resgates_unidade_atual >= cupom.limite_por_unidade:
+        db.session.rollback()
         flash("Você atingiu o limite de resgates para esta oferta.", "danger")
         return redirect(url_for("clube_vantagens"))
 
@@ -1465,6 +1194,10 @@ def clube_vantagens_resgatar(unidade, cupom_id):
             codigo_unico = candidato
             break
     if not codigo_unico:
+        # Libera a vaga reservada no UPDATE atômico acima — sem isso, a falha
+        # em gerar o código consumiria um resgate do limite sem criar o
+        # ResgateCupom correspondente.
+        db.session.rollback()
         flash("Não foi possível gerar um código único. Tente novamente.", "danger")
         return redirect(url_for("clube_vantagens"))
 
@@ -1479,396 +1212,6 @@ def clube_vantagens_resgatar(unidade, cupom_id):
     db.session.commit()
     flash(f"Cupom resgatado com sucesso! Código: {codigo_unico}", "success")
     return redirect(url_for("clube_vantagens"))
-
-
-def parceiro_login():
-    if request.method == "POST":
-        usuario_digitado = request.form.get("usuario_login", "").strip().lower()
-        senha = request.form.get("senha", "")
-
-        parceiro = Parceiro.query.filter_by(usuario_login=usuario_digitado).first()
-        if not parceiro:
-            parceiro = Parceiro.query.filter_by(email=usuario_digitado).first()
-
-        if parceiro and check_password_hash(parceiro.senha_hash, senha):
-            if parceiro.status == "Bloqueado":
-                flash(
-                    "Sua conta foi suspensa pela administração do condomínio. "
-                    "Entre em contato para mais detalhes.",
-                    "danger",
-                )
-                return render_template("parceiro_login.html")
-            if not parceiro.usuario_login:
-                parceiro.usuario_login = parceiro.email
-                db.session.commit()
-            session["parceiro_id"] = parceiro.id
-            flash("Login realizado com sucesso.", "success")
-            return redirect(url_for("parceiro_dashboard"))
-
-        flash("Usuário ou senha inválidos.", "danger")
-
-    return render_template("parceiro_login.html")
-
-
-def parceiro_esqueci_senha():
-    if request.method == "POST":
-        email_solicitado = request.form.get("email", "").strip().lower()
-        mensagem_generica = (
-            "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
-        )
-
-        parceiro = Parceiro.query.filter_by(email=email_solicitado).first()
-        if parceiro and parceiro.status == "Ativo":
-            try:
-                token = gerar_token_redefinicao(email_solicitado, SALT_RECUPERACAO_PARCEIRO)
-                link = url_for("parceiro_redefinir_senha", token=token, _external=True)
-                enviar_email_redefinicao_senha(parceiro.email, link, perfil="parceiro")
-            except Exception:
-                traceback.print_exc()
-                flash(
-                    "Não foi possível enviar o e-mail. Tente novamente mais tarde.",
-                    "danger",
-                )
-                return render_template("parceiro_esqueci_senha.html")
-
-        flash(mensagem_generica, "info")
-        return render_template("parceiro_esqueci_senha.html")
-
-    return render_template("parceiro_esqueci_senha.html")
-
-
-def parceiro_redefinir_senha(token):
-    email = verificar_token_redefinicao(token, SALT_RECUPERACAO_PARCEIRO)
-    if not email:
-        flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
-        return redirect(url_for("parceiro_esqueci_senha"))
-
-    parceiro = Parceiro.query.filter_by(email=email).first()
-    if not parceiro or parceiro.status != "Ativo":
-        flash("Parceiro não encontrado para este e-mail.", "danger")
-        return redirect(url_for("parceiro_esqueci_senha"))
-
-    if request.method == "POST":
-        senha = request.form.get("senha", "").strip()
-        confirmacao = request.form.get("confirmacao_senha", "").strip()
-
-        if len(senha) < 6:
-            flash("A senha deve ter ao menos 6 caracteres.", "danger")
-            return render_template("parceiro_redefinir_senha.html", token=token)
-        if senha != confirmacao:
-            flash("As senhas não coincidem.", "danger")
-            return render_template("parceiro_redefinir_senha.html", token=token)
-
-        parceiro.senha_hash = generate_password_hash(senha)
-        db.session.commit()
-        flash("Senha redefinida com sucesso. Faça login com a nova senha.", "success")
-        return redirect(url_for("parceiro_login"))
-
-    return render_template("parceiro_redefinir_senha.html", token=token)
-
-
-def parceiro_logout():
-    session.pop("parceiro_id", None)
-    flash("Sessão do parceiro encerrada.", "info")
-    return redirect(url_for("parceiro_login"))
-
-
-@parceiro_required
-def parceiro_dashboard():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-
-    if parceiro.status == "Pendente":
-        return render_template("parceiro_pendente.html", parceiro=parceiro)
-
-    total_cupons_ativos = (
-        Cupom.query.filter_by(parceiro_id=parceiro.id, ativo=True).count()
-    )
-    total_validacoes = (
-        ResgateCupom.query.join(Cupom)
-        .filter(
-            Cupom.parceiro_id == parceiro.id,
-            ResgateCupom.status == "Utilizado",
-        )
-        .count()
-    )
-    historico_resgates = (
-        ResgateCupom.query.join(Cupom)
-        .filter(Cupom.parceiro_id == parceiro.id)
-        .order_by(ResgateCupom.data_resgate.desc())
-        .limit(20)
-        .all()
-    )
-    return render_template(
-        "parceiro_dashboard.html",
-        parceiro=parceiro,
-        total_cupons_ativos=total_cupons_ativos,
-        total_validacoes=total_validacoes,
-        historico_resgates=historico_resgates,
-    )
-
-
-@parceiro_required
-def parceiro_validacao():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status == "Pendente":
-        flash("Ative seu cadastro para validar cupons.", "warning")
-        return redirect(url_for("parceiro_dashboard"))
-    if parceiro.status != "Ativo":
-        flash("Seu acesso está indisponível no momento.", "danger")
-        return redirect(url_for("parceiro_dashboard"))
-
-    codigo_url = request.args.get("codigo", "").strip().upper()
-    return render_template(
-        "parceiro_validacao.html",
-        parceiro=parceiro,
-        codigo_url=codigo_url,
-    )
-
-
-@parceiro_required
-def parceiro_cupons():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status == "Pendente":
-        flash("Ative seu cadastro para gerenciar cupons.", "warning")
-        return redirect(url_for("parceiro_dashboard"))
-    if parceiro.status != "Ativo":
-        flash("Seu acesso está indisponível no momento.", "danger")
-        return redirect(url_for("parceiro_dashboard"))
-
-    cupons = Cupom.query.filter_by(parceiro_id=parceiro.id).order_by(Cupom.id.desc()).all()
-    metricas_cupons = _metricas_resgates_por_cupom([cupom.id for cupom in cupons])
-    return render_template(
-        "parceiro_cupons.html",
-        parceiro=parceiro,
-        cupons=cupons,
-        metricas_cupons=metricas_cupons,
-    )
-
-
-@parceiro_required
-def parceiro_validar_codigo():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status != "Ativo":
-        flash("Ative seu cadastro para validar cupons.", "warning")
-        return redirect(url_for("parceiro_validacao"))
-
-    codigo_unico = request.form.get("codigo_unico", "").strip().upper()
-    if not codigo_unico:
-        flash("Informe um código para validação.", "danger")
-        return redirect(url_for("parceiro_validacao"))
-
-    resgate = ResgateCupom.query.filter_by(codigo_unico=codigo_unico).first()
-    if not resgate:
-        flash("Código inválido. Verifique e tente novamente.", "danger")
-        return redirect(url_for("parceiro_validacao"))
-
-    if resgate.cupom.parceiro_id != parceiro.id:
-        flash("Este código pertence a outro parceiro.", "danger")
-        return redirect(url_for("parceiro_validacao"))
-
-    if resgate.status != "Ativo":
-        flash("Este código já foi utilizado ou está indisponível.", "warning")
-        return redirect(url_for("parceiro_validacao"))
-
-    resgate.status = "Utilizado"
-    resgate.data_utilizacao = datetime.utcnow()
-    db.session.commit()
-
-    unidade_texto = (
-        f"Bloco {resgate.unidade.bloco}, Apto {resgate.unidade.apartamento}"
-        if resgate.unidade
-        else "Unidade não identificada"
-    )
-    flash(f"Cupom validado! Unidade: {unidade_texto}.", "success")
-    return redirect(url_for("parceiro_validacao"))
-
-
-@parceiro_required
-def parceiro_aprovar():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-
-    if parceiro.status == "Bloqueado":
-        flash(
-            "Sua conta foi suspensa pela administração do condomínio. "
-            "Entre em contato para mais detalhes.",
-            "danger",
-        )
-        return redirect(url_for("parceiro_dashboard"))
-
-    parceiro.status = "Ativo"
-    parceiro.ativo = True
-    db.session.commit()
-    flash("Cadastro aprovado e ativado com sucesso!", "success")
-    return redirect(url_for("parceiro_dashboard"))
-
-
-@parceiro_required
-def parceiro_cupons_criar():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status != "Ativo":
-        flash("Ative seu cadastro para criar cupons.", "warning")
-        return redirect(url_for("parceiro_cupons"))
-
-    titulo = request.form.get("titulo", "").strip()
-    descricao = _html_rico_form("descricao")
-    codigo_prefixo = request.form.get("codigo_prefixo", "").strip().upper()
-    data_validade_str = request.form.get("data_validade", "").strip()
-    limite_total = _parse_limite_total_form(request.form.get("limite_total"))
-    limite_por_unidade = _parse_limite_por_unidade_form(
-        request.form.get("limite_por_unidade"), padrao=1
-    )
-
-    if not titulo or not descricao or not codigo_prefixo:
-        flash("Preencha título, descrição e código prefixo.", "danger")
-        return redirect(url_for("parceiro_cupons"))
-
-    data_validade = None
-    if data_validade_str:
-        try:
-            data_validade = datetime.strptime(data_validade_str, "%Y-%m-%d").date()
-        except ValueError:
-            flash("Data de validade inválida.", "danger")
-            return redirect(url_for("parceiro_cupons"))
-
-    db.session.add(
-        Cupom(
-            parceiro_id=parceiro.id,
-            titulo=titulo,
-            descricao=descricao,
-            codigo_prefixo=codigo_prefixo,
-            data_validade=data_validade,
-            ativo=True,
-            limite_total=limite_total,
-            limite_por_unidade=limite_por_unidade,
-        )
-    )
-    db.session.commit()
-    flash("Cupom criado com sucesso.", "success")
-    return redirect(url_for("parceiro_cupons"))
-
-
-@parceiro_required
-def parceiro_cupons_desativar(cupom_id):
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status != "Ativo":
-        flash("Ative seu cadastro para gerenciar cupons.", "warning")
-        return redirect(url_for("parceiro_cupons"))
-
-    cupom = Cupom.query.filter_by(id=cupom_id, parceiro_id=parceiro.id).first_or_404()
-    if not cupom.ativo:
-        flash("Este cupom já está inativo.", "info")
-        return redirect(url_for("parceiro_cupons"))
-
-    cupom.ativo = False
-    cupom.data_desativacao = datetime.utcnow()
-    db.session.commit()
-    flash("Cupom desativado permanentemente.", "warning")
-    return redirect(url_for("parceiro_cupons"))
-
-
-@parceiro_required
-def parceiro_perfil():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status == "Bloqueado":
-        flash(
-            "Sua conta foi suspensa pela administração do condomínio. "
-            "Entre em contato para mais detalhes.",
-            "danger",
-        )
-        return redirect(url_for("parceiro_login"))
-
-    return render_template("parceiro_perfil.html", parceiro=parceiro)
-
-
-@parceiro_required
-def parceiro_perfil_editar():
-    parceiro = _buscar_parceiro_logado()
-    if not parceiro:
-        session.pop("parceiro_id", None)
-        flash("Sessão inválida. Faça login novamente.", "warning")
-        return redirect(url_for("parceiro_login"))
-    if parceiro.status == "Bloqueado":
-        flash(
-            "Sua conta foi suspensa pela administração do condomínio. "
-            "Entre em contato para mais detalhes.",
-            "danger",
-        )
-        return redirect(url_for("parceiro_login"))
-
-    nome_empresa = request.form.get("nome_empresa", "").strip()
-    email = request.form.get("email", "").strip().lower()
-    telefone = request.form.get("telefone", "").strip() or None
-    categoria = request.form.get("categoria", "").strip()
-    endereco = request.form.get("endereco", "").strip() or None
-    descricao = _html_rico_form("descricao") or None
-    link_instagram = _link_rede_social(request.form.get("link_instagram"))
-    link_facebook = _link_rede_social(request.form.get("link_facebook"))
-
-    if not nome_empresa or not email or not categoria:
-        flash("Preencha nome da empresa, e-mail e categoria.", "danger")
-        return redirect(url_for("parceiro_perfil"))
-
-    parceiro_existente = Parceiro.query.filter(
-        Parceiro.email == email,
-        Parceiro.id != parceiro.id,
-    ).first()
-    if parceiro_existente:
-        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
-        return redirect(url_for("parceiro_perfil"))
-
-    novo_logo, erro_logo = _salvar_logo_parceiro(
-        request.files.get("logo"),
-        prefixo=parceiro.usuario_login or f"parceiro{parceiro.id}",
-    )
-    if erro_logo:
-        flash(erro_logo, "danger")
-        return redirect(url_for("parceiro_perfil"))
-
-    parceiro.nome_empresa = nome_empresa
-    parceiro.email = email
-    parceiro.telefone = telefone
-    parceiro.categoria = categoria
-    parceiro.endereco = endereco
-    parceiro.descricao = descricao
-    parceiro.link_instagram = link_instagram
-    parceiro.link_facebook = link_facebook
-    if novo_logo:
-        parceiro.logo_arquivo = novo_logo
-    db.session.commit()
-    flash("Perfil comercial atualizado com sucesso.", "success")
-    return redirect(url_for("parceiro_perfil"))
 
 
 @acesso_reservas_required
@@ -2013,7 +1356,15 @@ def solicitar_reserva(unidade):
         status="Pendente",
     )
     db.session.add(reserva)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Fecha a janela de corrida: duas requisições podem passar pela
+        # checagem acima antes de qualquer uma commitar; o índice único no
+        # banco (ux_reserva_espaco_data_ativa) é quem garante a exclusão.
+        db.session.rollback()
+        flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
+        return redirect(url_for("reservas"))
 
     email_sistema = os.environ.get("MAIL_USERNAME")
     if email_sistema:
@@ -2093,7 +1444,12 @@ def criar_reserva_gestao():
         motivo_reserva=motivo_reserva,
     )
     db.session.add(reserva)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
+        return redirect(url_for("reservas"))
 
     flash("Reserva criada com sucesso.", "success")
     return redirect(url_for("reservas"))
@@ -2495,767 +1851,11 @@ def salvar_cadastro():
         return redirect(url_for("cadastro_inicial", slug=slug_retorno))
 
 
-def sindico_login(slug):
-    condominio, bloqueio = _carregar_condominio_entrada(slug)
-    if bloqueio is not None:
-        return bloqueio
-    session["tenant_slug"] = condominio.slug
-
-    usuario_atual = get_current_user()
-    if usuario_atual and usuario_atual.is_sindico:
-        if usuario_atual.condominio_id == condominio.id:
-            return redirect(url_for("sindico_dashboard"))
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-
-        usuario = Usuario.query.filter_by(
-            username=username,
-            role=Role.SINDICO,
-            condominio_id=condominio.id,
-        ).first()
-        if usuario and usuario.check_password(password):
-            login_usuario(usuario)
-            return redirect(url_for("sindico_dashboard"))
-
-        flash("Usuário ou senha inválidos.", "danger")
-
-    return render_template(
-        "login.html",
-        titulo="Login do Síndico",
-        action="sindico",
-        condominio=condominio,
-        slug=condominio.slug,
-    )
-
-
-def sindico_logout():
-    slug = _slug_sessao_ou_prp()
-    logout_usuario()
-    flash("Sessão encerrada.", "info")
-    return redirect(url_for("sindico_login", slug=slug))
-
-
-@sindico_required
-def sindico_dashboard():
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
-
-    unidades_cadastradas = (
-        Unidade.query.filter(
-            Unidade.condominio_id == condominio_id,
-            Unidade.bloco.in_(blocos_sindico),
-        ).all()
-        if blocos_sindico
-        else []
-    )
-
-    mapa_bloco = []
-    for bloco_codigo in blocos_sindico:
-        unidades_por_apto = {
-            u.apartamento: u for u in unidades_cadastradas if u.bloco == bloco_codigo
-        }
-        for apto in get_apartamentos_bloco(bloco_codigo):
-            unidade = unidades_por_apto.get(apto)
-            mapa_bloco.append(
-                {
-                    "bloco": bloco_codigo,
-                    "apartamento": apto,
-                    "unidade": unidade,
-                    "status": unidade.status if unidade else "Aguardando Morador",
-                }
-            )
-
-    return render_template(
-        "dashboard_sindico.html",
-        mapa_bloco=mapa_bloco,
-        current_user=usuario,
-        agrupamentos_label=_label_agrupamentos_sindico(usuario),
-    )
-
-
-@sindico_required
-def sindico_aprovar(unidade_id):
-    usuario = get_current_user()
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
-
-    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
-        flash("Você não tem permissão para esta unidade.", "danger")
-        return redirect(url_for("sindico_dashboard"))
-
-    if unidade.status != StatusUnidade.PENDENTE:
-        flash("Apenas cadastros pendentes podem ser aprovados.", "warning")
-        return redirect(url_for("sindico_dashboard"))
-
-    unidade.status = StatusUnidade.APROVADA
-    db.session.commit()
-    flash(f"Unidade {unidade.identificador} aprovada.", "success")
-    return redirect(url_for("sindico_dashboard"))
-
-
-@sindico_required
-def sindico_reprovar(unidade_id):
-    usuario = get_current_user()
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
-
-    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
-        flash("Você não tem permissão para esta unidade.", "danger")
-        return redirect(url_for("sindico_dashboard"))
-
-    if unidade.status != StatusUnidade.PENDENTE:
-        flash("Apenas cadastros pendentes podem ser reprovados.", "warning")
-        return redirect(url_for("sindico_dashboard"))
-
-    db.session.delete(unidade)
-    db.session.commit()
-    flash(f"Cadastro da unidade {unidade.identificador} reprovado e removido.", "info")
-    return redirect(url_for("sindico_dashboard"))
-
-
-@sindico_required
-def sindico_reprovar_pessoa(pessoa_id):
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-    pessoa = _pessoa_do_tenant(pessoa_id, condominio_id)
-    unidade = pessoa.unidade
-
-    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
-        flash("Você não tem permissão para esta unidade.", "danger")
-        return redirect(url_for("sindico_dashboard"))
-
-    if unidade.status != StatusUnidade.PENDENTE:
-        flash("Apenas moradores de cadastros pendentes podem ser reprovados.", "warning")
-        return redirect(url_for("sindico_dashboard"))
-
-    motivos_validos = {
-        "Não é morador da unidade",
-        "Dados incorretos ou incompletos",
-        "Outros",
-    }
-    motivo = request.form.get("motivo", "").strip()
-    if motivo not in motivos_validos:
-        flash("Informe o motivo da reprovação do morador.", "danger")
-        return redirect(url_for("sindico_dashboard"))
-
-    responsavel = unidade.pessoas.filter_by(is_responsavel=True).first()
-    email_responsavel = responsavel.email.strip() if responsavel and responsavel.email else None
-    nome_pessoa = pessoa.nome_completo
-    identificador_unidade = unidade.identificador
-
-    _adicionar_notificacao_sindico(unidade, nome_pessoa, motivo)
-    db.session.delete(pessoa)
-    _registrar_auditoria(
-        usuario,
-        f"O síndico {usuario.username} reprovou/excluiu o morador "
-        f"'{nome_pessoa}' da unidade '{identificador_unidade}'. Motivo: {motivo}",
-    )
-    db.session.commit()
-
-    if email_responsavel:
-        try:
-            enviar_email_reprovacao(
-                email_destino=email_responsavel,
-                bloco=unidade.bloco,
-                apartamento=unidade.apartamento,
-                nome_morador=nome_pessoa,
-                motivo=motivo,
-            )
-        except Exception:
-            traceback.print_exc()
-            flash(
-                "Morador removido, mas não foi possível enviar o e-mail de notificação.",
-                "warning",
-            )
-    else:
-        flash(
-            "Morador removido, mas a unidade não possui e-mail de responsável cadastrado.",
-            "warning",
-        )
-
-    flash(
-        f"Morador '{nome_pessoa}' reprovado e removido do cadastro da unidade "
-        f"{identificador_unidade}.",
-        "success",
-    )
-    return redirect(url_for("sindico_dashboard"))
-
-
-@sindico_required
-def sindico_validar_unidade(unidade_id):
-    usuario = get_current_user()
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio(usuario))
-
-    if not _sindico_gerencia_bloco(usuario, unidade.bloco):
-        flash("Você não tem permissão para esta unidade.", "danger")
-        return redirect(url_for("sindico_dashboard"))
-
-    if unidade.status != StatusUnidade.PENDENTE:
-        flash("Apenas cadastros pendentes podem ser validados.", "warning")
-        return redirect(url_for("sindico_dashboard"))
-
-    motivos_validos = {
-        "Não é morador da unidade",
-        "Dados incorretos ou incompletos",
-        "Outros",
-    }
-    ids_reprovados = set()
-    for valor in request.form.getlist("pessoas_reprovadas"):
-        try:
-            ids_reprovados.add(int(valor))
-        except ValueError:
-            continue
-
-    moradores = unidade.pessoas.all()
-    moradores_aprovados = []
-    moradores_reprovados = []
-
-    for pessoa in moradores:
-        if pessoa.id not in ids_reprovados:
-            moradores_aprovados.append(pessoa)
-            continue
-
-        motivo = request.form.get(f"motivo_pessoa_{pessoa.id}", "").strip()
-        if motivo not in motivos_validos:
-            flash(
-                f"Informe um motivo válido para o morador {pessoa.nome_completo}.",
-                "danger",
-            )
-            return redirect(url_for("sindico_dashboard"))
-
-        moradores_reprovados.append({"nome": pessoa.nome_completo, "motivo": motivo})
-        _adicionar_notificacao_sindico(unidade, pessoa.nome_completo, motivo)
-        _registrar_auditoria(
-            usuario,
-            f"O síndico {usuario.username} reprovou/excluiu o morador "
-            f"'{pessoa.nome_completo}' da unidade '{unidade.identificador}'. "
-            f"Motivo: {motivo}",
-        )
-        db.session.delete(pessoa)
-
-    emails_aprovados = _emails_unicos(moradores_aprovados)
-    unidade_identificador = unidade.identificador
-    bloco = unidade.bloco
-    apartamento = unidade.apartamento
-
-    if moradores_aprovados:
-        unidade.status = StatusUnidade.APROVADA
-        _registrar_auditoria(
-            usuario,
-            f"O síndico {usuario.username} finalizou a validação da unidade "
-            f"'{unidade_identificador}' com {len(moradores_aprovados)} morador(es) aprovado(s).",
-        )
-    else:
-        db.session.delete(unidade)
-        _registrar_auditoria(
-            usuario,
-            f"O síndico {usuario.username} reprovou todos os moradores da unidade "
-            f"'{unidade_identificador}'. Cadastro removido e unidade voltou para "
-            "Aguardando Morador.",
-        )
-
-    db.session.commit()
-
-    if emails_aprovados:
-        for email in emails_aprovados:
-            try:
-                if moradores_reprovados:
-                    enviar_email_validacao_parcial(email, moradores_reprovados)
-                else:
-                    enviar_email_validacao_sucesso(email, bloco, apartamento)
-            except Exception:
-                traceback.print_exc()
-                flash(
-                    f"Validação salva, mas houve falha no envio de e-mail para {email}.",
-                    "warning",
-                )
-
-    if not moradores_reprovados:
-        flash(f"Unidade {unidade_identificador} validada com sucesso.", "success")
-    elif moradores_aprovados:
-        flash(
-            f"Validação concluída na unidade {unidade_identificador} com reprovação parcial.",
-            "warning",
-        )
-    else:
-        flash(
-            f"Todos os moradores da unidade {unidade_identificador} foram reprovados. "
-            "A unidade voltou para Aguardando Morador.",
-            "info",
-        )
-
-    return redirect(url_for("sindico_dashboard"))
-
-
 def _redirect_pos_login_admin(usuario):
     if usuario.role == Role.ADMIN:
         return redirect(url_for("admin_dashboard"))
     return redirect(url_for("admin_index"))
 
-
-def superadmin_login():
-    usuario_logado = get_current_user()
-    if usuario_logado and usuario_logado.role == Role.SUPERADMIN:
-        return redirect(url_for("superadmin_dashboard"))
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-
-        usuario = Usuario.query.filter_by(
-            username=username, role=Role.SUPERADMIN
-        ).first()
-        if usuario and usuario.check_password(password):
-            login_usuario(usuario)
-            return redirect(url_for("superadmin_dashboard"))
-
-        flash("Usuário ou senha inválidos.", "danger")
-
-    return render_template(
-        "login.html",
-        titulo="Login Super Admin — Plataforma",
-        action="superadmin",
-    )
-
-
-def superadmin_logout():
-    logout_usuario()
-    flash("Sessão encerrada.", "info")
-    return redirect(url_for("superadmin_login"))
-
-
-@superadmin_required
-def superadmin_dashboard():
-    usuario = get_current_user()
-    total_condominios = Condominio.query.count()
-    total_parceiros_ativos = Parceiro.query.filter_by(status="Ativo").count()
-    total_usuarios = Usuario.query.filter(Usuario.role != Role.SUPERADMIN).count()
-    condominios_recentes = (
-        Condominio.query.order_by(Condominio.data_cadastro.desc()).limit(5).all()
-    )
-
-    return render_template(
-        "superadmin_dashboard.html",
-        current_user=usuario,
-        total_condominios=total_condominios,
-        total_parceiros_ativos=total_parceiros_ativos,
-        total_usuarios=total_usuarios,
-        condominios_recentes=condominios_recentes,
-    )
-
-
-@superadmin_required
-def superadmin_condominios():
-    usuario = get_current_user()
-
-    if request.method == "POST":
-        nome = request.form.get("nome", "").strip()
-        slug = normalizar_slug(request.form.get("slug", ""))
-        cnpj = request.form.get("cnpj", "").strip() or None
-        label_agrupamento = request.form.get("label_agrupamento", "Bloco").strip() or "Bloco"
-        label_unidade = request.form.get("label_unidade", "Apto").strip() or "Apto"
-        usa_agrupamentos = request.form.get("usa_agrupamentos") == "on"
-        tem_subsindicos = request.form.get("tem_subsindicos") == "on"
-        fluxo_aprovacao_mudanca = (
-            request.form.get("fluxo_aprovacao_mudanca", "Dupla").strip() or "Dupla"
-        )
-        cor_primaria = _normalizar_cor_primaria(request.form.get("cor_primaria"))
-
-        if not nome:
-            flash("Informe o nome do condomínio.", "danger")
-            return redirect(url_for("superadmin_condominios"))
-
-        if not validar_slug(slug):
-            flash(
-                "Informe um slug válido (apenas letras minúsculas, números e hifens).",
-                "danger",
-            )
-            return redirect(url_for("superadmin_condominios"))
-
-        if Condominio.query.filter_by(slug=slug).first():
-            flash("Já existe um condomínio com este slug.", "warning")
-            return redirect(url_for("superadmin_condominios"))
-
-        if fluxo_aprovacao_mudanca not in ("Simples", "Dupla"):
-            flash("Fluxo de aprovação de mudança inválido.", "danger")
-            return redirect(url_for("superadmin_condominios"))
-
-        logo_filename = _salvar_logo_condominio(request.files.get("logo"), slug)
-
-        condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj, ativo=True)
-        db.session.add(condominio)
-        db.session.flush()
-        db.session.add(
-            ConfiguracaoCondominio(
-                condominio_id=condominio.id,
-                label_agrupamento=label_agrupamento,
-                label_unidade=label_unidade,
-                usa_agrupamentos=usa_agrupamentos,
-                tem_subsindicos=tem_subsindicos,
-                fluxo_aprovacao_mudanca=fluxo_aprovacao_mudanca,
-                cor_primaria=cor_primaria,
-                logo_filename=logo_filename,
-            )
-        )
-        db.session.commit()
-        flash(
-            f"Condomínio '{nome}' cadastrado. Porta de entrada: /c/{slug}/login",
-            "success",
-        )
-        return redirect(url_for("superadmin_condominios"))
-
-    condominios = Condominio.query.order_by(Condominio.nome).all()
-    admins_por_condominio = {
-        row.condominio_id: row.total
-        for row in (
-            db.session.query(
-                Usuario.condominio_id,
-                func.count(Usuario.id).label("total"),
-            )
-            .filter(
-                Usuario.role == Role.ADMIN,
-                Usuario.condominio_id.isnot(None),
-            )
-            .group_by(Usuario.condominio_id)
-            .all()
-        )
-    }
-
-    return render_template(
-        "superadmin_condominios.html",
-        current_user=usuario,
-        condominios=condominios,
-        admins_por_condominio=admins_por_condominio,
-        labels_agrupamento=("Bloco", "Torre", "Rua", "Quadra", "Setor"),
-        labels_unidade=("Apto", "Casa", "Sala", "Loja", "Unidade"),
-    )
-
-
-@superadmin_required
-def superadmin_condominio_primeiro_admin(condominio_id):
-    condominio = Condominio.query.get_or_404(condominio_id)
-    username = request.form.get("username", "").strip()
-    senha = request.form.get("senha", "")
-
-    if not username:
-        flash("Informe o login do administrador local.", "danger")
-        return redirect(url_for("superadmin_condominios"))
-    if len(senha) < 6:
-        flash("A senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("superadmin_condominios"))
-
-    if Usuario.query.filter_by(username=username).first():
-        flash("Já existe um usuário com esse login.", "warning")
-        return redirect(url_for("superadmin_condominios"))
-
-    admin_local = Usuario(
-        username=username,
-        role=Role.ADMIN,
-        condominio_id=condominio.id,
-    )
-    admin_local.set_password(senha)
-    db.session.add(admin_local)
-    db.session.commit()
-
-    flash(
-        f"Admin local '{username}' criado para o condomínio '{condominio.nome}'.",
-        "success",
-    )
-    return redirect(url_for("superadmin_condominios"))
-
-
-@superadmin_required
-def superadmin_condominio_whitelabel(condominio_id):
-    """Atualiza cor primária e logo (white-label) de um condomínio existente."""
-    condominio = Condominio.query.get_or_404(condominio_id)
-    cfg = condominio.configuracao
-    if cfg is None:
-        cfg = ConfiguracaoCondominio(condominio_id=condominio.id)
-        db.session.add(cfg)
-        db.session.flush()
-
-    cfg.cor_primaria = _normalizar_cor_primaria(request.form.get("cor_primaria"))
-
-    novo_logo = _salvar_logo_condominio(
-        request.files.get("logo"), condominio.slug or f"condo{condominio.id}"
-    )
-    if novo_logo:
-        cfg.logo_filename = novo_logo
-
-    db.session.commit()
-    flash(f"Identidade visual de '{condominio.nome}' atualizada.", "success")
-    return redirect(url_for("superadmin_condominios"))
-
-
-@superadmin_required
-def superadmin_condominio_editar(condominio_id):
-    """Atualiza dados básicos e configuração operacional. Slug é imutável."""
-    condominio = Condominio.query.get_or_404(condominio_id)
-    nome = request.form.get("nome", "").strip()
-    cnpj = request.form.get("cnpj", "").strip() or None
-    label_agrupamento = request.form.get("label_agrupamento", "Bloco").strip() or "Bloco"
-    label_unidade = request.form.get("label_unidade", "Apto").strip() or "Apto"
-    usa_agrupamentos = request.form.get("usa_agrupamentos") == "on"
-    tem_subsindicos = request.form.get("tem_subsindicos") == "on"
-    fluxo_aprovacao_mudanca = (
-        request.form.get("fluxo_aprovacao_mudanca", "Dupla").strip() or "Dupla"
-    )
-
-    if not nome:
-        flash("Informe o nome do condomínio.", "danger")
-        return redirect(url_for("superadmin_condominios"))
-
-    if fluxo_aprovacao_mudanca not in ("Simples", "Dupla"):
-        flash("Fluxo de aprovação de mudança inválido.", "danger")
-        return redirect(url_for("superadmin_condominios"))
-
-    condominio.nome = nome
-    condominio.cnpj = cnpj
-
-    cfg = condominio.configuracao
-    if cfg is None:
-        cfg = ConfiguracaoCondominio(condominio_id=condominio.id)
-        db.session.add(cfg)
-        db.session.flush()
-
-    cfg.label_agrupamento = label_agrupamento
-    cfg.label_unidade = label_unidade
-    cfg.usa_agrupamentos = usa_agrupamentos
-    cfg.tem_subsindicos = tem_subsindicos
-    cfg.fluxo_aprovacao_mudanca = fluxo_aprovacao_mudanca
-
-    db.session.commit()
-    flash(f"Condomínio '{condominio.nome}' atualizado com sucesso.", "success")
-    return redirect(url_for("superadmin_condominios"))
-
-
-@superadmin_required
-def superadmin_condominio_desativar(condominio_id):
-    """Soft delete: marca condomínio como inativo, preservando histórico."""
-    condominio = Condominio.query.get_or_404(condominio_id)
-    if not condominio.ativo:
-        flash(f"O condomínio '{condominio.nome}' já está inativo.", "info")
-        return redirect(url_for("superadmin_condominios"))
-
-    condominio.ativo = False
-    db.session.commit()
-    flash(
-        f"Condomínio '{condominio.nome}' desativado. O acesso pela porta /c/{condominio.slug}/ está suspenso.",
-        "success",
-    )
-    return redirect(url_for("superadmin_condominios"))
-
-
-@superadmin_required
-def superadmin_condominio_ativar(condominio_id):
-    """Reativa condomínio previamente inativado (soft delete)."""
-    condominio = Condominio.query.get_or_404(condominio_id)
-    if condominio.ativo:
-        flash(f"O condomínio '{condominio.nome}' já está ativo.", "info")
-        return redirect(url_for("superadmin_condominios"))
-
-    condominio.ativo = True
-    db.session.commit()
-    flash(f"Condomínio '{condominio.nome}' reativado com sucesso.", "success")
-    return redirect(url_for("superadmin_condominios"))
-
-
-@superadmin_required
-def superadmin_parceiros():
-    """Gestão global de parceiros do Clube de Vantagens (plataforma)."""
-    usuario = get_current_user()
-    parceiros = Parceiro.query.order_by(Parceiro.data_cadastro.desc()).all()
-    auditoria_cupons = (
-        ResgateCupom.query.join(Cupom)
-        .join(Parceiro)
-        .join(Unidade)
-        .order_by(ResgateCupom.data_resgate.desc())
-        .limit(100)
-        .all()
-    )
-
-    return render_template(
-        "superadmin_parceiros.html",
-        current_user=usuario,
-        parceiros=parceiros,
-        auditoria_cupons=auditoria_cupons,
-    )
-
-
-@superadmin_required
-def superadmin_parceiros_criar():
-    nome_empresa = request.form.get("nome_empresa", "").strip()
-    usuario_login = request.form.get("usuario_login", "").strip().lower()
-    email = request.form.get("email", "").strip().lower()
-    telefone = request.form.get("telefone", "").strip() or None
-    categoria = request.form.get("categoria", "").strip()
-    endereco = request.form.get("endereco", "").strip() or None
-    descricao = _html_rico_form("descricao") or None
-    link_instagram = _link_rede_social(request.form.get("link_instagram"))
-    link_facebook = _link_rede_social(request.form.get("link_facebook"))
-
-    if not nome_empresa or not usuario_login or not email or not categoria:
-        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    if " " in usuario_login:
-        flash("O usuário de login não pode conter espaços.", "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    if Parceiro.query.filter_by(usuario_login=usuario_login).first():
-        flash("Já existe parceiro cadastrado com este usuário de login.", "warning")
-        return redirect(url_for("superadmin_parceiros"))
-
-    if Parceiro.query.filter_by(email=email).first():
-        flash("Já existe parceiro cadastrado com este e-mail.", "warning")
-        return redirect(url_for("superadmin_parceiros"))
-
-    logo_arquivo, erro_logo = _salvar_logo_parceiro(
-        request.files.get("logo"), prefixo=usuario_login
-    )
-    if erro_logo:
-        flash(erro_logo, "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    parceiro = Parceiro(
-        nome_empresa=nome_empresa,
-        usuario_login=usuario_login,
-        email=email,
-        senha_hash=generate_password_hash("senha123"),
-        telefone=telefone,
-        categoria=categoria,
-        endereco=endereco,
-        descricao=descricao,
-        logo_arquivo=logo_arquivo,
-        link_instagram=link_instagram,
-        link_facebook=link_facebook,
-        ativo=True,
-        status="Pendente",
-    )
-    db.session.add(parceiro)
-    db.session.commit()
-    flash(
-        "Parceiro global cadastrado. Status inicial: Pendente. Senha padrão: senha123.",
-        "success",
-    )
-    return redirect(url_for("superadmin_parceiros"))
-
-
-@superadmin_required
-def superadmin_parceiro_editar(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    nome_empresa = request.form.get("nome_empresa", "").strip()
-    usuario_login = request.form.get("usuario_login", "").strip().lower()
-    email = request.form.get("email", "").strip().lower()
-    telefone = request.form.get("telefone", "").strip() or None
-    categoria = request.form.get("categoria", "").strip()
-    endereco = request.form.get("endereco", "").strip() or None
-    descricao = _html_rico_form("descricao") or None
-    link_instagram = _link_rede_social(request.form.get("link_instagram"))
-    link_facebook = _link_rede_social(request.form.get("link_facebook"))
-
-    if not nome_empresa or not usuario_login or not email or not categoria:
-        flash("Preencha nome da empresa, usuário de login, e-mail e categoria.", "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    if " " in usuario_login:
-        flash("O usuário de login não pode conter espaços.", "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    parceiro_login_existente = Parceiro.query.filter(
-        Parceiro.usuario_login == usuario_login,
-        Parceiro.id != parceiro.id,
-    ).first()
-    if parceiro_login_existente:
-        flash("Já existe outro parceiro cadastrado com este usuário de login.", "warning")
-        return redirect(url_for("superadmin_parceiros"))
-
-    parceiro_existente = Parceiro.query.filter(
-        Parceiro.email == email,
-        Parceiro.id != parceiro.id,
-    ).first()
-    if parceiro_existente:
-        flash("Já existe outro parceiro cadastrado com este e-mail.", "warning")
-        return redirect(url_for("superadmin_parceiros"))
-
-    novo_logo, erro_logo = _salvar_logo_parceiro(
-        request.files.get("logo"), prefixo=usuario_login
-    )
-    if erro_logo:
-        flash(erro_logo, "danger")
-        return redirect(url_for("superadmin_parceiros"))
-
-    parceiro.nome_empresa = nome_empresa
-    parceiro.usuario_login = usuario_login
-    parceiro.email = email
-    parceiro.telefone = telefone
-    parceiro.categoria = categoria
-    parceiro.endereco = endereco
-    parceiro.descricao = descricao
-    parceiro.link_instagram = link_instagram
-    parceiro.link_facebook = link_facebook
-    if novo_logo:
-        parceiro.logo_arquivo = novo_logo
-    db.session.commit()
-    flash("Parceiro atualizado com sucesso.", "success")
-    return redirect(url_for("superadmin_parceiros"))
-
-
-@superadmin_required
-def superadmin_parceiro_bloquear(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    usuario = get_current_user()
-
-    parceiro.status = "Bloqueado"
-    parceiro.ativo = False
-    Cupom.query.filter_by(parceiro_id=parceiro.id).update(
-        {"ativo": False},
-        synchronize_session=False,
-    )
-    _registrar_auditoria(
-        usuario,
-        f"Parceiro global bloqueado: {parceiro.nome_empresa} ({parceiro.email}).",
-    )
-    db.session.commit()
-    flash(
-        "Parceiro bloqueado. Os cupons deste parceiro foram removidos da vitrine.",
-        "warning",
-    )
-    return redirect(url_for("superadmin_parceiros"))
-
-
-@superadmin_required
-def superadmin_parceiro_ativar(parceiro_id):
-    parceiro = Parceiro.query.get_or_404(parceiro_id)
-    usuario = get_current_user()
-
-    parceiro.status = "Ativo"
-    parceiro.ativo = True
-    _registrar_auditoria(
-        usuario,
-        f"Parceiro global reativado: {parceiro.nome_empresa} ({parceiro.email}).",
-    )
-    db.session.commit()
-    flash("Parceiro reativado com sucesso.", "success")
-    return redirect(url_for("superadmin_parceiros"))
-
-
-def admin_login():
-    """Legacy: redireciona para a porta de entrada do tenant PRP."""
-    return redirect(url_for("tenant_login", slug="prp"))
-
-
-def admin_logout():
-    slug = _slug_sessao_ou_prp()
-    logout_usuario()
-    flash("Sessão encerrada.", "info")
-    return redirect(url_for("tenant_login", slug=slug))
-
-
-def sindico_login_legacy():
-    """Legacy: redireciona síndico para o tenant PRP."""
-    return redirect(url_for("sindico_login", slug="prp"))
 
 
 def verificar_unidade_legacy():
@@ -3264,445 +1864,6 @@ def verificar_unidade_legacy():
 
 def cadastro_inicial_legacy():
     return redirect(url_for("cadastro_inicial", slug="prp"))
-
-
-@admin_required
-def admin_dashboard():
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-    inicio_janela = datetime.utcnow() - timedelta(days=30)
-
-    # Isolamento multi-tenant: todas as métricas escopadas ao condomínio logado.
-    base_unidades = Unidade.query.filter(Unidade.condominio_id == condominio_id)
-
-    total_aprovados = base_unidades.filter_by(
-        status=StatusUnidade.REGISTRADA
-    ).count()
-
-    aguardando_registro = base_unidades.filter_by(
-        status=StatusUnidade.APROVADA
-    ).count()
-
-    documentos_pendentes = base_unidades.filter(
-        or_(
-            Unidade.documento_status.in_(
-                [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
-            ),
-            and_(
-                Unidade.pessoas.any(
-                    and_(
-                        Pessoa.is_responsavel.is_(True),
-                        Pessoa.vinculo == VinculoPessoa.LOCATARIO,
-                    )
-                ),
-                Unidade.contrato_locacao_status.in_(
-                    [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
-                ),
-            ),
-        )
-    ).count()
-
-    cadastros_por_bloco_rows = (
-        db.session.query(Unidade.bloco, func.count(Unidade.id).label("total"))
-        .filter(
-            Unidade.condominio_id == condominio_id,
-            Unidade.status.in_([StatusUnidade.APROVADA, StatusUnidade.REGISTRADA]),
-        )
-        .group_by(Unidade.bloco)
-        .order_by(Unidade.bloco)
-        .all()
-    )
-    cadastros_por_bloco = [
-        {"bloco": row.bloco, "total": row.total} for row in cadastros_por_bloco_rows
-    ]
-
-    cadastros_por_data_rows = (
-        db.session.query(
-            func.date(Unidade.data_criacao).label("data"),
-            func.count(Unidade.id).label("total"),
-        )
-        .filter(
-            Unidade.condominio_id == condominio_id,
-            Unidade.data_criacao >= inicio_janela,
-        )
-        .group_by(func.date(Unidade.data_criacao))
-        .order_by(func.date(Unidade.data_criacao))
-        .all()
-    )
-    cadastros_por_data = [
-        {
-            "data": row.data.isoformat()
-            if hasattr(row.data, "isoformat")
-            else str(row.data),
-            "total": row.total,
-        }
-        for row in cadastros_por_data_rows
-    ]
-
-    proporcao_status_rows = (
-        db.session.query(Unidade.status, func.count(Unidade.id).label("total"))
-        .filter(Unidade.condominio_id == condominio_id)
-        .group_by(Unidade.status)
-        .order_by(Unidade.status)
-        .all()
-    )
-    proporcao_status = [
-        {"status": row.status, "total": row.total} for row in proporcao_status_rows
-    ]
-
-    return render_template(
-        "admin_dashboard.html",
-        total_aprovados=total_aprovados,
-        aguardando_registro=aguardando_registro,
-        documentos_pendentes=documentos_pendentes,
-        cadastros_por_bloco=cadastros_por_bloco,
-        cadastros_por_data=cadastros_por_data,
-        proporcao_status=proporcao_status,
-        current_user=usuario,
-    )
-
-
-@admin_or_assistente_required
-def admin_index():
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-
-    aguardando_registro = (
-        Unidade.query.filter_by(
-            condominio_id=condominio_id, status=StatusUnidade.APROVADA
-        )
-        .order_by(Unidade.bloco, Unidade.apartamento)
-        .all()
-    )
-    finalizados = (
-        Unidade.query.filter_by(
-            condominio_id=condominio_id, status=StatusUnidade.REGISTRADA
-        )
-        .order_by(Unidade.bloco, Unidade.apartamento)
-        .all()
-    )
-    sindicos = (
-        Usuario.query.filter_by(role=Role.SINDICO, condominio_id=condominio_id)
-        .order_by(Usuario.username)
-        .all()
-    )
-    equipe_acessos = (
-        Usuario.query.filter(
-            Usuario.condominio_id == condominio_id,
-            Usuario.role.in_(
-                [Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]
-            ),
-        )
-        .order_by(Usuario.role, Usuario.username)
-        .all()
-    )
-
-    return render_template(
-        "dashboard_admin.html",
-        aguardando_registro=aguardando_registro,
-        finalizados=finalizados,
-        sindicos=sindicos,
-        equipe_acessos=equipe_acessos,
-        current_user=usuario,
-    )
-
-
-@admin_required
-def admin_clube_vantagens():
-    """
-    Admin local: apenas Relatórios/Analytics do próprio condomínio.
-
-    Clube de Vantagens é catálogo GLOBAL (Parceiro/Cupom sem condominio_id).
-    Mutação de parceiros fica exclusiva do Super Admin (/superadmin/parceiros).
-    """
-    usuario = get_current_user()
-    analytics = _montar_analytics_clube(condominio_id=usuario.condominio_id)
-
-    return render_template(
-        "admin_clube_vantagens.html",
-        current_user=usuario,
-        active_tab="analytics",
-        analytics=analytics,
-    )
-
-
-@admin_required
-def admin_clube_vantagens_analytics():
-    return redirect(url_for("admin_clube_vantagens"))
-
-
-@admin_or_assistente_required
-def admin_registrar(unidade_id):
-    condominio_id = condominio_id_obrigatorio()
-    unidade = _unidade_do_tenant(unidade_id, condominio_id)
-
-    if unidade.status != StatusUnidade.APROVADA:
-        flash("Apenas unidades aprovadas podem ser registradas.", "warning")
-        return redirect(url_for("admin_index"))
-
-    unidade.status = StatusUnidade.REGISTRADA
-    db.session.commit()
-    flash(f"Unidade {unidade.identificador} marcada como registrada.", "success")
-    return redirect(url_for("admin_index"))
-
-
-@admin_or_assistente_required
-def admin_unidade_alterar_senha(unidade_id):
-    condominio_id = condominio_id_obrigatorio()
-    unidade = _unidade_do_tenant(unidade_id, condominio_id)
-    nova_senha = request.form.get("nova_senha", "").strip()
-
-    if not nova_senha:
-        flash("Informe a nova senha.", "danger")
-        return redirect(url_for("admin_index"))
-    if len(nova_senha) < 6:
-        flash("A senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("admin_index"))
-
-    unidade.set_password(nova_senha)
-    db.session.commit()
-    flash(f"Senha da unidade {unidade.identificador} alterada com sucesso.", "success")
-    return redirect(url_for("admin_index"))
-
-
-@admin_or_assistente_required
-def admin_excluir_unidade(unidade_id):
-    usuario = get_current_user()
-    if usuario.role != Role.ADMIN:
-        flash("Acesso negado.", "danger")
-        return redirect(url_for("admin_index"))
-
-    condominio_id = condominio_id_obrigatorio(usuario)
-    unidade = _unidade_do_tenant(unidade_id, condominio_id)
-
-    db.session.delete(unidade)
-    db.session.commit()
-
-    flash(
-        "Cadastro da unidade apagado com sucesso. Ela está livre para novo registro.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_validar_documento(unidade_id):
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    unidade.documento_status = StatusDocumento.ENTREGUE
-    db.session.commit()
-    flash(
-        f"Documento da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
-        f"marcado como entregue/validado.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_validar_contrato_locacao(unidade_id):
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-
-    if unidade.contrato_locacao_status == StatusDocumento.NAO_APLICAVEL:
-        flash(
-            f"Contrato de locação não se aplica à unidade Bloco {unidade.bloco}, "
-            f"Apto {unidade.apartamento}.",
-            "warning",
-        )
-        return redirect(url_for("admin_index"))
-
-    unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
-    db.session.commit()
-    flash(
-        f"Contrato de locação da unidade Bloco {unidade.bloco}, "
-        f"Apto {unidade.apartamento} marcado como entregue/validado.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_validar_documentos(unidade_id):
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    unidade.documento_status = StatusDocumento.ENTREGUE
-    if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
-        unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
-
-    db.session.commit()
-    flash(
-        f"Documentos da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
-        f"marcados como entregues/validados.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_atualizar_status_documentos(unidade_id):
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    documento_status = request.form.get("documento_status", "").strip()
-    contrato_status = request.form.get("contrato_locacao_status", "").strip()
-    status_permitidos = {StatusDocumento.PENDENTE, StatusDocumento.ENTREGUE}
-
-    if documento_status in status_permitidos:
-        unidade.documento_status = documento_status
-
-    if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
-        if contrato_status in status_permitidos:
-            unidade.contrato_locacao_status = contrato_status
-    else:
-        unidade.contrato_locacao_status = StatusDocumento.NAO_APLICAVEL
-
-    db.session.commit()
-    flash(
-        f"Status dos documentos da unidade Bloco {unidade.bloco}, "
-        f"Apto {unidade.apartamento} atualizados.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_alterar_senha_sindico():
-    condominio_id = condominio_id_obrigatorio()
-    usuario_id = request.form.get("usuario_id", type=int)
-    nova_senha = request.form.get("nova_senha", "").strip()
-
-    if not usuario_id or not nova_senha:
-        flash("Informe o síndico e a nova senha.", "danger")
-        return redirect(url_for("admin_index"))
-
-    if len(nova_senha) < 6:
-        flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("admin_index"))
-
-    sindico = _usuario_do_tenant(usuario_id, condominio_id)
-    if sindico.role != Role.SINDICO:
-        flash("Síndico não encontrado.", "danger")
-        return redirect(url_for("admin_index"))
-
-    sindico.set_password(nova_senha)
-    db.session.commit()
-    flash(
-        f"Senha do síndico ({_label_agrupamentos_sindico(sindico)}) "
-        "atualizada com sucesso.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_salvar_proprietario(unidade_id):
-    unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    unidade.proprietario_nome = request.form.get("proprietario_nome", "").strip() or None
-    unidade.proprietario_cpf = request.form.get("proprietario_cpf", "").strip() or None
-    unidade.proprietario_telefone = (
-        request.form.get("proprietario_telefone", "").strip() or None
-    )
-    unidade.proprietario_email = request.form.get("proprietario_email", "").strip() or None
-    db.session.commit()
-    flash(
-        f"Dados do proprietário da unidade Bloco {unidade.bloco}, "
-        f"Apto {unidade.apartamento} salvos com sucesso.",
-        "success",
-    )
-    return redirect(url_for("admin_index"))
-
-
-@admin_required
-def admin_criar_usuario():
-    usuario_logado = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario_logado)
-    blocos = [f"Bloco {indice}" for indice in range(1, 9)]
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        senha = request.form.get("senha", "")
-        tipo_acesso = request.form.get("tipo_acesso", "").strip()
-        bloco_responsavel = request.form.get("bloco_responsavel", "").strip()
-
-        if not username:
-            flash("Informe o login do usuário.", "danger")
-            return render_template("criar_usuario.html", blocos=blocos)
-        if len(senha) < 6:
-            flash("A senha deve ter ao menos 6 caracteres.", "danger")
-            return render_template("criar_usuario.html", blocos=blocos)
-
-        mapeamento_tipo = {
-            "assistente": Role.ASSISTENTE,
-            "sindico": Role.SINDICO,
-            "porteiro": Role.PORTEIRO,
-        }
-        role = mapeamento_tipo.get(tipo_acesso)
-        if not role:
-            flash("Tipo de acesso inválido.", "danger")
-            return render_template("criar_usuario.html", blocos=blocos)
-
-        if role == Role.SINDICO and bloco_responsavel not in blocos:
-            flash("Selecione um bloco válido para o síndico.", "danger")
-            return render_template("criar_usuario.html", blocos=blocos)
-
-        if Usuario.query.filter_by(username=username).first():
-            flash("Já existe um usuário com esse login.", "warning")
-            return render_template("criar_usuario.html", blocos=blocos)
-
-        novo_usuario = Usuario(
-            username=username,
-            role=role,
-            condominio_id=condominio_id,
-        )
-        novo_usuario.set_password(senha)
-        db.session.add(novo_usuario)
-        db.session.flush()
-
-        if role == Role.SINDICO:
-            db.session.add(
-                SindicoAgrupamento(
-                    usuario_id=novo_usuario.id,
-                    condominio_id=condominio_id,
-                    nome_agrupamento=bloco_responsavel,
-                )
-            )
-
-        db.session.commit()
-
-        flash("Usuário criado com sucesso.", "success")
-        return redirect(url_for("admin_index"))
-
-    return render_template("criar_usuario.html", blocos=blocos)
-
-
-@admin_required
-def admin_excluir_usuario(usuario_id):
-    usuario_logado = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario_logado)
-    usuario_alvo = _usuario_do_tenant(usuario_id, condominio_id)
-
-    if usuario_alvo.id == usuario_logado.id:
-        flash("Você não pode excluir o próprio acesso.", "danger")
-        return redirect(url_for("admin_index"))
-
-    if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO):
-        flash(
-            "Apenas acessos de assistente, síndico ou porteiro podem ser revogados aqui.",
-            "warning",
-        )
-        return redirect(url_for("admin_index"))
-
-    username_alvo = usuario_alvo.username
-    role_alvo = usuario_alvo.role
-    SindicoAgrupamento.query.filter_by(
-        usuario_id=usuario_alvo.id, condominio_id=condominio_id
-    ).delete()
-    db.session.delete(usuario_alvo)
-    _registrar_auditoria(
-        usuario_logado,
-        f"Acesso do {role_alvo} '{username_alvo}' foi revogado por "
-        f"'{usuario_logado.username}'.",
-    )
-    db.session.commit()
-
-    flash(f"Acesso de '{username_alvo}' revogado com sucesso.", "success")
-    return redirect(url_for("admin_index"))
 
 
 def _validar_data_mudanca(data_mudanca):
@@ -3813,629 +1974,267 @@ def mudancas_morador(unidade):
     )
 
 
-@sindico_required
-def sindico_mudancas():
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
-
-    if request.method == "POST":
-        agendamento_id = request.form.get("agendamento_id", type=int)
-        acao = request.form.get("acao", "").strip()
-        if not agendamento_id:
-            flash("Solicitação não encontrada no seu bloco.", "danger")
-            return redirect(url_for("sindico_mudancas"))
-        agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
-        if not _sindico_gerencia_bloco(usuario, agendamento.unidade.bloco):
-            flash("Solicitação não encontrada no seu bloco.", "danger")
-            return redirect(url_for("sindico_mudancas"))
-
-        if agendamento.status != StatusAgendamentoMudanca.PENDENTE_SINDICO:
-            flash("Esta solicitação não está pendente de aprovação do síndico.", "warning")
-            return redirect(url_for("sindico_mudancas"))
-
-        if acao == "aprovar":
-            agendamento.status = StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO
-            _registrar_auditoria(
-                usuario,
-                f"Síndico aprovou mudança {agendamento.tipo} da unidade "
-                f"{agendamento.unidade.identificador} em "
-                f"{agendamento.data_mudanca.strftime('%d/%m/%Y')}.",
-            )
-            db.session.commit()
-            flash("Mudança encaminhada para aprovação da administração.", "success")
-        elif acao == "rejeitar":
-            motivo = request.form.get("motivo_rejeicao", "").strip()
-            if not motivo:
-                flash("Informe o motivo da rejeição.", "danger")
-                return redirect(url_for("sindico_mudancas"))
-            agendamento.status = StatusAgendamentoMudanca.REJEITADA
-            agendamento.motivo_rejeicao = motivo
-            _registrar_auditoria(
-                usuario,
-                f"Síndico rejeitou mudança {agendamento.tipo} da unidade "
-                f"{agendamento.unidade.identificador}. Motivo: {motivo}",
-            )
-            db.session.commit()
-            flash("Solicitação de mudança rejeitada.", "info")
-        else:
-            flash("Ação inválida.", "danger")
-
-        return redirect(url_for("sindico_mudancas"))
-
-    solicitacoes = (
-        AgendamentoMudanca.query.join(Unidade)
-        .filter(
-            AgendamentoMudanca.condominio_id == condominio_id,
-            Unidade.condominio_id == condominio_id,
-            Unidade.bloco.in_(blocos_sindico or [""]),
-        )
-        .order_by(
-            case(
-                (
-                    AgendamentoMudanca.status
-                    == StatusAgendamentoMudanca.PENDENTE_SINDICO,
-                    0,
-                ),
-                else_=1,
-            ),
-            AgendamentoMudanca.data_mudanca.asc(),
-            AgendamentoMudanca.data_solicitacao.desc(),
-        )
-        .all()
-        if blocos_sindico
-        else []
-    )
-    return render_template(
-        "sindico_mudancas.html",
-        solicitacoes=solicitacoes,
-        current_user=usuario,
-        agrupamentos_label=_label_agrupamentos_sindico(usuario),
-        status_pendente_sindico=StatusAgendamentoMudanca.PENDENTE_SINDICO,
-    )
-
-
-@admin_or_assistente_required
-def admin_mudancas():
-    usuario = get_current_user()
-    condominio_id = condominio_id_obrigatorio(usuario)
-
-    if request.method == "POST":
-        acao = request.form.get("acao", "").strip()
-
-        if acao == "criar":
-            unidade_id = request.form.get("unidade_id", type=int)
-            tipo = request.form.get("tipo", "").strip()
-            data_str = request.form.get("data_mudanca", "").strip()
-            observacoes = request.form.get("observacoes", "").strip() or None
-
-            if not unidade_id:
-                flash("Selecione uma unidade válida.", "danger")
-                return redirect(url_for("admin_mudancas"))
-            unidade = _unidade_do_tenant(unidade_id, condominio_id)
-
-            if tipo not in StatusAgendamentoMudanca.TIPOS:
-                flash("Selecione o tipo da mudança (Entrada ou Saída).", "danger")
-                return redirect(url_for("admin_mudancas"))
-
-            try:
-                data_mudanca = datetime.strptime(data_str, "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                flash("Informe uma data válida para a mudança.", "danger")
-                return redirect(url_for("admin_mudancas"))
-
-            erro_data = _validar_data_mudanca(data_mudanca)
-            if erro_data:
-                flash(erro_data, "danger")
-                return redirect(url_for("admin_mudancas"))
-
-            agendamento = AgendamentoMudanca(
-                unidade_id=unidade.id,
-                tipo=tipo,
-                data_mudanca=data_mudanca,
-                status=StatusAgendamentoMudanca.APROVADA,
-                observacoes=observacoes,
-                condominio_id=condominio_id,
-            )
-            db.session.add(agendamento)
-            _registrar_auditoria(
-                usuario,
-                f"Administração cadastrou mudança {tipo} já aprovada para a unidade "
-                f"{unidade.identificador} em {data_mudanca.strftime('%d/%m/%Y')}.",
-            )
-            db.session.commit()
-            flash(
-                f"Mudança de {tipo.lower()} cadastrada e aprovada para "
-                f"{unidade.identificador}.",
-                "success",
-            )
-            return redirect(url_for("admin_mudancas"))
-
-        agendamento_id = request.form.get("agendamento_id", type=int)
-        if not agendamento_id:
-            flash("Solicitação não encontrada.", "danger")
-            return redirect(url_for("admin_mudancas"))
-        agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
-
-        if agendamento.status != StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO:
-            flash(
-                "Esta solicitação não está pendente de aprovação da administração.",
-                "warning",
-            )
-            return redirect(url_for("admin_mudancas"))
-
-        if acao == "aprovar":
-            agendamento.status = StatusAgendamentoMudanca.APROVADA
-            _registrar_auditoria(
-                usuario,
-                f"Administração aprovou definitivamente mudança {agendamento.tipo} "
-                f"da unidade {agendamento.unidade.identificador} em "
-                f"{agendamento.data_mudanca.strftime('%d/%m/%Y')}.",
-            )
-            db.session.commit()
-            flash("Mudança aprovada definitivamente.", "success")
-        elif acao == "rejeitar":
-            motivo = request.form.get("motivo_rejeicao", "").strip()
-            if not motivo:
-                flash("Informe o motivo da rejeição.", "danger")
-                return redirect(url_for("admin_mudancas"))
-            agendamento.status = StatusAgendamentoMudanca.REJEITADA
-            agendamento.motivo_rejeicao = motivo
-            _registrar_auditoria(
-                usuario,
-                f"Administração rejeitou mudança {agendamento.tipo} da unidade "
-                f"{agendamento.unidade.identificador}. Motivo: {motivo}",
-            )
-            db.session.commit()
-            flash("Solicitação de mudança rejeitada.", "info")
-        else:
-            flash("Ação inválida.", "danger")
-
-        return redirect(url_for("admin_mudancas"))
-
-    pendentes = (
-        AgendamentoMudanca.query.filter_by(
-            condominio_id=condominio_id,
-            status=StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO,
-        )
-        .order_by(AgendamentoMudanca.data_mudanca.asc())
-        .all()
-    )
-    historico = (
-        AgendamentoMudanca.query.filter_by(condominio_id=condominio_id)
-        .order_by(AgendamentoMudanca.data_solicitacao.desc())
-        .all()
-    )
-    unidades = (
-        Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
-        .all()
-    )
-    return render_template(
-        "admin_mudancas.html",
-        pendentes=pendentes,
-        historico=historico,
-        unidades=unidades,
-        current_user=usuario,
-    )
-
-
-def portaria_logout():
-    slug = _slug_logout()
-    logout_usuario()
-    flash("Sessão encerrada.", "info")
-    return redirect(url_for("tenant_login", slug=slug, tab="equipe"))
-
-
-def _contagens_acesso_aberto(condominio_id):
-    if not condominio_id:
-        return 0, 0
-    base = (
-        RegistroAcesso.query.join(Visitante)
-        .filter(
-            RegistroAcesso.condominio_id == condominio_id,
-            RegistroAcesso.data_saida.is_(None),
-        )
-    )
-    visitantes_no_local = base.filter(
-        Visitante.tipo == TipoVisitante.VISITANTE
-    ).count()
-    prestadores_no_local = (
-        RegistroAcesso.query.join(Visitante)
-        .filter(
-            RegistroAcesso.condominio_id == condominio_id,
-            RegistroAcesso.data_saida.is_(None),
-            Visitante.tipo == TipoVisitante.PRESTADOR,
-        )
-        .count()
-    )
-    return visitantes_no_local, prestadores_no_local
-
-
-@portaria_required
-def portaria_dashboard():
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    visitantes_no_local, prestadores_no_local = _contagens_acesso_aberto(condominio_id)
-    encomendas_pendentes = 0
-    if condominio_id:
-        encomendas_pendentes = Encomenda.query.filter_by(
-            condominio_id=condominio_id,
-            status=StatusEncomenda.PENDENTE,
-        ).count()
-    return render_template(
-        "portaria/dashboard.html",
-        current_user=usuario,
-        visitantes_no_local=visitantes_no_local,
-        prestadores_no_local=prestadores_no_local,
-        encomendas_pendentes=encomendas_pendentes,
-    )
-
-
-@portaria_required
-def portaria_acesso():
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
+@unidade_required
+def morador_autorizacoes(unidade):
+    """Painel do morador: autorizações prévias de visitantes/prestadores."""
+    if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
         flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
-        return redirect(url_for("portaria_dashboard"))
-
-    registros_abertos = (
-        RegistroAcesso.query.join(Visitante)
-        .join(Unidade)
-        .filter(
-            RegistroAcesso.condominio_id == condominio_id,
-            RegistroAcesso.data_saida.is_(None),
-        )
-        .order_by(RegistroAcesso.data_entrada.asc())
-        .all()
-    )
-    registros_historico = (
-        RegistroAcesso.query.join(Visitante)
-        .join(Unidade)
-        .filter(
-            RegistroAcesso.condominio_id == condominio_id,
-            RegistroAcesso.data_saida.isnot(None),
-        )
-        .order_by(RegistroAcesso.data_saida.desc())
-        .all()
-    )
-    unidades = (
-        Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
-        .all()
-    )
-    return render_template(
-        "portaria/acesso.html",
-        current_user=usuario,
-        registros_abertos=registros_abertos,
-        registros_historico=registros_historico,
-        unidades=unidades,
-        tipos_visitante=TipoVisitante.CHOICES,
-    )
-
-
-@portaria_required
-def portaria_acesso_entrada():
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
-        return redirect(url_for("portaria_acesso"))
-
-    documento = _normalizar_documento_visitante(request.form.get("documento", ""))
-    nome = (request.form.get("nome", "") or "").strip()
-    tipo = (request.form.get("tipo", "") or "").strip()
-    empresa = (request.form.get("empresa", "") or "").strip() or None
-    unidade_id_raw = (request.form.get("unidade_id", "") or "").strip()
-
-    if not documento or not nome or tipo not in TipoVisitante.CHOICES:
-        flash("Preencha documento, nome e tipo para registrar a entrada.", "danger")
-        return redirect(url_for("portaria_acesso"))
-
-    try:
-        unidade_id = int(unidade_id_raw)
-    except (TypeError, ValueError):
-        flash("Selecione a unidade de destino.", "danger")
-        return redirect(url_for("portaria_acesso"))
-
-    unidade = Unidade.query.filter_by(
-        id=unidade_id, condominio_id=condominio_id
-    ).first()
-    if unidade is None:
-        flash("Unidade inválida para este condomínio.", "danger")
-        return redirect(url_for("portaria_acesso"))
-
-    if tipo != TipoVisitante.PRESTADOR:
-        empresa = None
-
-    visitante = Visitante.query.filter_by(
-        condominio_id=condominio_id,
-        documento=documento,
-    ).first()
-    if visitante is None:
-        visitante = Visitante(
-            condominio_id=condominio_id,
-            documento=documento,
-            nome=nome,
-            tipo=tipo,
-            empresa=empresa,
-        )
-        db.session.add(visitante)
-        db.session.flush()
-    else:
-        visitante.nome = nome
-        visitante.tipo = tipo
-        visitante.empresa = empresa
-
-    entrada_aberta = RegistroAcesso.query.filter_by(
-        condominio_id=condominio_id,
-        visitante_id=visitante.id,
-        data_saida=None,
-    ).first()
-    if entrada_aberta:
-        nome_aberto = visitante.nome
-        unidade_aberta = entrada_aberta.unidade.identificador
-        db.session.rollback()
-        flash(
-            f"{nome_aberto} já possui entrada em aberto em {unidade_aberta}. "
-            "Registre a saída antes de uma nova entrada.",
+            "Apenas unidades aprovadas ou registradas podem criar autorizações.",
             "warning",
         )
-        return redirect(url_for("portaria_acesso"))
+        return redirect(url_for("atualizar_dados"))
 
-    agora = _agora_sao_paulo()
-    registro = RegistroAcesso(
-        condominio_id=condominio_id,
-        visitante_id=visitante.id,
-        unidade_id=unidade.id,
-        data_entrada=agora,
-        data_saida=None,
-        porteiro_id=usuario.id,
-    )
-    db.session.add(registro)
-    _registrar_auditoria(
-        usuario,
-        f"Portaria '{usuario.username}' registrou entrada de {visitante.nome} "
-        f"({visitante.tipo}) na unidade {unidade.identificador}.",
-    )
-    db.session.commit()
-    flash(
-        f"Entrada registrada: {visitante.nome} → {unidade.identificador} "
-        f"às {agora.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_acesso"))
+    if not unidade.condominio_id:
+        flash("Unidade sem condomínio vinculado. Contate a administração.", "danger")
+        return redirect(url_for("atualizar_dados"))
 
+    if request.method == "POST":
+        nome_visitante = request.form.get("nome_visitante", "").strip()
+        documento = request.form.get("documento", "").strip() or None
+        data_str = request.form.get("data_prevista", "").strip()
+        tipo = request.form.get("tipo", "").strip()
 
-@portaria_required
-def portaria_acesso_saida(registro_id):
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
+        if not nome_visitante:
+            flash("Informe o nome do visitante ou prestador.", "danger")
+            return redirect(url_for("morador_autorizacoes"))
+
+        if tipo not in TipoVisitante.CHOICES:
+            flash("Selecione o tipo (Visitante ou Prestador).", "danger")
+            return redirect(url_for("morador_autorizacoes"))
+
+        try:
+            data_prevista = datetime.strptime(data_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            flash("Informe uma data prevista válida.", "danger")
+            return redirect(url_for("morador_autorizacoes"))
+
+        if data_prevista < date.today():
+            flash("A data prevista não pode ser anterior a hoje.", "danger")
+            return redirect(url_for("morador_autorizacoes"))
+
+        autorizacao = AutorizacaoAcesso(
+            condominio_id=unidade.condominio_id,
+            unidade_id=unidade.id,
+            nome_visitante=nome_visitante,
+            documento=documento,
+            data_prevista=data_prevista,
+            tipo=tipo,
+            status=StatusAutorizacaoAcesso.PENDENTE,
         )
-        return redirect(url_for("portaria_acesso"))
-
-    registro = _registro_acesso_do_tenant(registro_id, condominio_id)
-    if registro.data_saida:
-        flash("Esta entrada já foi encerrada.", "info")
-        return redirect(url_for("portaria_acesso"))
-
-    registro.data_saida = _agora_sao_paulo()
-    registro.porteiro_saida_id = usuario.id
-    _registrar_auditoria(
-        usuario,
-        f"Portaria '{usuario.username}' registrou saída de "
-        f"{registro.visitante.nome} da unidade {registro.unidade.identificador} "
-        f"às {registro.data_saida.strftime('%H:%M')}.",
-    )
-    db.session.commit()
-    flash(
-        f"Saída registrada: {registro.visitante.nome} "
-        f"às {registro.data_saida.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_acesso"))
-
-
-@portaria_required
-def portaria_encomendas():
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
+        db.session.add(autorizacao)
+        _criar_notificacao(
+            condominio_id=unidade.condominio_id,
+            perfil_destino=PerfilDestinoNotificacao.PORTARIA,
+            titulo="Nova Autorização",
+            mensagem=(
+                f"A unidade {unidade.identificador} autorizou a entrada de "
+                f"{nome_visitante}."
+            ),
+            unidade_id=None,
         )
-        return redirect(url_for("portaria_dashboard"))
+        db.session.commit()
+        flash("Autorização criada com sucesso.", "success")
+        return redirect(url_for("morador_autorizacoes"))
 
-    pendentes = (
-        Encomenda.query.join(Unidade)
-        .filter(
-            Encomenda.condominio_id == condominio_id,
-            Encomenda.status == StatusEncomenda.PENDENTE,
+    hoje = date.today()
+    registros = (
+        AutorizacaoAcesso.query.filter_by(
+            unidade_id=unidade.id,
+            condominio_id=unidade.condominio_id,
         )
-        .order_by(Encomenda.data_recebimento.asc())
+        .order_by(
+            AutorizacaoAcesso.data_prevista.desc(),
+            AutorizacaoAcesso.created_at.desc(),
+        )
         .all()
     )
-    historico = (
-        Encomenda.query.join(Unidade)
-        .filter(
-            Encomenda.condominio_id == condominio_id,
-            Encomenda.status == StatusEncomenda.ENTREGUE,
-        )
-        .order_by(Encomenda.data_entrega.desc())
-        .all()
+
+    autorizacoes_ativas = [
+        item
+        for item in registros
+        if item.status == StatusAutorizacaoAcesso.PENDENTE
+        and item.data_prevista >= hoje
+    ]
+    autorizacoes_historico = [
+        item
+        for item in registros
+        if item.status != StatusAutorizacaoAcesso.PENDENTE
+        or item.data_prevista < hoje
+    ]
+
+    return render_template(
+        "autorizacoes_morador.html",
+        unidade=unidade,
+        autorizacoes_ativas=autorizacoes_ativas,
+        autorizacoes_historico=autorizacoes_historico,
+        tipos_autorizacao=TipoVisitante.CHOICES,
+        data_minima=hoje.isoformat(),
     )
-    unidades = (
-        Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
+
+
+@unidade_required
+def morador_autorizacoes_cancelar(unidade, autorizacao_id):
+    """Cancela autorização prévia com proteção Anti-IDOR por unidade."""
+    autorizacao = AutorizacaoAcesso.query.filter_by(
+        id=autorizacao_id,
+        condominio_id=unidade.condominio_id,
+    ).first()
+
+    # Anti-IDOR: só cancela se pertencer à unidade logada.
+    if not autorizacao or autorizacao.unidade_id != unidade.id:
+        flash("Autorização não encontrada.", "danger")
+        return redirect(url_for("morador_autorizacoes"))
+
+    if autorizacao.status != StatusAutorizacaoAcesso.PENDENTE:
+        flash("Somente autorizações pendentes podem ser canceladas.", "warning")
+        return redirect(url_for("morador_autorizacoes"))
+
+    autorizacao.status = StatusAutorizacaoAcesso.CANCELADA
+    db.session.commit()
+    flash("Autorização cancelada.", "success")
+    return redirect(url_for("morador_autorizacoes"))
+
+
+def _unidade_pode_abrir_ocorrencia(unidade):
+    if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
+        flash(
+            "Apenas unidades aprovadas ou registradas podem abrir ocorrências.",
+            "warning",
+        )
+        return False
+    if not unidade.condominio_id:
+        flash("Unidade sem condomínio vinculado. Contate a administração.", "danger")
+        return False
+    return True
+
+
+@unidade_required
+def morador_ocorrencias(unidade):
+    """Lista os chamados da unidade logada."""
+    if not _unidade_pode_abrir_ocorrencia(unidade):
+        return redirect(url_for("atualizar_dados"))
+
+    ocorrencias = (
+        Ocorrencia.query.filter_by(
+            unidade_id=unidade.id,
+            condominio_id=unidade.condominio_id,
+        )
+        .order_by(Ocorrencia.created_at.desc())
         .all()
     )
     return render_template(
-        "portaria/encomendas.html",
-        current_user=usuario,
-        pendentes=pendentes,
-        historico=historico,
-        unidades=unidades,
+        "morador/ocorrencias.html",
+        unidade=unidade,
+        ocorrencias=ocorrencias,
+        categorias=CategoriaOcorrencia.CHOICES,
+        status_ocorrencia=StatusOcorrencia,
     )
 
 
-@portaria_required
-def portaria_encomendas_receber():
-    usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
-        return redirect(url_for("portaria_encomendas"))
+@unidade_required
+def morador_ocorrencias_nova(unidade):
+    """Abre um novo chamado com foto opcional (blindagem de imagem)."""
+    if not _unidade_pode_abrir_ocorrencia(unidade):
+        return redirect(url_for("atualizar_dados"))
 
-    destinatario = (request.form.get("destinatario", "") or "").strip() or None
-    transportadora = (request.form.get("transportadora", "") or "").strip() or None
-    unidade_id_raw = (request.form.get("unidade_id", "") or "").strip()
+    titulo = (request.form.get("titulo") or "").strip()
+    descricao = (request.form.get("descricao") or "").strip()
+    categoria = (request.form.get("categoria") or "").strip()
 
-    try:
-        unidade_id = int(unidade_id_raw)
-    except (TypeError, ValueError):
-        flash("Selecione a unidade destinatária da encomenda.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+    if not titulo:
+        flash("Informe o título da ocorrência.", "danger")
+        return redirect(url_for("morador_ocorrencias"))
+    if not descricao:
+        flash("Descreva a ocorrência.", "danger")
+        return redirect(url_for("morador_ocorrencias"))
+    if categoria not in CategoriaOcorrencia.CHOICES:
+        flash("Selecione uma categoria válida.", "danger")
+        return redirect(url_for("morador_ocorrencias"))
 
-    unidade = Unidade.query.filter_by(
-        id=unidade_id, condominio_id=condominio_id
-    ).first()
-    if unidade is None:
-        flash("Unidade inválida para este condomínio.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+    foto_arquivo, erro_foto = _salvar_foto_ocorrencia(
+        request.files.get("foto"),
+        prefixo=f"un{unidade.id}",
+    )
+    if erro_foto:
+        flash(erro_foto, "danger")
+        return redirect(url_for("morador_ocorrencias"))
 
-    agora = _agora_sao_paulo()
-    encomenda = Encomenda(
-        condominio_id=condominio_id,
+    ocorrencia = Ocorrencia(
+        condominio_id=unidade.condominio_id,
         unidade_id=unidade.id,
-        destinatario=destinatario,
-        transportadora=transportadora,
-        status=StatusEncomenda.PENDENTE,
-        data_recebimento=agora,
-        data_entrega=None,
-        porteiro_recebimento_id=usuario.id,
-        porteiro_entrega_id=None,
+        titulo=titulo[:200],
+        descricao=descricao,
+        categoria=categoria,
+        status=StatusOcorrencia.ABERTO,
+        foto_arquivo=foto_arquivo,
     )
-    db.session.add(encomenda)
-    _registrar_auditoria(
-        usuario,
-        f"Portaria '{usuario.username}' recebeu encomenda para "
-        f"{unidade.identificador}"
-        + (f" ({destinatario})" if destinatario else "")
-        + ".",
-    )
+    db.session.add(ocorrencia)
     db.session.commit()
-    flash(
-        f"Encomenda recebida para {unidade.identificador} "
-        f"às {agora.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_encomendas"))
+    flash("Ocorrência registrada com sucesso.", "success")
+    return redirect(url_for("morador_ocorrencias"))
 
 
-@portaria_required
-def portaria_encomendas_entregar(encomenda_id):
+def _layout_notificacoes(perfil):
     usuario = get_current_user()
-    condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
-        return redirect(url_for("portaria_encomendas"))
+    if perfil == PerfilDestinoNotificacao.PORTARIA and usuario and usuario.is_porteiro:
+        return "portaria_base.html"
+    return "base.html"
 
-    encomenda = _encomenda_do_tenant(encomenda_id, condominio_id)
-    if encomenda.status == StatusEncomenda.ENTREGUE:
-        flash("Esta encomenda já foi entregue ao morador.", "info")
-        return redirect(url_for("portaria_encomendas"))
 
-    encomenda.status = StatusEncomenda.ENTREGUE
-    encomenda.data_entrega = _agora_sao_paulo()
-    encomenda.porteiro_entrega_id = usuario.id
-    _registrar_auditoria(
-        usuario,
-        f"Portaria '{usuario.username}' entregou encomenda #{encomenda.id} "
-        f"da unidade {encomenda.unidade.identificador} "
-        f"às {encomenda.data_entrega.strftime('%H:%M')}.",
+def listar_notificacoes():
+    perfil, condominio_id, unidade_id = _destinatario_notificacoes()
+    if not perfil or not condominio_id:
+        flash("Faça login para ver as notificações.", "warning")
+        return _redirect_login_tenant()
+
+    notificacoes = _query_notificacoes(perfil, condominio_id, unidade_id).all()
+    return render_template(
+        "notificacoes.html",
+        layout=_layout_notificacoes(perfil),
+        notificacoes=notificacoes,
+        current_user=get_current_user(),
     )
+
+
+def notificacoes_ler(notificacao_id):
+    perfil, condominio_id, unidade_id = _destinatario_notificacoes()
+    if not perfil or not condominio_id:
+        flash("Faça login para gerenciar notificações.", "warning")
+        return _redirect_login_tenant()
+
+    query = Notificacao.query.filter_by(
+        id=notificacao_id,
+        condominio_id=condominio_id,
+        perfil_destino=perfil,
+    )
+    if perfil == PerfilDestinoNotificacao.MORADOR:
+        query = query.filter_by(unidade_id=unidade_id)
+    else:
+        query = query.filter(Notificacao.unidade_id.is_(None))
+
+    notificacao = query.first()
+    if not notificacao:
+        flash("Notificação não encontrada.", "danger")
+        return redirect(url_for("listar_notificacoes"))
+
+    notificacao.lida = True
     db.session.commit()
-    flash(
-        f"Entrega registrada para {encomenda.unidade.identificador} "
-        f"às {encomenda.data_entrega.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_encomendas"))
-
-
-def _agora_sao_paulo():
-    """Retorna datetime local de America/Sao_Paulo (naive, para persistência)."""
-    try:
-        from zoneinfo import ZoneInfo
-
-        return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-    except Exception:
-        return datetime.utcnow()
-
-
-@portaria_required
-def portaria_mudanca_chegar(agendamento_id):
-    usuario = get_current_user()
-    hoje = date.today()
-    agendamento = _agendamento_do_tenant(
-        agendamento_id, condominio_id_obrigatorio(usuario)
-    )
-
-    if agendamento.status != StatusAgendamentoMudanca.APROVADA:
-        flash("Somente mudanças aprovadas podem ter chegada registrada.", "warning")
-        return redirect(url_for("portaria_dashboard"))
-
-    if agendamento.data_mudanca != hoje:
-        flash("O check-in de chegada só é permitido no dia da mudança.", "warning")
-        return redirect(url_for("portaria_dashboard"))
-
-    if agendamento.data_chegada:
-        flash("A chegada deste caminhão já foi registrada.", "info")
-        return redirect(url_for("portaria_dashboard"))
-
-    agendamento.data_chegada = _agora_sao_paulo()
-    # Registra o usuário logado (porteiro nominal ou admin em atuação).
-    agendamento.porteiro_id = usuario.id
-    _registrar_auditoria(
-        usuario,
-        f"{'Admin' if usuario.role == Role.ADMIN else 'Portaria'} "
-        f"'{usuario.username}' registrou chegada do caminhão ({agendamento.tipo}) "
-        f"da unidade {agendamento.unidade.identificador} em "
-        f"{agendamento.data_chegada.strftime('%d/%m/%Y %H:%M')}.",
-    )
-    db.session.commit()
-    flash(
-        f"Chegada registrada para {agendamento.unidade.identificador} "
-        f"às {agendamento.data_chegada.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_dashboard"))
-
-
-@portaria_required
-def portaria_mudancas():
-    return redirect(url_for("portaria_dashboard"))
+    return redirect(url_for("listar_notificacoes"))
 
 
 def init_app(app):
+    from app.blueprints import admin as admin_routes
+    from app.blueprints import parceiro as parceiro_routes
+    from app.blueprints import portaria as portaria_routes
+    from app.blueprints import sindico as sindico_routes
+    from app.blueprints import superadmin as superadmin_routes
+
+    parceiro_routes.register(app)
+    superadmin_routes.register(app)
+    sindico_routes.register(app)
+    admin_routes.register(app)
+    portaria_routes.register(app)
+
     app.add_url_rule("/", "index", index, methods=["GET"])
     app.add_url_rule(
         "/c/<slug>/login",
@@ -4453,12 +2252,6 @@ def init_app(app):
         "/c/<slug>/cadastro-inicial",
         "cadastro_inicial",
         cadastro_inicial,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/c/<slug>/sindico/login",
-        "sindico_login",
-        sindico_login,
         methods=["GET", "POST"],
     )
     # Legacy bypass — não quebra bookmarks antigos.
@@ -4485,85 +2278,6 @@ def init_app(app):
     )
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
-    )
-    app.add_url_rule(
-        "/parceiro",
-        "parceiro_login",
-        parceiro_login,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/login",
-        "parceiro_login_alt",
-        parceiro_login,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule("/parceiro/logout", "parceiro_logout", parceiro_logout, methods=["GET"])
-    app.add_url_rule(
-        "/parceiro/esqueci_senha",
-        "parceiro_esqueci_senha",
-        parceiro_esqueci_senha,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/redefinir_senha/<token>",
-        "parceiro_redefinir_senha",
-        parceiro_redefinir_senha,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/dashboard",
-        "parceiro_dashboard",
-        parceiro_dashboard,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/parceiro/validacao",
-        "parceiro_validacao",
-        parceiro_validacao,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/parceiro/cupons",
-        "parceiro_cupons",
-        parceiro_cupons,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/parceiro/perfil",
-        "parceiro_perfil",
-        parceiro_perfil,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/parceiro/perfil/editar",
-        "parceiro_perfil_editar",
-        parceiro_perfil_editar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/validar_codigo",
-        "parceiro_validar_codigo",
-        parceiro_validar_codigo,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/aprovar",
-        "parceiro_aprovar",
-        parceiro_aprovar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/cupons/criar",
-        "parceiro_cupons_criar",
-        parceiro_cupons_criar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/parceiro/cupons/<int:cupom_id>/desativar",
-        "parceiro_cupons_desativar",
-        parceiro_cupons_desativar,
-        methods=["POST"],
     )
     app.add_url_rule(
         "/clube_vantagens",
@@ -4632,293 +2346,44 @@ def init_app(app):
     )
 
     app.add_url_rule(
-        "/sindico/login",
-        "sindico_login_legacy",
-        sindico_login_legacy,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/sindico/logout", "sindico_logout", sindico_logout, methods=["GET"]
-    )
-    app.add_url_rule(
-        "/sindico", "sindico_dashboard", sindico_dashboard, methods=["GET"]
-    )
-    app.add_url_rule(
-        "/sindico/aprovar/<int:unidade_id>",
-        "sindico_aprovar",
-        sindico_aprovar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/sindico/reprovar/<int:unidade_id>",
-        "sindico_reprovar",
-        sindico_reprovar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/sindico/reprovar-pessoa/<int:pessoa_id>",
-        "sindico_reprovar_pessoa",
-        sindico_reprovar_pessoa,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/sindico/validar-unidade/<int:unidade_id>",
-        "sindico_validar_unidade",
-        sindico_validar_unidade,
-        methods=["POST"],
-    )
-
-    app.add_url_rule(
-        "/superadmin/login",
-        "superadmin_login",
-        superadmin_login,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/logout",
-        "superadmin_logout",
-        superadmin_logout,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/superadmin",
-        "superadmin_dashboard",
-        superadmin_dashboard,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios",
-        "superadmin_condominios",
-        superadmin_condominios,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios/<int:condominio_id>/primeiro-admin",
-        "superadmin_condominio_primeiro_admin",
-        superadmin_condominio_primeiro_admin,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios/<int:condominio_id>/whitelabel",
-        "superadmin_condominio_whitelabel",
-        superadmin_condominio_whitelabel,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios/<int:condominio_id>/editar",
-        "superadmin_condominio_editar",
-        superadmin_condominio_editar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios/<int:condominio_id>/desativar",
-        "superadmin_condominio_desativar",
-        superadmin_condominio_desativar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/condominios/<int:condominio_id>/ativar",
-        "superadmin_condominio_ativar",
-        superadmin_condominio_ativar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/parceiros",
-        "superadmin_parceiros",
-        superadmin_parceiros,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/superadmin/parceiros/criar",
-        "superadmin_parceiros_criar",
-        superadmin_parceiros_criar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/parceiros/<int:parceiro_id>/editar",
-        "superadmin_parceiro_editar",
-        superadmin_parceiro_editar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/parceiros/<int:parceiro_id>/bloquear",
-        "superadmin_parceiro_bloquear",
-        superadmin_parceiro_bloquear,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/superadmin/parceiros/<int:parceiro_id>/ativar",
-        "superadmin_parceiro_ativar",
-        superadmin_parceiro_ativar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/login", "admin_login", admin_login, methods=["GET", "POST"]
-    )
-    app.add_url_rule("/admin/logout", "admin_logout", admin_logout, methods=["GET"])
-    app.add_url_rule(
-        "/admin/dashboard", "admin_dashboard", admin_dashboard, methods=["GET"]
-    )
-    app.add_url_rule("/admin", "admin_index", admin_index, methods=["GET"])
-    app.add_url_rule(
-        "/admin/clube_vantagens",
-        "admin_clube_vantagens",
-        admin_clube_vantagens,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/admin/clube_vantagens/analytics",
-        "admin_clube_vantagens_analytics",
-        admin_clube_vantagens_analytics,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/admin/usuarios/novo",
-        "admin_criar_usuario",
-        admin_criar_usuario,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/admin/usuarios/excluir/<int:usuario_id>",
-        "admin_excluir_usuario",
-        admin_excluir_usuario,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/registrar/<int:unidade_id>",
-        "admin_registrar",
-        admin_registrar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/unidades/<int:unidade_id>/alterar_senha",
-        "admin_unidade_alterar_senha",
-        admin_unidade_alterar_senha,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/excluir-unidade/<int:unidade_id>",
-        "admin_excluir_unidade",
-        admin_excluir_unidade,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/validar-documento/<int:unidade_id>",
-        "admin_validar_documento",
-        admin_validar_documento,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/validar-contrato-locacao/<int:unidade_id>",
-        "admin_validar_contrato_locacao",
-        admin_validar_contrato_locacao,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/validar-documentos/<int:unidade_id>",
-        "admin_validar_documentos",
-        admin_validar_documentos,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/salvar-proprietario/<int:unidade_id>",
-        "admin_salvar_proprietario",
-        admin_salvar_proprietario,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/atualizar-status-documentos/<int:unidade_id>",
-        "admin_atualizar_status_documentos",
-        admin_atualizar_status_documentos,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/admin/alterar-senha-sindico",
-        "admin_alterar_senha_sindico",
-        admin_alterar_senha_sindico,
-        methods=["POST"],
-    )
-    app.add_url_rule(
         "/mudancas",
         "mudancas_morador",
         mudancas_morador,
         methods=["GET", "POST"],
     )
     app.add_url_rule(
-        "/sindico/mudancas",
-        "sindico_mudancas",
-        sindico_mudancas,
+        "/morador/autorizacoes",
+        "morador_autorizacoes",
+        morador_autorizacoes,
         methods=["GET", "POST"],
     )
     app.add_url_rule(
-        "/admin/mudancas",
-        "admin_mudancas",
-        admin_mudancas,
-        methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/portaria/logout",
-        "portaria_logout",
-        portaria_logout,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/portaria",
-        "portaria_index",
-        portaria_dashboard,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/portaria/dashboard",
-        "portaria_dashboard",
-        portaria_dashboard,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/portaria/acesso",
-        "portaria_acesso",
-        portaria_acesso,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/portaria/acesso/entrada",
-        "portaria_acesso_entrada",
-        portaria_acesso_entrada,
+        "/morador/autorizacoes/cancelar/<int:autorizacao_id>",
+        "morador_autorizacoes_cancelar",
+        morador_autorizacoes_cancelar,
         methods=["POST"],
     )
     app.add_url_rule(
-        "/portaria/acesso/saida/<int:registro_id>",
-        "portaria_acesso_saida",
-        portaria_acesso_saida,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/portaria/encomendas",
-        "portaria_encomendas",
-        portaria_encomendas,
+        "/morador/ocorrencias",
+        "morador_ocorrencias",
+        morador_ocorrencias,
         methods=["GET"],
     )
     app.add_url_rule(
-        "/portaria/encomendas/receber",
-        "portaria_encomendas_receber",
-        portaria_encomendas_receber,
+        "/morador/ocorrencias/nova",
+        "morador_ocorrencias_nova",
+        morador_ocorrencias_nova,
         methods=["POST"],
     )
     app.add_url_rule(
-        "/portaria/encomendas/entregar/<int:encomenda_id>",
-        "portaria_encomendas_entregar",
-        portaria_encomendas_entregar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/portaria/mudanca/<int:agendamento_id>/chegar",
-        "portaria_mudanca_chegar",
-        portaria_mudanca_chegar,
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/portaria/mudancas",
-        "portaria_mudancas",
-        portaria_mudancas,
+        "/notificacoes",
+        "listar_notificacoes",
+        listar_notificacoes,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/notificacoes/ler/<int:notificacao_id>",
+        "notificacoes_ler",
+        notificacoes_ler,
+        methods=["POST"],
     )

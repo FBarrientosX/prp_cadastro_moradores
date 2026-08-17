@@ -60,6 +60,38 @@ class StatusEncomenda:
     CHOICES = (PENDENTE, ENTREGUE)
 
 
+class StatusAutorizacaoAcesso:
+    PENDENTE = "Pendente"
+    CONCLUIDA = "Concluída"
+    CANCELADA = "Cancelada"
+
+    CHOICES = (PENDENTE, CONCLUIDA, CANCELADA)
+
+
+class PerfilDestinoNotificacao:
+    MORADOR = "MORADOR"
+    PORTARIA = "PORTARIA"
+
+    CHOICES = (MORADOR, PORTARIA)
+
+
+class StatusOcorrencia:
+    ABERTO = "Aberto"
+    EM_ANDAMENTO = "Em Andamento"
+    RESOLVIDO = "Resolvido"
+
+    CHOICES = (ABERTO, EM_ANDAMENTO, RESOLVIDO)
+
+
+class CategoriaOcorrencia:
+    MANUTENCAO = "Manutenção"
+    RECLAMACAO = "Reclamação"
+    SUGESTAO = "Sugestão"
+    OUTROS = "Outros"
+
+    CHOICES = (MANUTENCAO, RECLAMACAO, SUGESTAO, OUTROS)
+
+
 class Condominio(db.Model):
     """Tenant raiz do SaaS multi-condomínio."""
 
@@ -226,6 +258,9 @@ class Unidade(db.Model):
     proprietario_telefone = db.Column(db.String(20), nullable=True)
     proprietario_email = db.Column(db.String(120), nullable=True)
     notificacao_sindico = db.Column(db.Text, nullable=True)
+    # Marca a última troca de senha; usado para invalidar tokens de
+    # redefinição já consumidos (evita reuso do mesmo link).
+    senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("unidades", lazy=True)
@@ -259,9 +294,15 @@ class Unidade(db.Model):
         back_populates="unidade",
         lazy="dynamic",
     )
+    ocorrencias = db.relationship(
+        "Ocorrencia",
+        back_populates="unidade",
+        lazy="dynamic",
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        self.senha_atualizada_em = datetime.utcnow()
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -310,6 +351,17 @@ class EspacoComum(db.Model):
 
 class Reserva(db.Model):
     __tablename__ = "reservas"
+    __table_args__ = (
+        # Impede duplo-booking do mesmo espaço/data sob concorrência: o banco,
+        # não só a checagem em Python, rejeita a segunda reserva ativa.
+        db.Index(
+            "ux_reserva_espaco_data_ativa",
+            "espaco_id",
+            "data_reserva",
+            unique=True,
+            sqlite_where=db.text("status IN ('Pendente', 'Aprovada')"),
+        ),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     espaco_id = db.Column(
@@ -351,8 +403,18 @@ class Parceiro(db.Model):
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Marca a última troca de senha; usado para invalidar tokens de
+    # redefinição já consumidos (evita reuso do mesmo link).
+    senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     cupons = db.relationship("Cupom", backref="parceiro", lazy=True)
+
+    def set_password(self, password):
+        self.senha_hash = generate_password_hash(password)
+        self.senha_atualizada_em = datetime.utcnow()
+
+    def check_password(self, password):
+        return check_password_hash(self.senha_hash, password)
 
     def __repr__(self):
         return f"<Parceiro {self.nome_empresa}>"
@@ -372,6 +434,9 @@ class Cupom(db.Model):
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     limite_total = db.Column(db.Integer, nullable=True)
     limite_por_unidade = db.Column(db.Integer, nullable=False, default=1)
+    # Contador atômico: incrementado via UPDATE condicional no resgate, para
+    # não depender de um COUNT() seguido de INSERT (vulnerável a corrida).
+    total_resgatado = db.Column(db.Integer, nullable=False, default=0)
     data_criacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     data_update = db.Column(
         db.DateTime,
@@ -548,6 +613,16 @@ class RegistroAcesso(db.Model):
     """Log transacional de entrada/saída na portaria (imutável após criação)."""
 
     __tablename__ = "registros_acesso"
+    __table_args__ = (
+        # Impede duas "entradas abertas" simultâneas do mesmo visitante sob
+        # concorrência (dois check-ins quase ao mesmo tempo).
+        db.Index(
+            "ux_registro_acesso_aberto",
+            "visitante_id",
+            unique=True,
+            sqlite_where=db.text("data_saida IS NULL"),
+        ),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     condominio_id = db.Column(
@@ -595,6 +670,8 @@ class Encomenda(db.Model):
     )
     destinatario = db.Column(db.String(200), nullable=True)
     transportadora = db.Column(db.String(100), nullable=True)
+    codigo_rastreio = db.Column(db.String(100), nullable=True)
+    foto_pacote = db.Column(db.String(255), nullable=True)
     status = db.Column(
         db.String(20), nullable=False, default=StatusEncomenda.PENDENTE, index=True
     )
@@ -622,3 +699,104 @@ class Encomenda(db.Model):
 
     def __repr__(self):
         return f"<Encomenda {self.id} ({self.status})>"
+
+
+class AutorizacaoAcesso(db.Model):
+    """Autorização prévia de visitante/prestador criada pelo morador."""
+
+    __tablename__ = "autorizacoes_acesso"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    nome_visitante = db.Column(db.String(200), nullable=False)
+    documento = db.Column(db.String(20), nullable=True)
+    data_prevista = db.Column(db.Date, nullable=False, index=True)
+    tipo = db.Column(db.String(20), nullable=False, default=TipoVisitante.VISITANTE)
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default=StatusAutorizacaoAcesso.PENDENTE,
+        index=True,
+    )
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("autorizacoes_acesso", lazy=True)
+    )
+    unidade = db.relationship(
+        "Unidade",
+        backref=db.backref("autorizacoes_acesso", lazy="dynamic"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<AutorizacaoAcesso {self.id} "
+            f"({self.nome_visitante} / {self.status})>"
+        )
+
+
+class Notificacao(db.Model):
+    """Alerta interno entre portaria e moradores (isolamento por condomínio)."""
+
+    __tablename__ = "notificacoes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=True, index=True
+    )
+    perfil_destino = db.Column(db.String(20), nullable=False, index=True)
+    titulo = db.Column(db.String(120), nullable=False)
+    mensagem = db.Column(db.Text, nullable=False)
+    lida = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("notificacoes", lazy=True)
+    )
+    unidade = db.relationship(
+        "Unidade", backref=db.backref("notificacoes", lazy="dynamic")
+    )
+
+    def __repr__(self):
+        return f"<Notificacao {self.id} ({self.perfil_destino})>"
+
+
+class Ocorrencia(db.Model):
+    """Chamado do helpdesk (livro digital de registros da portaria)."""
+
+    __tablename__ = "ocorrencias"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    titulo = db.Column(db.String(200), nullable=False)
+    descricao = db.Column(db.Text, nullable=False)
+    categoria = db.Column(db.String(30), nullable=False)
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default=StatusOcorrencia.ABERTO,
+        index=True,
+    )
+    foto_arquivo = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("ocorrencias", lazy=True)
+    )
+    unidade = db.relationship("Unidade", back_populates="ocorrencias")
+
+    def __repr__(self):
+        return f"<Ocorrencia {self.id} ({self.status})>"

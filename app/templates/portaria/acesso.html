@@ -13,6 +13,63 @@
     </span>
 </div>
 
+<div class="card border-0 shadow-sm mb-4 border-start border-success border-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">
+                <i class="bi bi-calendar-check text-success me-1"></i>
+                Esperados para Hoje (Autorizados)
+            </h2>
+            {% if autorizacoes_hoje %}
+            <span class="badge text-bg-success">{{ autorizacoes_hoje|length }}</span>
+            {% endif %}
+        </div>
+        {% if autorizacoes_hoje %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Unidade destino</th>
+                        <th>Nome</th>
+                        <th>Tipo</th>
+                        <th>Documento</th>
+                        <th class="text-end">Ação</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in autorizacoes_hoje %}
+                    <tr>
+                        <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                        <td>{{ item.nome_visitante }}</td>
+                        <td>
+                            {% if item.tipo == 'Prestador' %}
+                            <span class="badge text-bg-warning">Prestador</span>
+                            {% else %}
+                            <span class="badge text-bg-primary">Visitante</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.documento or '—' }}</td>
+                        <td class="text-end">
+                            <form method="post"
+                                  action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}"
+                                  class="d-inline form-confirmar"
+                                  data-confirm-mensagem="Confirmar chegada de {{ item.nome_visitante }} na unidade {{ item.unidade.identificador }}?">
+                                <button type="submit" class="btn btn-sm btn-success">
+                                    <i class="bi bi-check2-circle me-1"></i>Confirmar Chegada
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhuma visita autorizada aguardando no momento.</p>
+        {% endif %}
+    </div>
+</div>
+
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-body">
         <h2 class="h5 mb-3">
@@ -116,8 +173,8 @@
                         <td class="text-end">
                             <form method="post"
                                   action="{{ url_for('portaria_acesso_saida', registro_id=registro.id) }}"
-                                  class="d-inline"
-                                  onsubmit="return confirm('Confirmar saída de {{ registro.visitante.nome }}?');">
+                                  class="d-inline form-confirmar"
+                                  data-confirm-mensagem="Confirmar saída de {{ registro.visitante.nome }}?">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">
                                     <i class="bi bi-box-arrow-right me-1"></i>Registrar saída
                                 </button>
@@ -203,6 +260,21 @@
 
     tipo.addEventListener("change", atualizarEmpresa);
     atualizarEmpresa();
+})();
+
+(function () {
+    // Confirmação via data-attribute (não via string concatenada em onsubmit):
+    // o valor chega aqui já como texto puro do DOM, nunca como código JS,
+    // então nomes de visitante com aspas/caracteres especiais não conseguem
+    // escapar do diálogo de confirmação.
+    document.querySelectorAll("form.form-confirmar").forEach(function (form) {
+        form.addEventListener("submit", function (event) {
+            const mensagem = form.dataset.confirmMensagem || "Confirmar?";
+            if (!window.confirm(mensagem)) {
+                event.preventDefault();
+            }
+        });
+    });
 })();
 </script>
 {% endblock %}
