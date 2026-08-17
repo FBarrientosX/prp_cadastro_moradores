@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Autorização Prévia{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <h1 class="h4 mb-3">Autorização Prévia</h1>
+
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle me-1"></i>
+            Autorize visitantes ou prestadores de serviço com antecedência.
+            A portaria poderá consultar essas liberações no dia previsto.
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body p-4">
+                <h2 class="h6 mb-3">Nova Autorização</h2>
+                <form method="post" action="{{ url_for('morador_autorizacoes') }}">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="nome_visitante">Nome</label>
+                            <input type="text" class="form-control" id="nome_visitante"
+                                   name="nome_visitante" maxlength="200" required
+                                   placeholder="Nome completo">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="documento">Documento (opcional)</label>
+                            <input type="text" class="form-control" id="documento"
+                                   name="documento" maxlength="20"
+                                   placeholder="RG ou CPF">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="data_prevista">Data Prevista</label>
+                            <input type="text" class="form-control datepicker" id="data_prevista"
+                                   name="data_prevista" placeholder="DD/MM/AAAA" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label d-block">Tipo</label>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="tipo"
+                                       id="tipoVisitante" value="Visitante" required checked>
+                                <label class="form-check-label" for="tipoVisitante">Visitante</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="tipo"
+                                       id="tipoPrestador" value="Prestador" required>
+                                <label class="form-check-label" for="tipoPrestador">Prestador</label>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary mt-3">
+                        <i class="bi bi-person-check me-1"></i>Criar Autorização
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <ul class="nav nav-tabs mb-3" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="tab-ativas" data-bs-toggle="tab"
+                        data-bs-target="#painel-ativas" type="button" role="tab"
+                        aria-controls="painel-ativas" aria-selected="true">
+                    Futuras / Ativas
+                    <span class="badge text-bg-primary ms-1">{{ autorizacoes_ativas|length }}</span>
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-historico" data-bs-toggle="tab"
+                        data-bs-target="#painel-historico" type="button" role="tab"
+                        aria-controls="painel-historico" aria-selected="false">
+                    Histórico
+                    <span class="badge text-bg-secondary ms-1">{{ autorizacoes_historico|length }}</span>
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            <div class="tab-pane fade show active" id="painel-ativas" role="tabpanel"
+                 aria-labelledby="tab-ativas">
+                <div class="card shadow-sm">
+                    <div class="card-body p-4">
+                        {% if autorizacoes_ativas %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Nome</th>
+                                        <th>Documento</th>
+                                        <th>Data</th>
+                                        <th>Tipo</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in autorizacoes_ativas %}
+                                    <tr>
+                                        <td>{{ item.nome_visitante }}</td>
+                                        <td>{{ item.documento or '—' }}</td>
+                                        <td>{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
+                                        <td>
+                                            {% if item.tipo == 'Prestador' %}
+                                            <span class="badge text-bg-info">Prestador</span>
+                                            {% else %}
+                                            <span class="badge text-bg-primary">Visitante</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span class="badge text-bg-warning">{{ item.status }}</span>
+                                        </td>
+                                        <td class="text-end">
+                                            <form method="post"
+                                                  action="{{ url_for('morador_autorizacoes_cancelar', autorizacao_id=item.id) }}"
+                                                  class="d-inline"
+                                                  onsubmit="return confirm('Cancelar esta autorização?');">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                    Cancelar
+                                                </button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <p class="text-muted mb-0">Nenhuma autorização futura ou ativa.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="painel-historico" role="tabpanel"
+                 aria-labelledby="tab-historico">
+                <div class="card shadow-sm">
+                    <div class="card-body p-4">
+                        {% if autorizacoes_historico %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Nome</th>
+                                        <th>Documento</th>
+                                        <th>Data</th>
+                                        <th>Tipo</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in autorizacoes_historico %}
+                                    <tr>
+                                        <td>{{ item.nome_visitante }}</td>
+                                        <td>{{ item.documento or '—' }}</td>
+                                        <td>{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
+                                        <td>
+                                            {% if item.tipo == 'Prestador' %}
+                                            <span class="badge text-bg-info">Prestador</span>
+                                            {% else %}
+                                            <span class="badge text-bg-primary">Visitante</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if item.status == 'Concluída' %}
+                                            <span class="badge text-bg-success">{{ item.status }}</span>
+                                            {% elif item.status == 'Cancelada' %}
+                                            <span class="badge text-bg-secondary">{{ item.status }}</span>
+                                            {% else %}
+                                            <span class="badge text-bg-warning">{{ item.status }}</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <p class="text-muted mb-0">Nenhum registro no histórico.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    flatpickr(".datepicker", {
+        locale: "pt",
+        dateFormat: "Y-m-d",
+        altInput: true,
+        altFormat: "d/m/Y",
+        minDate: "today",
+        disableMobile: true
+    });
+</script>
+{% endblock %}
