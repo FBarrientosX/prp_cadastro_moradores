@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}Gestão de Ocorrências{% endblock %}
+
+{% block content %}
+<style>
+    .kanban-board {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        align-items: stretch;
+    }
+    .kanban-column {
+        background: #f8f9fa;
+        border-radius: 0.75rem;
+        min-height: 70vh;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--bs-border-color);
+    }
+    .kanban-column-header {
+        border-radius: 0.75rem 0.75rem 0 0;
+        padding: 0.85rem 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-weight: 600;
+    }
+    .kanban-column-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 0.85rem;
+        flex: 1;
+    }
+    .kanban-card img.kanban-thumb {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+        border-radius: 0.5rem;
+        flex-shrink: 0;
+    }
+    .kanban-card .kanban-desc {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    @media (max-width: 991.98px) {
+        .kanban-board {
+            grid-template-columns: 1fr;
+        }
+        .kanban-column {
+            min-height: auto;
+        }
+    }
+</style>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+    <div>
+        <h1 class="h4 mb-1">Gestão de Ocorrências</h1>
+        <p class="text-muted mb-0">Painel Kanban dos chamados abertos pelos moradores.</p>
+    </div>
+</div>
+
+<div class="kanban-board">
+    {% set colunas_ui = [
+        (status_ocorrencia.ABERTO, 'Aberto', 'danger', 'bi-exclamation-circle'),
+        (status_ocorrencia.EM_ANDAMENTO, 'Em Andamento', 'warning', 'bi-hourglass-split'),
+        (status_ocorrencia.RESOLVIDO, 'Resolvido', 'success', 'bi-check-circle')
+    ] %}
+    {% for status_chave, titulo_coluna, cor, icone in colunas_ui %}
+    {% set itens = colunas.get(status_chave, []) %}
+    <section class="kanban-column">
+        <header class="kanban-column-header text-bg-{{ cor }}">
+            <span><i class="bi {{ icone }} me-1"></i>{{ titulo_coluna }}</span>
+            <span class="badge bg-light text-dark">{{ itens|length }}</span>
+        </header>
+        <div class="kanban-column-body">
+            {% if itens %}
+                {% for item in itens %}
+                <article class="card shadow-sm kanban-card">
+                    <div class="card-body">
+                        <div class="d-flex gap-2">
+                            {% if item.foto_arquivo %}
+                            <a href="#" data-bs-toggle="modal" data-bs-target="#modalFotoKanban{{ item.id }}">
+                                <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
+                                     alt="Foto da ocorrência {{ item.titulo }}"
+                                     class="kanban-thumb">
+                            </a>
+                            {% endif %}
+                            <div class="flex-grow-1 min-w-0">
+                                <p class="small text-muted mb-1">
+                                    <i class="bi bi-house-door me-1"></i>{{ item.unidade.identificador if item.unidade else 'Unidade' }}
+                                </p>
+                                <h2 class="h6 mb-1 text-break">{{ item.titulo }}</h2>
+                                <p class="small text-muted mb-0">
+                                    <i class="bi bi-calendar3 me-1"></i>{{ item.created_at.strftime('%d/%m/%Y %H:%M') }}
+                                </p>
+                            </div>
+                        </div>
+                        <p class="small mt-2 mb-0 text-secondary kanban-desc">{{ item.descricao }}</p>
+                        <span class="badge text-bg-light border mt-2">{{ item.categoria }}</span>
+                    </div>
+                    <div class="card-footer bg-white d-flex flex-wrap gap-2">
+                        {% if item.status == status_ocorrencia.ABERTO %}
+                        <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="status" value="{{ status_ocorrencia.EM_ANDAMENTO }}">
+                            <button type="submit" class="btn btn-sm btn-warning">
+                                <i class="bi bi-play-fill me-1"></i>Iniciar Atendimento
+                            </button>
+                        </form>
+                        {% elif item.status == status_ocorrencia.EM_ANDAMENTO %}
+                        <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="status" value="{{ status_ocorrencia.ABERTO }}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-arrow-left me-1"></i>Voltar
+                            </button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="status" value="{{ status_ocorrencia.RESOLVIDO }}">
+                            <button type="submit" class="btn btn-sm btn-success">
+                                <i class="bi bi-check2 me-1"></i>Marcar Resolvido
+                            </button>
+                        </form>
+                        {% elif item.status == status_ocorrencia.RESOLVIDO %}
+                        <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="status" value="{{ status_ocorrencia.EM_ANDAMENTO }}">
+                            <button type="submit" class="btn btn-sm btn-outline-warning">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reabrir
+                            </button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </article>
+                {% if item.foto_arquivo %}
+                <div class="modal fade" id="modalFotoKanban{{ item.id }}" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h2 class="modal-title h6">{{ item.titulo }}</h2>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                            </div>
+                            <div class="modal-body text-center">
+                                <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
+                                     alt="Foto da ocorrência {{ item.titulo }}"
+                                     class="img-fluid rounded">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            {% else %}
+            <p class="text-muted small text-center mb-0 py-3">Nenhum chamado nesta coluna.</p>
+            {% endif %}
+        </div>
+    </section>
+    {% endfor %}
+</div>
+{% endblock %}

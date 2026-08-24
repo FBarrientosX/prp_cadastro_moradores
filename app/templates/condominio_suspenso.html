@@ -1,0 +1,21 @@
+{% extends "auth_base.html" %}
+
+{% block title %}Acesso suspenso{% endblock %}
+
+{% block content %}
+<div class="card auth-card shadow-sm">
+    <div class="card-body p-4">
+        <div class="text-center mb-3">
+            <i class="bi bi-pause-circle text-danger" style="font-size: 2.5rem;"></i>
+            <h1 class="h4 mt-2 mb-1">Acesso temporariamente suspenso</h1>
+            {% if condominio and condominio.nome %}
+            <p class="text-muted small mb-0">{{ condominio.nome }}</p>
+            {% endif %}
+        </div>
+        <div class="alert alert-warning mb-0" role="alert">
+            O acesso a este condomínio encontra-se temporariamente suspenso.
+            Entre em contato com a administração.
+        </div>
+    </div>
+</div>
+{% endblock %}

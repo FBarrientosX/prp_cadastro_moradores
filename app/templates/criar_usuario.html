@@ -9,12 +9,12 @@
             <div class="card-body p-4">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h1 class="h4 mb-0">Criar Novo Usuário</h1>
-                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+                    <a href="{{ url_for('admin_index') }}" class="btn btn-outline-secondary btn-sm">
                         Voltar ao Painel
                     </a>
                 </div>
                 <p class="text-muted mb-4">
-                    Cadastre um novo acesso para assistente administrativo ou síndico.
+                    Cadastre um novo acesso para assistente administrativo, síndico ou porteiro.
                 </p>
 
                 <form method="post" action="{{ url_for('admin_criar_usuario') }}">
@@ -34,6 +34,7 @@
                             <option value="" selected disabled>Selecione...</option>
                             <option value="assistente">Assistente Administrativo</option>
                             <option value="sindico">Síndico de Bloco</option>
+                            <option value="porteiro">Porteiro</option>
                         </select>
                     </div>
 

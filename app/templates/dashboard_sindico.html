@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h1 class="h3 mb-1">Mapa do Bloco</h1>
-        <p class="text-muted mb-0">{{ current_user.bloco_responsavel }} — {{ mapa_bloco|length }} unidades</p>
+        <p class="text-muted mb-0">{{ agrupamentos_label }} — {{ mapa_bloco|length }} unidades</p>
     </div>
     <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
 </div>
@@ -15,6 +15,7 @@
     <table class="table table-striped align-middle">
         <thead>
             <tr>
+                <th>Bloco</th>
                 <th>Apartamento</th>
                 <th>Responsável</th>
                 <th>Status</th>
@@ -32,6 +33,7 @@
             {% set doc_pendente = documento_base_pendente or contrato_pendente %}
             {% set doc_ok = unidade and unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
             <tr>
+                <td>{{ item.bloco }}</td>
                 <td>{{ item.apartamento }}</td>
                 <td>
                     {% if unidade %}
@@ -96,7 +98,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2 class="modal-title h5" id="modal-detalhes-label-{{ unidade.id }}">
-                    Detalhes — {{ current_user.bloco_responsavel }}, Apto {{ unidade.apartamento }}
+                    Detalhes — Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
                 </h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
@@ -110,7 +112,7 @@
                     <h3 class="h6 text-uppercase text-muted">Unidade</h3>
                     <dl class="row mb-0">
                         <dt class="col-sm-3">Bloco</dt>
-                        <dd class="col-sm-9">{{ current_user.bloco_responsavel }}</dd>
+                        <dd class="col-sm-9">{{ unidade.bloco }}</dd>
                         <dt class="col-sm-3">Apartamento</dt>
                         <dd class="col-sm-9">{{ unidade.apartamento }}</dd>
                         <dt class="col-sm-3">Enviado em</dt>

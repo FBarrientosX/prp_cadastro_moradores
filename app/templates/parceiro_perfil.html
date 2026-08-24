@@ -1,0 +1,105 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Meu Perfil — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-12 col-lg-8 col-xl-7">
+        <div class="mb-4">
+            <h1 class="h3 mb-1">Meu Perfil Comercial</h1>
+            <p class="text-muted mb-0">
+                Atualize as informações exibidas no Guia de Parceiros do condomínio.
+            </p>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-4">
+                <form method="post" action="{{ url_for('parceiro_perfil_editar') }}"
+                      enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="nome_empresa" class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" id="nome_empresa" name="nome_empresa"
+                               value="{{ parceiro.nome_empresa }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="usuario_login" class="form-label">Usuário de Acesso</label>
+                        <input type="text" class="form-control" id="usuario_login" name="usuario_login"
+                               value="{{ parceiro.usuario_login or '' }}" disabled>
+                        <div class="form-text">O usuário de acesso só pode ser alterado pela administração.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="email" class="form-label">E-mail de Contato</label>
+                        <input type="email" class="form-control" id="email" name="email"
+                               value="{{ parceiro.email }}" required>
+                        <div class="form-text">Usado para comunicação e recuperação de senha.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="telefone" class="form-label">Telefone para Contato</label>
+                        <input type="text" class="form-control" id="telefone" name="telefone"
+                               value="{{ parceiro.telefone or '' }}"
+                               placeholder="Ex: (11) 99999-9999">
+                    </div>
+                    <div class="mb-3">
+                        <label for="endereco" class="form-label">Endereço</label>
+                        <input type="text" class="form-control" id="endereco" name="endereco"
+                               value="{{ parceiro.endereco or '' }}"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
+                        <label for="categoria" class="form-label">Categoria</label>
+                        <input type="text" class="form-control" id="categoria" name="categoria"
+                               value="{{ parceiro.categoria }}" required
+                               placeholder="Ex: Alimentação, Saúde, Serviços">
+                    </div>
+                    <div class="mb-3" data-quill-editor
+                         data-placeholder="Descreva brevemente sua empresa e o que oferece aos moradores.">
+                        <label class="form-label">Descrição do Negócio</label>
+                        <div class="quill-editor"></div>
+                        <input type="hidden" name="descricao" value="{{ (parceiro.descricao or '')|e }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="logo" class="form-label">Logotipo</label>
+                        {% if parceiro.logo_arquivo %}
+                        <div class="mb-2">
+                            <img src="{{ url_for('static', filename='uploads/parceiros/' ~ parceiro.logo_arquivo) }}"
+                                 alt="Logo atual" class="rounded border"
+                                 style="max-height: 72px; width: auto;">
+                        </div>
+                        {% endif %}
+                        <input type="file" class="form-control" id="logo" name="logo"
+                               accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                        <div class="form-text">PNG, JPG, JPEG ou WEBP — máximo 2 MB. Envie apenas para substituir o logo atual.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="link_instagram" class="form-label">Instagram</label>
+                        <input type="text" class="form-control" id="link_instagram" name="link_instagram"
+                               value="{{ parceiro.link_instagram or '' }}"
+                               placeholder="https://instagram.com/empresa">
+                    </div>
+                    <div class="mb-4">
+                        <label for="link_facebook" class="form-label">Facebook</label>
+                        <input type="text" class="form-control" id="link_facebook" name="link_facebook"
+                               value="{{ parceiro.link_facebook or '' }}"
+                               placeholder="https://facebook.com/empresa">
+                    </div>
+                    <div class="d-flex justify-content-end">
+                        <button type="submit" class="btn btn-success">
+                            Salvar Alterações
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quill-rich.css') }}">
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<script src="{{ url_for('static', filename='js/quill-rich.js') }}"></script>
+{% endblock %}

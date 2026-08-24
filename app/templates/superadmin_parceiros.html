@@ -1,0 +1,326 @@
+{% extends "superadmin_base.html" %}
+
+{% block title %}Parceiros Globais — Super Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Parceiros (Global)</h1>
+        <p class="text-muted mb-0">
+            Clube de Vantagens da plataforma — parceiros e cupons válidos em todos os condomínios.
+        </p>
+    </div>
+    <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#modalNovoParceiro">
+        <i class="bi bi-plus-lg me-1"></i>Novo Parceiro
+    </button>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-parceiros" data-bs-toggle="tab"
+                data-bs-target="#painel-parceiros" type="button" role="tab">
+            Parceiros
+            <span class="badge text-bg-secondary ms-1">{{ parceiros|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-auditoria" data-bs-toggle="tab"
+                data-bs-target="#painel-auditoria" type="button" role="tab">
+            Auditoria de Resgates
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="painel-parceiros" role="tabpanel">
+        {% if parceiros %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Empresa</th>
+                        <th>Login</th>
+                        <th>E-mail</th>
+                        <th>Categoria</th>
+                        <th>Telefone</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for parceiro in parceiros %}
+                    <tr>
+                        <td class="fw-semibold">{{ parceiro.nome_empresa }}</td>
+                        <td><code>{{ parceiro.usuario_login or '—' }}</code></td>
+                        <td>{{ parceiro.email }}</td>
+                        <td>{{ parceiro.categoria }}</td>
+                        <td>{{ parceiro.telefone or '—' }}</td>
+                        <td>
+                            {% if parceiro.status == 'Ativo' %}
+                            <span class="badge bg-success">Ativo</span>
+                            {% elif parceiro.status == 'Bloqueado' %}
+                            <span class="badge bg-danger">Bloqueado</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalEditarParceiro{{ parceiro.id }}"
+                                    title="Editar parceiro">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            {% if parceiro.status in ['Ativo', 'Pendente'] %}
+                            <form method="post"
+                                  action="{{ url_for('superadmin_parceiro_bloquear', parceiro_id=parceiro.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Tem certeza que deseja bloquear este parceiro? Os cupons dele sairão imediatamente da vitrine.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    Bloquear
+                                </button>
+                            </form>
+                            {% elif parceiro.status == 'Bloqueado' %}
+                            <form method="post"
+                                  action="{{ url_for('superadmin_parceiro_ativar', parceiro_id=parceiro.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('Tem certeza?');">
+                                <button type="submit" class="btn btn-sm btn-outline-success">
+                                    Reativar
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">
+            Nenhum parceiro cadastrado. Use <strong>Novo Parceiro</strong> para criar o primeiro.
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="painel-auditoria" role="tabpanel">
+        {% if auditoria_cupons %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Parceiro</th>
+                        <th>Cupom/Oferta</th>
+                        <th>Morador (Bloco/Apto)</th>
+                        <th>Condomínio</th>
+                        <th>Data Gerado</th>
+                        <th>Data Validado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for resgate in auditoria_cupons %}
+                    <tr>
+                        <td>{{ resgate.cupom.parceiro.nome_empresa }}</td>
+                        <td>{{ resgate.cupom.titulo }}</td>
+                        <td>Bloco {{ resgate.unidade.bloco }} / Apto {{ resgate.unidade.apartamento }}</td>
+                        <td>
+                            {% if resgate.unidade.condominio %}
+                            {{ resgate.unidade.condominio.nome }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{{ resgate.data_resgate.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% if resgate.data_utilizacao %}
+                            {{ resgate.data_utilizacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            <span class="text-muted">Aguardando Uso</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info mb-0">Nenhum resgate registrado ainda.</div>
+        {% endif %}
+    </div>
+</div>
+
+{# Modal: novo parceiro #}
+<div class="modal fade" id="modalNovoParceiro" tabindex="-1" aria-labelledby="modalNovoParceiroLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('superadmin_parceiros_criar') }}"
+                  enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalNovoParceiroLabel">Novo Parceiro Global</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        Status inicial: <strong>Pendente</strong>. Senha padrão do portal: <code>senha123</code>.
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label" for="nome_empresa">Nome da Empresa</label>
+                        <input type="text" class="form-control" id="nome_empresa" name="nome_empresa" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="usuario_login">Usuário de Login</label>
+                        <input type="text" class="form-control" id="usuario_login" name="usuario_login"
+                               pattern="[^\s]+" title="Sem espaços; use letras minúsculas"
+                               autocomplete="off" required>
+                        <div class="form-text">Identificador de acesso ao portal (sem espaços, minúsculo).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="email">E-mail</label>
+                        <input type="email" class="form-control" id="email" name="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="telefone">Telefone</label>
+                        <input type="text" class="form-control" id="telefone" name="telefone">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="endereco">Endereço Completo</label>
+                        <input type="text" class="form-control" id="endereco" name="endereco"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="categoria">Categoria</label>
+                        <input type="text" class="form-control" id="categoria" name="categoria" required>
+                    </div>
+                    <div class="mb-3" data-quill-editor
+                         data-placeholder="Ex: Padaria tradicional do bairro com pães de fermentação natural">
+                        <label class="form-label">Descrição da Empresa</label>
+                        <div class="quill-editor"></div>
+                        <input type="hidden" name="descricao" value="">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="logo">Logotipo</label>
+                        <input type="file" class="form-control" id="logo" name="logo"
+                               accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                        <div class="form-text">PNG, JPG, JPEG ou WEBP — máximo 2 MB.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="link_instagram">Instagram</label>
+                        <input type="text" class="form-control" id="link_instagram" name="link_instagram"
+                               placeholder="https://instagram.com/empresa">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="link_facebook">Facebook</label>
+                        <input type="text" class="form-control" id="link_facebook" name="link_facebook"
+                               placeholder="https://facebook.com/empresa">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-dark">Cadastrar Parceiro</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% for parceiro in parceiros %}
+<div class="modal fade" id="modalEditarParceiro{{ parceiro.id }}" tabindex="-1"
+     aria-labelledby="modalEditarParceiroLabel{{ parceiro.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post"
+                  action="{{ url_for('superadmin_parceiro_editar', parceiro_id=parceiro.id) }}"
+                  enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEditarParceiroLabel{{ parceiro.id }}">
+                        Editar Parceiro
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Nome da Empresa</label>
+                        <input type="text" class="form-control" name="nome_empresa"
+                               value="{{ parceiro.nome_empresa }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Usuário de Login</label>
+                        <input type="text" class="form-control" name="usuario_login"
+                               value="{{ parceiro.usuario_login or '' }}"
+                               pattern="[^\s]+" title="Sem espaços; use letras minúsculas"
+                               autocomplete="off" required>
+                        <div class="form-text">Identificador de acesso ao portal (sem espaços, minúsculo).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">E-mail</label>
+                        <input type="email" class="form-control" name="email"
+                               value="{{ parceiro.email }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Telefone</label>
+                        <input type="text" class="form-control" name="telefone"
+                               value="{{ parceiro.telefone or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Endereço Completo</label>
+                        <input type="text" class="form-control" name="endereco"
+                               value="{{ parceiro.endereco or '' }}"
+                               placeholder="Ex: Rua das Flores, 123 — Bairro Centro">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Categoria</label>
+                        <input type="text" class="form-control" name="categoria"
+                               value="{{ parceiro.categoria }}" required>
+                    </div>
+                    <div class="mb-3" data-quill-editor>
+                        <label class="form-label">Descrição da Empresa</label>
+                        <div class="quill-editor"></div>
+                        <input type="hidden" name="descricao" value="{{ (parceiro.descricao or '')|e }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Logotipo</label>
+                        {% if parceiro.logo_arquivo %}
+                        <div class="mb-2">
+                            <img src="{{ url_for('static', filename='uploads/parceiros/' ~ parceiro.logo_arquivo) }}"
+                                 alt="Logo atual" class="rounded border"
+                                 style="max-height: 48px; width: auto;">
+                        </div>
+                        {% endif %}
+                        <input type="file" class="form-control" name="logo"
+                               accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                        <div class="form-text">PNG, JPG, JPEG ou WEBP — máximo 2 MB. Envie apenas para substituir o logo atual.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Instagram</label>
+                        <input type="text" class="form-control" name="link_instagram"
+                               value="{{ parceiro.link_instagram or '' }}"
+                               placeholder="https://instagram.com/empresa">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label">Facebook</label>
+                        <input type="text" class="form-control" name="link_facebook"
+                               value="{{ parceiro.link_facebook or '' }}"
+                               placeholder="https://facebook.com/empresa">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-dark">Salvar Alterações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quill-rich.css') }}">
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<script src="{{ url_for('static', filename='js/quill-rich.js') }}"></script>
+{% endblock %}

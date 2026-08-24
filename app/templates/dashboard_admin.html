@@ -5,8 +5,8 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h1 class="h3 mb-1">Painel do Administrador</h1>
-        <p class="text-muted mb-0">Gerenciamento de todas as unidades do condomínio</p>
+        <h1 class="h3 mb-1">Gestão de Cadastros</h1>
+        <p class="text-muted mb-0">Aprovações, registros e gestão de acessos</p>
     </div>
     <div class="d-flex gap-2">
         {% if current_user and current_user.role == 'admin' %}
@@ -98,12 +98,10 @@
                             <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
                                 <button type="submit" class="btn btn-success btn-sm">Marcar como Registrado</button>
                             </form>
-                            {% if current_user and current_user.role == 'admin' %}
-                            <button type="button" class="btn btn-danger btn-sm"
-                                    data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
-                                Resetar Senha
+                            <button type="button" class="btn btn-outline-warning btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modalNovaSenha{{ unidade.id }}">
+                                Alterar Senha
                             </button>
-                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -158,12 +156,10 @@
                                     data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
                                 Ver Detalhes
                             </button>
-                            {% if current_user and current_user.role == 'admin' %}
-                            <button type="button" class="btn btn-danger btn-sm"
-                                    data-bs-toggle="modal" data-bs-target="#modal-senha-{{ unidade.id }}">
-                                Resetar Senha
+                            <button type="button" class="btn btn-outline-warning btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modalNovaSenha{{ unidade.id }}">
+                                Alterar Senha
                             </button>
-                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -191,11 +187,17 @@
                 <tbody>
                     {% for sindico in sindicos %}
                     <tr>
-                        <td>{{ sindico.bloco_responsavel }}</td>
+                        <td>
+                            {% for agrup in sindico.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
+                                {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                            {% else %}
+                                —
+                            {% endfor %}
+                        </td>
                         <td>{{ sindico.username }}</td>
                         <td>
                             <form method="post" action="{{ url_for('admin_alterar_senha_sindico') }}" class="d-flex gap-2">
-                                <input type="hidden" name="username" value="{{ sindico.username }}">
+                                <input type="hidden" name="usuario_id" value="{{ sindico.id }}">
                                 <input type="text" class="form-control form-control-sm"
                                        name="nova_senha" minlength="6" required
                                        placeholder="Digite a nova senha">
@@ -234,16 +236,31 @@
                     <tr>
                         <td>{{ usuario.username }}</td>
                         <td>
-                            {% if usuario.role == 'assistente' %}
+                            {% if usuario.role == 'admin' %}
+                            Administrador Local
+                            {% elif usuario.role == 'assistente' %}
                             Assistente Administrativo
                             {% elif usuario.role == 'sindico' %}
                             Síndico de Bloco
+                            {% elif usuario.role == 'porteiro' %}
+                            Porteiro
                             {% else %}
                             {{ usuario.role }}
                             {% endif %}
                         </td>
-                        <td>{{ usuario.bloco_responsavel or '—' }}</td>
+                        <td>
+                            {% if usuario.role == 'sindico' %}
+                                {% for agrup in usuario.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
+                                    {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                                {% else %}
+                                    —
+                                {% endfor %}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
                         <td class="text-end">
+                            {% if usuario.id != current_user.id and usuario.role != 'admin' %}
                             <form method="post"
                                   action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"
                                   class="d-inline"
@@ -252,6 +269,9 @@
                                     Revogar Acesso
                                 </button>
                             </form>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -458,12 +478,12 @@
                         <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>
                     </form>
                     {% endif %}
-                    {% if current_user and current_user.role == 'admin' %}
-                    <button type="button" class="btn btn-danger flex-fill flex-sm-grow-0"
+                    <button type="button" class="btn btn-outline-warning flex-fill flex-sm-grow-0"
                             data-bs-dismiss="modal"
-                            onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modal-senha-{{ unidade.id }}')).show(), 300)">
-                        Resetar Senha
+                            onclick="setTimeout(() => new bootstrap.Modal(document.getElementById('modalNovaSenha{{ unidade.id }}')).show(), 300)">
+                        Alterar Senha
                     </button>
+                    {% if current_user and current_user.role == 'admin' %}
                     <form method="post"
                           action="{{ url_for('admin_excluir_unidade', unidade_id=unidade.id) }}"
                           class="flex-fill flex-sm-grow-0"
@@ -479,37 +499,35 @@
     </div>
 </div>
 
-<!-- Modal Resetar Senha -->
-{% if current_user and current_user.role == 'admin' %}
-<div class="modal fade" id="modal-senha-{{ unidade.id }}" tabindex="-1"
-     aria-labelledby="modal-senha-label-{{ unidade.id }}" aria-hidden="true">
+<!-- Modal Alterar Senha -->
+<div class="modal fade" id="modalNovaSenha{{ unidade.id }}" tabindex="-1"
+     aria-labelledby="modalNovaSenhaLabel{{ unidade.id }}" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="post" action="{{ url_for('admin_resetar_senha', unidade_id=unidade.id) }}">
+            <form method="post" action="{{ url_for('admin_unidade_alterar_senha', unidade_id=unidade.id) }}">
                 <div class="modal-header">
-                    <h2 class="modal-title h5" id="modal-senha-label-{{ unidade.id }}">
-                        Resetar Senha — Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
+                    <h2 class="modal-title h5" id="modalNovaSenhaLabel{{ unidade.id }}">
+                        Alterar Senha — Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
                     </h2>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
                 <div class="modal-body">
                     <p class="text-muted">
-                        Defina uma nova senha para esta unidade. Se deixar em branco, uma senha aleatória será gerada automaticamente.
+                        Defina a nova senha de acesso da unidade. O cadastro de moradores e documentos não será alterado.
                     </p>
-                    <div class="mb-3">
+                    <div class="mb-0">
                         <label for="nova_senha_{{ unidade.id }}" class="form-label">Nova senha</label>
                         <input type="text" class="form-control" id="nova_senha_{{ unidade.id }}"
-                               name="nova_senha" placeholder="Mínimo 6 caracteres (opcional)" minlength="6">
+                               name="nova_senha" placeholder="Mínimo 6 caracteres" minlength="6" required>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="submit" class="btn btn-danger">Confirmar Reset</button>
+                    <button type="submit" class="btn btn-warning">Salvar Nova Senha</button>
                 </div>
             </form>
         </div>
     </div>
 </div>
-{% endif %}
 {% endfor %}
 {% endblock %}

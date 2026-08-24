@@ -1,0 +1,178 @@
+{% extends "auth_base.html" %}
+
+{% block title %}{% if condominio %}{{ condominio.nome }} — Acesso{% else %}Acesso{% endif %}{% endblock %}
+
+{% block content %}
+{% set aba_ativa = active_tab if active_tab is defined else 'morador' %}
+{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
+
+<div class="card auth-card shadow-lg">
+    <div class="card-body p-4 p-md-5">
+        <div class="text-center mb-4">
+            {% if brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ condominio.nome }}" class="auth-logo mb-2">
+            <p class="text-muted small mb-0">{{ condominio.nome }}</p>
+            {% else %}
+            <h1 class="h3 mb-1">{{ condominio.nome if condominio else 'Acesso' }}</h1>
+            <p class="text-muted small mb-0">Entre com seu perfil</p>
+            {% endif %}
+        </div>
+
+        {% if pendente %}
+        <div class="alert alert-warning mb-0">
+            A unidade <strong>Bloco {{ bloco }} - Apto {{ apartamento }}</strong> está
+            aguardando aprovação do síndico.
+        </div>
+        <div class="text-center mt-3">
+            <a href="{{ url_for('tenant_login', slug=slug) }}" class="small">Voltar ao início</a>
+        </div>
+        {% else %}
+        <ul class="nav nav-pills nav-justified auth-tabs mb-4" id="loginTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link {% if aba_ativa != 'equipe' %}active{% endif %}"
+                        id="tab-morador" data-bs-toggle="pill" data-bs-target="#painel-morador"
+                        type="button" role="tab" aria-controls="painel-morador"
+                        aria-selected="{{ 'true' if aba_ativa != 'equipe' else 'false' }}">
+                    Sou Morador
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link {% if aba_ativa == 'equipe' %}active{% endif %}"
+                        id="tab-equipe" data-bs-toggle="pill" data-bs-target="#painel-equipe"
+                        type="button" role="tab" aria-controls="painel-equipe"
+                        aria-selected="{{ 'true' if aba_ativa == 'equipe' else 'false' }}">
+                    Sou da Equipe
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="loginTabsContent">
+            <div class="tab-pane fade {% if aba_ativa != 'equipe' %}show active{% endif %}"
+                 id="painel-morador" role="tabpanel" aria-labelledby="tab-morador">
+                <p class="text-muted small mb-3">
+                    Selecione o bloco e o apartamento para iniciar ou atualizar o cadastro.
+                </p>
+                <form method="post" action="{{ url_for('verificar_unidade', slug=slug) }}" id="form-unidade">
+                    <div class="mb-3">
+                        <label for="bloco" class="form-label">Bloco</label>
+                        <select class="form-select" id="bloco" name="bloco" required>
+                            <option value="">Selecione o bloco</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="apartamento" class="form-label">Apartamento</label>
+                        <select class="form-select" id="apartamento" name="apartamento" required disabled>
+                            <option value="">Selecione o apartamento</option>
+                        </select>
+                    </div>
+
+                    {% if exige_senha %}
+                    <div class="mb-3">
+                        <label for="senha" class="form-label">Senha da unidade</label>
+                        <input type="password" class="form-control" id="senha" name="senha" required
+                               minlength="6" autocomplete="current-password">
+                        <div class="form-text">Esta unidade já possui cadastro. Informe a senha para continuar.</div>
+                    </div>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary w-100">
+                        {% if exige_senha %}Entrar{% else %}Continuar{% endif %}
+                    </button>
+                </form>
+                <div class="text-center mt-3">
+                    <a href="{{ url_for('esqueci_senha') }}" class="small text-muted text-decoration-none">
+                        Esqueci minha senha
+                    </a>
+                </div>
+            </div>
+
+            <div class="tab-pane fade {% if aba_ativa == 'equipe' %}show active{% endif %}"
+                 id="painel-equipe" role="tabpanel" aria-labelledby="tab-equipe">
+                <p class="text-muted small mb-3">
+                    Acesso para administração, síndicos e portaria do condomínio.
+                </p>
+                <form method="post" action="{{ url_for('tenant_login', slug=slug) }}">
+                    <input type="hidden" name="perfil" value="equipe">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Usuário</label>
+                        <input type="text" class="form-control" id="username" name="username"
+                               required autocomplete="username">
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Senha</label>
+                        <input type="password" class="form-control" id="password" name="password"
+                               required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Entrar</button>
+                </form>
+                <div class="text-center mt-3">
+                    <a href="{{ url_for('sindico_login', slug=slug) }}" class="small text-muted text-decoration-none">
+                        Acesso dedicado do Síndico
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if not pendente %}
+<script>
+    const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const blocoSelect = document.getElementById("bloco");
+    const apartamentoSelect = document.getElementById("apartamento");
+    const blocoInicial = {{ bloco | tojson }};
+    const apartamentoInicial = {{ apartamento | tojson }};
+
+    function popularBlocos() {
+        if (!blocoSelect) return;
+        Object.keys(CONDOMINIO_ESTRUTURA).sort().forEach((bloco) => {
+            const option = document.createElement("option");
+            option.value = bloco;
+            option.textContent = `Bloco ${bloco}`;
+            if (bloco === blocoInicial) {
+                option.selected = true;
+            }
+            blocoSelect.appendChild(option);
+        });
+    }
+
+    function popularApartamentos(bloco, apartamentoSelecionado = "") {
+        if (!apartamentoSelect) return;
+        apartamentoSelect.innerHTML = '<option value="">Selecione o apartamento</option>';
+        apartamentoSelect.disabled = !bloco;
+
+        if (!bloco || !CONDOMINIO_ESTRUTURA[bloco]) {
+            return;
+        }
+
+        const andares = CONDOMINIO_ESTRUTURA[bloco];
+        Object.keys(andares).sort((a, b) => Number(a) - Number(b)).forEach((andar) => {
+            andares[andar].forEach((apto) => {
+                const option = document.createElement("option");
+                option.value = apto;
+                option.textContent = apto;
+                if (apto === apartamentoSelecionado) {
+                    option.selected = true;
+                }
+                apartamentoSelect.appendChild(option);
+            });
+        });
+    }
+
+    if (blocoSelect && apartamentoSelect) {
+        popularBlocos();
+        if (blocoInicial) {
+            popularApartamentos(blocoInicial, apartamentoInicial);
+        }
+        blocoSelect.addEventListener("change", (event) => {
+            popularApartamentos(event.target.value);
+        });
+    }
+</script>
+{% endif %}
+{% endblock %}

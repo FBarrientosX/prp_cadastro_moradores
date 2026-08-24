@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Minhas Ocorrências{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+    <div>
+        <h1 class="h4 mb-1">Ocorrências</h1>
+        <p class="text-muted mb-0">Abra chamados para a administração e acompanhe o andamento.</p>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaOcorrencia">
+        <i class="bi bi-plus-lg me-1"></i>Nova Ocorrência
+    </button>
+</div>
+
+{% if ocorrencias %}
+<div class="row g-3">
+    {% for item in ocorrencias %}
+    <div class="col-md-6 col-xl-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                    <h2 class="h6 mb-0">{{ item.titulo }}</h2>
+                    {% if item.status == status_ocorrencia.ABERTO %}
+                    <span class="badge text-bg-danger">{{ item.status }}</span>
+                    {% elif item.status == status_ocorrencia.EM_ANDAMENTO %}
+                    <span class="badge text-bg-warning">{{ item.status }}</span>
+                    {% else %}
+                    <span class="badge text-bg-success">{{ item.status }}</span>
+                    {% endif %}
+                </div>
+                <p class="small text-muted mb-2">
+                    <i class="bi bi-calendar3 me-1"></i>{{ item.created_at.strftime('%d/%m/%Y %H:%M') }}
+                    <span class="mx-1">·</span>
+                    <span class="badge text-bg-light border">{{ item.categoria }}</span>
+                </p>
+                <p class="small mb-0">{{ item.descricao }}</p>
+            </div>
+            {% if item.foto_arquivo %}
+            <div class="px-3 pb-3">
+                <a href="#" data-bs-toggle="modal" data-bs-target="#modalFoto{{ item.id }}">
+                    <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
+                         alt="Foto da ocorrência {{ item.titulo }}"
+                         class="img-thumbnail"
+                         style="width: 88px; height: 88px; object-fit: cover;">
+                </a>
+            </div>
+            <div class="modal fade" id="modalFoto{{ item.id }}" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h2 class="modal-title h6">{{ item.titulo }}</h2>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                        </div>
+                        <div class="modal-body text-center">
+                            <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
+                                 alt="Foto da ocorrência {{ item.titulo }}"
+                                 class="img-fluid rounded">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="bi bi-inbox fs-1 text-muted"></i>
+        <p class="text-muted mb-0 mt-2">Nenhuma ocorrência registrada ainda.</p>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="modalNovaOcorrencia" tabindex="-1" aria-labelledby="modalNovaOcorrenciaLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('morador_ocorrencias_nova') }}" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalNovaOcorrenciaLabel">Nova Ocorrência</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="titulo">Título</label>
+                        <input type="text" class="form-control" id="titulo" name="titulo"
+                               maxlength="200" required placeholder="Resumo do chamado">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="categoria">Categoria</label>
+                        <select class="form-select" id="categoria" name="categoria" required>
+                            <option value="" selected disabled>Selecione</option>
+                            {% for categoria in categorias %}
+                            <option value="{{ categoria }}">{{ categoria }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="descricao">Descrição</label>
+                        <textarea class="form-control" id="descricao" name="descricao" rows="4"
+                                  required placeholder="Descreva o que aconteceu"></textarea>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="foto">Foto (opcional)</label>
+                        <input type="file" class="form-control" id="foto" name="foto"
+                               accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                        <div class="form-text">PNG, JPG, JPEG ou WEBP. Máximo 2 MB.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-send me-1"></i>Registrar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

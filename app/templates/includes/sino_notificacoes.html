@@ -1,0 +1,13 @@
+{% if notificacoes_habilitadas %}
+<a href="{{ url_for('listar_notificacoes') }}"
+   class="btn position-relative {{ sino_btn_class|default('btn-link text-white') }} p-1 text-decoration-none"
+   title="Notificações" aria-label="Notificações">
+    <i class="bi bi-bell fs-5"></i>
+    {% if notificacoes_nao_lidas %}
+    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+        {{ notificacoes_nao_lidas if notificacoes_nao_lidas < 100 else '99+' }}
+        <span class="visually-hidden">não lidas</span>
+    </span>
+    {% endif %}
+</a>
+{% endif %}

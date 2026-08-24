@@ -1,0 +1,54 @@
+{% extends layout %}
+
+{% block title %}Notificações{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h1 class="h4 mb-0">
+                <i class="bi bi-bell me-1"></i>Notificações
+            </h1>
+            {% if notificacoes_nao_lidas %}
+            <span class="badge text-bg-danger">{{ notificacoes_nao_lidas }} não lida{{ 's' if notificacoes_nao_lidas != 1 else '' }}</span>
+            {% endif %}
+        </div>
+
+        {% if notificacoes %}
+        <div class="list-group shadow-sm">
+            {% for item in notificacoes %}
+            <div class="list-group-item {% if not item.lida %}list-group-item-primary{% endif %}">
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                        <div class="fw-semibold">
+                            {% if not item.lida %}
+                            <span class="badge text-bg-danger me-1">Nova</span>
+                            {% endif %}
+                            {{ item.titulo }}
+                        </div>
+                        <p class="mb-1 mt-1">{{ item.mensagem }}</p>
+                        <small class="text-muted">
+                            {{ item.created_at.strftime('%d/%m/%Y %H:%M') }}
+                        </small>
+                    </div>
+                    {% if not item.lida %}
+                    <form method="post"
+                          action="{{ url_for('notificacoes_ler', notificacao_id=item.id) }}"
+                          class="flex-shrink-0">
+                        <button type="submit" class="btn btn-sm btn-outline-primary">
+                            Marcar como lida
+                        </button>
+                    </form>
+                    {% else %}
+                    <span class="badge text-bg-secondary flex-shrink-0">Lida</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhuma notificação no momento.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

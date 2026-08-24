@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Agendamento de Mudanças{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <h1 class="h4 mb-3">Agendamento de Mudanças</h1>
+
+        <div class="alert alert-info">
+            <i class="bi bi-clock me-1"></i>
+            <strong>Horários autorizados:</strong>
+            2ª a 6ª feira das 08:00h às 17:00h e Sábados das 08:00h às 12:00h.
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body p-4">
+                <h2 class="h6 mb-3">Nova Solicitação</h2>
+                <form method="post" action="{{ url_for('mudancas_morador') }}" id="formMudanca">
+                    <input type="hidden" name="acao" value="solicitar">
+
+                    <div class="mb-3">
+                        <label class="form-label d-block">Tipo da Mudança</label>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="tipo" id="tipoEntrada"
+                                   value="Entrada" required>
+                            <label class="form-check-label" for="tipoEntrada">Entrada</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="tipo" id="tipoSaida"
+                                   value="Saída" required>
+                            <label class="form-check-label" for="tipoSaida">Saída</label>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-warning d-none" id="alertaSaida" role="alert">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        Os acessos físicos (adesivos de carro e carteiras/tags) devem ser
+                        devolvidos ao Síndico. Seu acesso digital será desvinculado desta
+                        unidade pela administração após a mudança.
+                    </div>
+                    <div class="alert alert-primary d-none" id="alertaEntrada" role="alert">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Lembre-se de manter os dados de moradores e veículos atualizados na
+                        aba 'Meu Perfil'. O comparecimento à Administração é necessário
+                        apenas para o cadastro de biometria e retirada de tags/adesivos.
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="data_mudanca">Data da Mudança</label>
+                        <input type="text" class="form-control datepicker" id="data_mudanca"
+                               name="data_mudanca" placeholder="DD/MM/AAAA" required>
+                        <div class="form-text">Mínimo de 3 dias de antecedência. Domingos não são permitidos.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="observacoes">Observações</label>
+                        <textarea class="form-control" id="observacoes" name="observacoes" rows="3"
+                                  placeholder="Informações adicionais (opcional)"></textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-send me-1"></i>Enviar Solicitação
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h2 class="h6 mb-3">Histórico de Solicitações</h2>
+                {% if historico %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Tipo</th>
+                                <th>Data</th>
+                                <th>Status</th>
+                                <th class="text-end">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in historico %}
+                            <tr>
+                                <td>
+                                    {% if item.tipo == 'Entrada' %}
+                                    <span class="badge text-bg-success">Entrada</span>
+                                    {% else %}
+                                    <span class="badge text-bg-danger">Saída</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ item.data_mudanca.strftime('%d/%m/%Y') }}</td>
+                                <td>
+                                    {% if item.status == 'Aprovada' %}
+                                    <span class="badge text-bg-success">{{ item.status }}</span>
+                                    {% elif item.status in status_pendentes %}
+                                    <span class="badge text-bg-warning">{{ item.status }}</span>
+                                    {% elif item.status == 'Rejeitada' %}
+                                    <span class="badge text-bg-danger">{{ item.status }}</span>
+                                    {% else %}
+                                    <span class="badge text-bg-secondary">{{ item.status }}</span>
+                                    {% endif %}
+                                    {% if item.motivo_rejeicao %}
+                                    <div class="small text-muted mt-1">Motivo: {{ item.motivo_rejeicao }}</div>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">
+                                    {% if item.status in status_pendentes %}
+                                    <form method="post" action="{{ url_for('mudancas_morador') }}" class="d-inline"
+                                          onsubmit="return confirm('Cancelar esta solicitação?');">
+                                        <input type="hidden" name="acao" value="cancelar">
+                                        <input type="hidden" name="agendamento_id" value="{{ item.id }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            Cancelar
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-light border mb-0">
+                    Nenhuma solicitação de mudança registrada.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const tipoEntrada = document.getElementById("tipoEntrada");
+    const tipoSaida = document.getElementById("tipoSaida");
+    const alertaEntrada = document.getElementById("alertaEntrada");
+    const alertaSaida = document.getElementById("alertaSaida");
+
+    function atualizarAlertas() {
+        alertaEntrada.classList.toggle("d-none", !tipoEntrada.checked);
+        alertaSaida.classList.toggle("d-none", !tipoSaida.checked);
+    }
+
+    tipoEntrada.addEventListener("change", atualizarAlertas);
+    tipoSaida.addEventListener("change", atualizarAlertas);
+
+    flatpickr(".datepicker", {
+        locale: "pt",
+        dateFormat: "Y-m-d",
+        altInput: true,
+        altFormat: "d/m/Y",
+        minDate: new Date().fp_incr(3),
+        disable: [
+            function(date) {
+                return (date.getDay() === 0);
+            }
+        ]
+    });
+</script>
+{% endblock %}

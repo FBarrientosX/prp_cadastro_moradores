@@ -1,0 +1,144 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Validar Cupom — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-12 col-lg-8 col-xl-6">
+        <div class="text-center mb-4">
+            <h1 class="h3 mb-1">Validação de Código</h1>
+            <p class="text-muted mb-0">Digite o código ou leia o QR Code apresentado pelo morador</p>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-4 p-md-5">
+                <form method="post" action="{{ url_for('parceiro_validar_codigo') }}" id="form-validacao">
+                    <div class="mb-3">
+                        <label for="codigo_unico" class="form-label fw-semibold">Código do cupom</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-lg text-center text-uppercase"
+                            id="codigo_unico"
+                            name="codigo_unico"
+                            value="{{ codigo_url }}"
+                            placeholder="Ex: PRP-ABC123"
+                            autocomplete="off"
+                            autofocus
+                            required
+                            style="font-size: 1.5rem; letter-spacing: 0.05em;"
+                        >
+                    </div>
+
+                    <div class="text-center mb-3">
+                        <button type="button" id="btn-start-scanner" class="btn btn-outline-success">
+                            <i class="bi bi-camera me-2"></i>Ler QR Code com a Câmera
+                        </button>
+                    </div>
+
+                    <div id="reader"
+                         style="width: 100%; max-width: 500px; margin: 0 auto; display: none;"
+                         class="mb-3 rounded border"></div>
+
+                    <div class="d-grid">
+                        <button type="submit" id="btn-validar" class="btn btn-success btn-lg py-3">
+                            <i class="bi bi-check-circle me-2"></i>Validar Código
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <p class="text-center text-muted small mt-3 mb-0">
+            Após a validação, o cupom será marcado como utilizado e não poderá ser reutilizado.
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const btnStart = document.getElementById('btn-start-scanner');
+    const readerDiv = document.getElementById('reader');
+    const inputCodigo = document.querySelector('input[name="codigo_unico"]');
+    const btnValidar = document.getElementById('btn-validar');
+    let html5QrcodeScanner = null;
+    let scanHandled = false;
+
+    btnStart.addEventListener('click', function() {
+        if (html5QrcodeScanner) {
+            return;
+        }
+
+        readerDiv.style.display = 'block';
+        btnStart.style.display = 'none';
+        scanHandled = false;
+
+        html5QrcodeScanner = new Html5QrcodeScanner(
+            'reader',
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            false
+        );
+        html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    });
+
+    function extrairCodigo(decodedText) {
+        let finalCode = decodedText.trim();
+        try {
+            const url = new URL(finalCode);
+            if (url.searchParams.has('codigo')) {
+                finalCode = url.searchParams.get('codigo');
+            }
+        } catch (e) {
+            // Usa o texto bruto se não for uma URL
+        }
+        return finalCode.trim().toUpperCase();
+    }
+
+    function encerrarScanner() {
+        if (!html5QrcodeScanner) {
+            return Promise.resolve();
+        }
+        const scanner = html5QrcodeScanner;
+        html5QrcodeScanner = null;
+        return scanner.clear().catch(function() {
+            readerDiv.innerHTML = '';
+        });
+    }
+
+    function onScanSuccess(decodedText) {
+        if (scanHandled) {
+            return;
+        }
+        scanHandled = true;
+
+        inputCodigo.value = extrairCodigo(decodedText);
+        inputCodigo.classList.add('border-success', 'border-3');
+        btnValidar.classList.add('btn-pulse');
+        btnValidar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        encerrarScanner().then(function() {
+            readerDiv.style.display = 'none';
+            btnStart.style.display = 'inline-block';
+            inputCodigo.focus();
+        });
+    }
+
+    function onScanFailure() {
+        // Ignorar erros de frames vazios durante a leitura
+    }
+});
+</script>
+<style>
+    #btn-validar.btn-pulse {
+        animation: validar-pulse 1s ease-in-out 3;
+        box-shadow: 0 0 0 0.25rem rgba(25, 135, 84, 0.45);
+    }
+
+    @keyframes validar-pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.02); }
+    }
+</style>
+{% endblock %}

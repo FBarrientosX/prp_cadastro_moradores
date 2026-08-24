@@ -30,7 +30,9 @@
                 </h1>
                 <p class="text-muted mb-4">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
 
-                <form method="post" action="{{ url_for('salvar_cadastro') }}" enctype="multipart/form-data">
+                <form method="post"
+                      action="{% if modo == 'cadastro' and slug %}{{ url_for('cadastro_inicial', slug=slug) }}{% else %}{{ url_for('salvar_cadastro') }}{% endif %}"
+                      enctype="multipart/form-data">
 
                     <!-- SENHA -->
                     <section class="mb-4 p-3 border rounded bg-light">
@@ -69,6 +71,9 @@
                         {% for pessoa in lista_pessoas %}
                         <div class="border rounded p-3 mb-3 pessoa-item">
                             {% set i = loop.index0 %}
+                            {% if modo == 'atualizacao' and pessoa %}
+                            <input type="hidden" name="pessoa_{{ i }}_id" value="{{ pessoa.id }}">
+                            {% endif %}
                             <div class="row g-3">
                                 <div class="col-12 col-md-6">
                                     <label class="form-label">Nome completo</label>
