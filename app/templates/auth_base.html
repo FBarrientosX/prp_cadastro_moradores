@@ -15,11 +15,47 @@
                 #f4f6f9;
         }
 
+        .auth-flash {
+            max-width: 450px;
+        }
+
         .auth-card {
             width: 100%;
             max-width: 450px;
             border: 0;
             border-radius: 1rem;
+        }
+
+        .auth-card-wide {
+            width: 100%;
+            max-width: 880px;
+            border: 0;
+            border-radius: 1rem;
+        }
+
+        body.auth-page-wide {
+            align-items: flex-start !important;
+            height: auto !important;
+            min-height: 100vh;
+            padding-top: 1.5rem;
+            padding-bottom: 2.5rem;
+            overflow-y: auto;
+        }
+
+        body.auth-page-wide .auth-flash {
+            max-width: 880px;
+        }
+
+        @media (max-width: 575.98px) {
+            body.auth-page-wide {
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+                padding-top: 0.75rem;
+            }
+
+            .auth-card-wide {
+                border-radius: 0.75rem;
+            }
         }
 
         .auth-logo {
@@ -69,11 +105,11 @@
     {% endif %}
     {% block head %}{% endblock %}
 </head>
-<body class="auth-body d-flex align-items-center justify-content-center vh-100 px-3">
+<body class="auth-body d-flex align-items-center justify-content-center vh-100 px-3 {% block body_extra_class %}{% endblock %}">
     <div class="w-100 d-flex flex-column align-items-center">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="w-100 mb-3" style="max-width: 450px;">
+                <div class="w-100 mb-3 auth-flash">
                     {% for category, message in messages %}
                         <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
                             {{ message }}

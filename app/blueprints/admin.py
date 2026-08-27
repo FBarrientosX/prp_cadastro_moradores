@@ -23,7 +23,7 @@ junto por serem usadas exclusivamente por `admin_clube_vantagens`.
 
 from datetime import date, datetime, timedelta
 
-from flask import flash, redirect, render_template, request, url_for
+from flask import flash, redirect, render_template, request, session, url_for
 from sqlalchemy import and_, case, func, or_, text
 
 from app import db
@@ -397,6 +397,13 @@ def admin_index():
         .all()
     )
 
+    abas_validas = {"aguardando", "finalizados", "sindicos", "equipe"}
+    aba_ativa = request.args.get("tab", "aguardando")
+    if aba_ativa not in abas_validas:
+        aba_ativa = "aguardando"
+    if aba_ativa == "equipe" and usuario.role != Role.ADMIN:
+        aba_ativa = "aguardando"
+
     return render_template(
         "dashboard_admin.html",
         aguardando_registro=aguardando_registro,
@@ -404,6 +411,7 @@ def admin_index():
         sindicos=sindicos,
         equipe_acessos=equipe_acessos,
         current_user=usuario,
+        aba_ativa=aba_ativa,
     )
 
 
@@ -590,35 +598,52 @@ def admin_atualizar_status_documentos(unidade_id):
     return redirect(url_for("admin_index"))
 
 
+def _redirect_equipe_acessos():
+    return redirect(url_for("admin_index", tab="equipe"))
+
+
 @admin_required
-def admin_alterar_senha_sindico():
-    from app.routes import _label_agrupamentos_sindico, _usuario_do_tenant
+def admin_alterar_senha_usuario(usuario_id):
+    from app.routes import _registrar_auditoria, _usuario_do_tenant
 
-    condominio_id = condominio_id_obrigatorio()
-    usuario_id = request.form.get("usuario_id", type=int)
+    usuario_logado = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario_logado)
+    condominio_sessao = session.get("condominio_id")
+
+    if not condominio_id or condominio_id != condominio_sessao:
+        flash("Acesso negado.", "danger")
+        return _redirect_equipe_acessos()
+
+    usuario_alvo = _usuario_do_tenant(usuario_id, condominio_id)
+    if usuario_alvo.condominio_id != condominio_sessao:
+        flash("Acesso negado.", "danger")
+        return _redirect_equipe_acessos()
+
+    if usuario_alvo.id == usuario_logado.id:
+        flash("Você não pode alterar a própria senha por esta tela.", "danger")
+        return _redirect_equipe_acessos()
+
+    if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO):
+        flash(
+            "Apenas senhas de assistente, síndico ou porteiro podem ser alteradas aqui.",
+            "warning",
+        )
+        return _redirect_equipe_acessos()
+
     nova_senha = request.form.get("nova_senha", "").strip()
-
-    if not usuario_id or not nova_senha:
-        flash("Informe o síndico e a nova senha.", "danger")
-        return redirect(url_for("admin_index"))
-
-    if len(nova_senha) < 6:
+    if not nova_senha or len(nova_senha) < 6:
         flash("A nova senha deve ter ao menos 6 caracteres.", "danger")
-        return redirect(url_for("admin_index"))
+        return _redirect_equipe_acessos()
 
-    sindico = _usuario_do_tenant(usuario_id, condominio_id)
-    if sindico.role != Role.SINDICO:
-        flash("Síndico não encontrado.", "danger")
-        return redirect(url_for("admin_index"))
-
-    sindico.set_password(nova_senha)
-    db.session.commit()
-    flash(
-        f"Senha do síndico ({_label_agrupamentos_sindico(sindico)}) "
-        "atualizada com sucesso.",
-        "success",
+    usuario_alvo.set_password(nova_senha)
+    _registrar_auditoria(
+        usuario_logado,
+        f"Senha do usuário '{usuario_alvo.username}' redefinida pelo administrador "
+        f"'{usuario_logado.username}'.",
     )
-    return redirect(url_for("admin_index"))
+    db.session.commit()
+    flash(f"Senha de '{usuario_alvo.username}' atualizada com sucesso.", "success")
+    return _redirect_equipe_acessos()
 
 
 @admin_required
@@ -699,7 +724,7 @@ def admin_criar_usuario():
         db.session.commit()
 
         flash("Usuário criado com sucesso.", "success")
-        return redirect(url_for("admin_index"))
+        return _redirect_equipe_acessos()
 
     return render_template("criar_usuario.html", blocos=blocos)
 
@@ -714,14 +739,14 @@ def admin_excluir_usuario(usuario_id):
 
     if usuario_alvo.id == usuario_logado.id:
         flash("Você não pode excluir o próprio acesso.", "danger")
-        return redirect(url_for("admin_index"))
+        return _redirect_equipe_acessos()
 
     if usuario_alvo.role not in (Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO):
         flash(
             "Apenas acessos de assistente, síndico ou porteiro podem ser revogados aqui.",
             "warning",
         )
-        return redirect(url_for("admin_index"))
+        return _redirect_equipe_acessos()
 
     username_alvo = usuario_alvo.username
     role_alvo = usuario_alvo.role
@@ -737,7 +762,7 @@ def admin_excluir_usuario(usuario_id):
     db.session.commit()
 
     flash(f"Acesso de '{username_alvo}' revogado com sucesso.", "success")
-    return redirect(url_for("admin_index"))
+    return _redirect_equipe_acessos()
 
 
 @admin_or_sindico_required
@@ -1067,9 +1092,9 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
-        "/admin/alterar-senha-sindico",
-        "admin_alterar_senha_sindico",
-        admin_alterar_senha_sindico,
+        "/admin/usuarios/<int:usuario_id>/alterar-senha",
+        "admin_alterar_senha_usuario",
+        admin_alterar_senha_usuario,
         methods=["POST"],
     )
     app.add_url_rule(

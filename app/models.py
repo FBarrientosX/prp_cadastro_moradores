@@ -188,11 +188,14 @@ class Usuario(db.Model):
     )
     # Evolução síndico 1:N — responsabilidade passa para SindicoAgrupamento.
     # bloco_responsavel = db.Column(db.String(50), nullable=True)
+    # Marca a última troca de senha; usado para invalidar tokens antigos.
+    senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     condominio = db.relationship("Condominio", backref=db.backref("usuarios", lazy=True))
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        self.senha_atualizada_em = datetime.utcnow()
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)

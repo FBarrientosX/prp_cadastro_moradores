@@ -1,281 +1,370 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" if modo != 'atualizacao' else "base.html" %}
 
 {% block title %}
 {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
 {% endblock %}
 
-{% block content %}
-{% set responsavel_atual = (pessoas|selectattr('is_responsavel')|list|first) if pessoas else None %}
-{% set exibe_contrato_locacao = responsavel_atual and responsavel_atual.vinculo == 'Locatário' %}
-<div class="row justify-content-center">
-    <div class="col-lg-10">
-        <div class="card shadow-sm">
-            <div class="card-body p-4">
-                {% if modo == 'atualizacao' and unidade and unidade.notificacao_sindico %}
-                <div class="alert alert-warning d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-start">
-                    <div>
-                        <strong>&#9888; Atenção:</strong> o síndico deixou uma observação sobre seu cadastro:
-                        <div class="mt-2 mb-0" style="white-space: pre-line;">{{ unidade.notificacao_sindico }}</div>
-                    </div>
-                    <form method="post" action="{{ url_for('limpar_notificacao_sindico') }}">
-                        <button type="submit" class="btn btn-sm btn-outline-dark">
-                            Limpar aviso
-                        </button>
-                    </form>
-                </div>
-                {% endif %}
+{% block body_extra_class %}auth-page-wide{% endblock %}
 
-                <h1 class="h4 mb-1">
-                    {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
-                </h1>
-                <p class="text-muted mb-4">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
+{% block head %}
+<style>
+    .cadastro-card {
+        width: 100%;
+        max-width: 880px;
+        border: 0;
+        border-radius: 1rem;
+    }
 
-                <form method="post"
-                      action="{% if modo == 'cadastro' and slug %}{{ url_for('cadastro_inicial', slug=slug) }}{% else %}{{ url_for('salvar_cadastro') }}{% endif %}"
-                      enctype="multipart/form-data">
+    .cadastro-section + .cadastro-section {
+        border-top: 1px solid rgba(0, 0, 0, 0.08);
+        padding-top: 1.5rem;
+        margin-top: 0.25rem;
+    }
 
-                    <!-- SENHA -->
-                    <section class="mb-4 p-3 border rounded bg-light">
-                        <h2 class="h5 mb-1">Senha da Unidade</h2>
-                        {% if modo == 'cadastro' %}
-                        <p class="text-muted small mb-3">
-                            Crie uma senha segura (mínimo 6 caracteres). Ela será necessária para
-                            <strong>futuras atualizações</strong> de cadastro desta unidade.
-                            Guarde-a em local seguro.
-                        </p>
-                        {% else %}
-                        <p class="text-muted small mb-3">
-                            Deixe em branco para manter a senha atual. Preencha apenas se desejar alterá-la.
-                        </p>
-                        {% endif %}
-                        <div class="row">
-                            <div class="col-12 col-sm-6 mb-3">
-                                <label class="form-label" for="senha">Senha</label>
-                                <input type="password" class="form-control" id="senha" name="senha"
-                                       {% if modo == 'cadastro' %}required minlength="6"{% endif %}
-                                       autocomplete="new-password">
-                            </div>
-                            <div class="col-12 col-sm-6 mb-3">
-                                <label class="form-label" for="confirmar_senha">Confirmar senha</label>
-                                <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
-                                       {% if modo == 'cadastro' %}required minlength="6"{% endif %}
-                                       autocomplete="new-password">
-                            </div>
-                        </div>
-                    </section>
+    .cadastro-section-title {
+        font-size: 0.8rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #6c757d;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+    }
 
-                    <!-- MORADORES -->
-                    <h2 class="h5">Moradores</h2>
-                    <div id="pessoas-container">
-                        {% set lista_pessoas = pessoas if pessoas else [None] %}
-                        {% for pessoa in lista_pessoas %}
-                        <div class="border rounded p-3 mb-3 pessoa-item">
-                            {% set i = loop.index0 %}
-                            {% if modo == 'atualizacao' and pessoa %}
-                            <input type="hidden" name="pessoa_{{ i }}_id" value="{{ pessoa.id }}">
-                            {% endif %}
-                            <div class="row g-3">
-                                <div class="col-12 col-md-6">
-                                    <label class="form-label">Nome completo</label>
-                                    <input class="form-control" name="pessoa_{{ i }}_nome" required
-                                           value="{{ pessoa.nome_completo if pessoa else '' }}">
-                                </div>
-                                <div class="col-6 col-md-3">
-                                    <label class="form-label">
-                                        CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                                    </label>
-                                    <input class="form-control" name="pessoa_{{ i }}_cpf" required
-                                           value="{{ pessoa.cpf if pessoa else '' }}">
-                                </div>
-                                <div class="col-6 col-md-3">
-                                    <label class="form-label">Vínculo</label>
-                                    <select class="form-select" name="pessoa_{{ i }}_vinculo" required>
-                                        {% for vinculo in vinculos %}
-                                        <option value="{{ vinculo }}"
-                                            {% if pessoa and pessoa.vinculo == vinculo %}selected{% endif %}>
-                                            {{ vinculo }}
-                                        </option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div class="col-12 col-sm-4">
-                                    <label class="form-label">
-                                        Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                                    </label>
-                                    <input class="form-control" name="pessoa_{{ i }}_telefone"
-                                           value="{{ pessoa.telefone if pessoa else '' }}">
-                                </div>
-                                <div class="col-12 col-sm-4">
-                                    <label class="form-label">
-                                        E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                                    </label>
-                                    <input type="email" class="form-control" name="pessoa_{{ i }}_email"
-                                           value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
-                                </div>
-                                <div class="col-12 col-sm-4">
-                                    <label class="form-label">Data de nascimento</label>
-                                    <input type="date" class="form-control campo-data-nascimento"
-                                           autocomplete="bday" data-no-datepicker="true"
-                                           name="pessoa_{{ i }}_data_nascimento"
-                                           value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
-                                    <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
-                                </div>
-                                <div class="col-12 col-sm-6">
-                                    <label class="form-label">Parentesco</label>
-                                    <input class="form-control" name="pessoa_{{ i }}_parentesco"
-                                           value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
-                                </div>
-                                <div class="col-12 interfone-consentimento">
-                                    <label class="form-label d-block mb-2">
-                                        Consentimento LGPD - Uso do telefone no interfone
-                                    </label>
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio"
-                                               name="pessoa_{{ i }}_autoriza_interfone"
-                                               id="autoriza_interfone_{{ i }}_true"
-                                               value="true" required
-                                               {% if pessoa and pessoa.autoriza_interfone %}checked{% endif %}>
-                                        <label class="form-check-label" for="autoriza_interfone_{{ i }}_true">
-                                            Sim, autorizo o uso deste número para o interfone.
-                                        </label>
-                                    </div>
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio"
-                                               name="pessoa_{{ i }}_autoriza_interfone"
-                                               id="autoriza_interfone_{{ i }}_false"
-                                               value="false" required
-                                               {% if pessoa and not pessoa.autoriza_interfone %}checked{% endif %}>
-                                        <label class="form-check-label" for="autoriza_interfone_{{ i }}_false">
-                                            Não autorizo.
-                                        </label>
-                                    </div>
-                                </div>
-                                <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="pessoa_{{ i }}_is_responsavel"
-                                               id="resp_{{ i }}"
-                                               {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
-                                        <label class="form-check-label" for="resp_{{ i }}">Responsável pela unidade</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-pessoa">
-                        + Adicionar morador
-                    </button>
+    .lgpd-box {
+        background-color: rgba(var(--bs-primary-rgb), 0.08);
+        border: 1px solid rgba(var(--bs-primary-rgb), 0.2);
+        border-radius: 0.75rem;
+        padding: 1rem 1.1rem;
+    }
 
-                    <!-- VEÍCULOS -->
-                    <h2 class="h5">Veículos</h2>
-                    <div class="mb-3">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="possui-veiculo"
-                                   {% if veiculos %}checked{% endif %}>
-                            <label class="form-check-label" for="possui-veiculo">
-                                Possui veículo estacionado no condomínio?
-                            </label>
-                        </div>
-                    </div>
-                    <div id="veiculos-section" {% if not veiculos %}style="display: none;"{% endif %}>
-                        <div id="veiculos-container">
-                            {% if veiculos %}
-                                {% for veiculo in veiculos %}
-                                <div class="border rounded p-3 mb-3 veiculo-item">
-                                    {% set i = loop.index0 %}
-                                    <div class="row g-3">
-                                        <div class="col-12 col-sm-4">
-                                            <label class="form-label">Placa</label>
-                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_placa" required
-                                                   value="{{ veiculo.placa }}">
-                                        </div>
-                                        <div class="col-6 col-sm-4">
-                                            <label class="form-label">Marca</label>
-                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_marca" required
-                                                   value="{{ veiculo.marca }}">
-                                        </div>
-                                        <div class="col-6 col-sm-4">
-                                            <label class="form-label">Cor</label>
-                                            <input class="form-control veiculo-field" name="veiculo_{{ i }}_cor" required
-                                                   value="{{ veiculo.cor }}">
-                                        </div>
-                                    </div>
-                                </div>
-                                {% endfor %}
-                            {% else %}
-                                <div class="border rounded p-3 mb-3 veiculo-item">
-                                    <div class="row g-3">
-                                        <div class="col-12 col-sm-4">
-                                            <label class="form-label">Placa</label>
-                                            <input class="form-control veiculo-field" name="veiculo_0_placa">
-                                        </div>
-                                        <div class="col-6 col-sm-4">
-                                            <label class="form-label">Marca</label>
-                                            <input class="form-control veiculo-field" name="veiculo_0_marca">
-                                        </div>
-                                        <div class="col-6 col-sm-4">
-                                            <label class="form-label">Cor</label>
-                                            <input class="form-control veiculo-field" name="veiculo_0_cor">
-                                        </div>
-                                    </div>
-                                </div>
-                            {% endif %}
-                        </div>
-                        <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-veiculo">
-                            + Adicionar veículo
-                        </button>
-                    </div>
+    .pessoa-item + .pessoa-item {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px dashed rgba(0, 0, 0, 0.08);
+    }
+</style>
+{% endblock %}
 
-                    <!-- DOCUMENTO -->
-                    <section class="mb-4 p-3 border rounded">
-                        <h2 class="h5 mb-1">Comprovante de Propriedade</h2>
-                        <div class="alert alert-warning mb-0">
-                            <strong>Aviso:</strong> É obrigatória a apresentação do documento de propriedade
-                            (RGI, Contrato de Compra e Venda ou equivalente) diretamente à administração para
-                            a regularização e aprovação final da unidade.
-                        </div>
-                    </section>
-
-                    <section id="contrato-locacao-section" class="mb-4 p-3 border rounded"
-                             {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
-                        <h2 class="h5 mb-1">Contrato de Locação</h2>
-                        <div class="alert alert-warning mb-0">
-                            <strong>Aviso:</strong> É obrigatória a apresentação do Contrato de Locação
-                            diretamente à administração para a regularização e aprovação final da unidade.
-                        </div>
-                    </section>
-
-                    <section id="proprietario-section" class="mb-4 p-3 border rounded bg-light"
-                             {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
-                        <h2 class="h5 mb-1">Dados do Proprietário (Dono do Imóvel)</h2>
-                        <p class="text-muted small mb-3">
-                            Insira os dados básicos do dono do imóvel. A administração complementará o restante dos dados.
-                        </p>
-                        <div class="row g-3">
-                            <div class="col-12">
-                                <label class="form-label">Nome do Proprietário</label>
-                                <input type="text" class="form-control" name="proprietario_nome"
-                                       value="{{ unidade.proprietario_nome if unidade and unidade.proprietario_nome else '' }}">
-                            </div>
-                            <div class="col-12 col-md-6">
-                                <label class="form-label">Telefone do Proprietário (se souber)</label>
-                                <input type="text" class="form-control" name="proprietario_telefone"
-                                       value="{{ unidade.proprietario_telefone if unidade and unidade.proprietario_telefone else '' }}">
-                            </div>
-                            <div class="col-12 col-md-6">
-                                <label class="form-label">E-mail do Proprietário (se souber)</label>
-                                <input type="email" class="form-control" name="proprietario_email"
-                                       value="{{ unidade.proprietario_email if unidade and unidade.proprietario_email else '' }}">
-                            </div>
-                        </div>
-                    </section>
-
-                    <button type="submit" class="btn btn-primary btn-lg w-100">
-                        {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}
-                    </button>
-                </form>
+{% macro campos_pessoa(i, pessoa, vinculos) %}
+<div class="row g-3">
+    <div class="col-12">
+        <label class="form-label">Nome completo</label>
+        <input class="form-control" name="pessoa_{{ i }}_nome" required
+               value="{{ pessoa.nome_completo if pessoa else '' }}">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">
+            CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+        <input class="form-control" name="pessoa_{{ i }}_cpf" required
+               value="{{ pessoa.cpf if pessoa else '' }}">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Vínculo</label>
+        <select class="form-select" name="pessoa_{{ i }}_vinculo" required>
+            {% for vinculo in vinculos %}
+            <option value="{{ vinculo }}"
+                {% if pessoa and pessoa.vinculo == vinculo %}selected{% endif %}>
+                {{ vinculo }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">
+            Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+        <input class="form-control" name="pessoa_{{ i }}_telefone"
+               value="{{ pessoa.telefone if pessoa else '' }}">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">
+            E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+        <input type="email" class="form-control" name="pessoa_{{ i }}_email"
+               value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Data de nascimento</label>
+        <input type="date" class="form-control campo-data-nascimento"
+               autocomplete="bday" data-no-datepicker="true"
+               name="pessoa_{{ i }}_data_nascimento"
+               value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
+        <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Parentesco</label>
+        <input class="form-control" name="pessoa_{{ i }}_parentesco"
+               value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
+    </div>
+    <div class="col-12">
+        <div class="lgpd-box interfone-consentimento">
+            <label class="form-label d-block mb-1 fw-semibold">
+                Consentimento LGPD — Uso do telefone no interfone
+            </label>
+            <p class="small text-muted mb-2">
+                Informe se autoriza o uso deste número no interfone da unidade.
+            </p>
+            <div class="form-check">
+                <input class="form-check-input" type="radio"
+                       name="pessoa_{{ i }}_autoriza_interfone"
+                       id="autoriza_interfone_{{ i }}_true"
+                       value="true" required
+                       {% if pessoa and pessoa.autoriza_interfone %}checked{% endif %}>
+                <label class="form-check-label" for="autoriza_interfone_{{ i }}_true">
+                    Sim, autorizo o uso deste número para o interfone.
+                </label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio"
+                       name="pessoa_{{ i }}_autoriza_interfone"
+                       id="autoriza_interfone_{{ i }}_false"
+                       value="false" required
+                       {% if pessoa and not pessoa.autoriza_interfone %}checked{% endif %}>
+                <label class="form-check-label" for="autoriza_interfone_{{ i }}_false">
+                    Não autorizo.
+                </label>
             </div>
         </div>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="pessoa_{{ i }}_is_responsavel"
+                   id="resp_{{ i }}"
+                   {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
+            <label class="form-check-label" for="resp_{{ i }}">Responsável pela unidade</label>
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
+{% if pessoas %}
+    {% set lista_responsavel = pessoas|selectattr('is_responsavel')|list %}
+    {% set lista_outros = pessoas|rejectattr('is_responsavel')|list %}
+    {% if not lista_responsavel %}
+        {% set lista_responsavel = [pessoas[0]] %}
+        {% set lista_outros = pessoas[1:] %}
+    {% endif %}
+{% else %}
+    {% set lista_responsavel = [None] %}
+    {% set lista_outros = [] %}
+{% endif %}
+{% set ns = namespace(idx=0) %}
+{% set exibe_contrato_locacao = lista_responsavel and lista_responsavel[0] and lista_responsavel[0].vinculo == 'Locatário' %}
+
+<div class="card cadastro-card shadow-lg mx-auto">
+    <div class="card-body p-3 p-sm-4 p-md-5">
+        {% if modo == 'atualizacao' and unidade and unidade.notificacao_sindico %}
+        <div class="alert alert-warning d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-start">
+            <div>
+                <strong>&#9888; Atenção:</strong> o síndico deixou uma observação sobre seu cadastro:
+                <div class="mt-2 mb-0" style="white-space: pre-line;">{{ unidade.notificacao_sindico }}</div>
+            </div>
+            <form method="post" action="{{ url_for('limpar_notificacao_sindico') }}">
+                <button type="submit" class="btn btn-sm btn-outline-dark">
+                    Limpar aviso
+                </button>
+            </form>
+        </div>
+        {% endif %}
+
+        <div class="text-center mb-4">
+            {% if modo == 'cadastro' and brand_logo %}
+            <img src="{{ url_for('static', filename='uploads/logos/' ~ brand_logo) }}"
+                 alt="{{ condominio.nome }}" class="auth-logo mb-2">
+            {% endif %}
+            <h1 class="h4 mb-1">
+                {% if modo == 'cadastro' %}Cadastro Inicial{% else %}Atualizar Dados{% endif %}
+            </h1>
+            <p class="text-muted mb-0">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
+        </div>
+
+        <form method="post"
+              action="{% if modo == 'cadastro' and slug %}{{ url_for('cadastro_inicial', slug=slug) }}{% else %}{{ url_for('salvar_cadastro') }}{% endif %}"
+              enctype="multipart/form-data">
+
+            <section class="cadastro-section mb-4">
+                <p class="cadastro-section-title">Dados de Acesso</p>
+                <h2 class="h5 mb-1">Senha da Unidade</h2>
+                {% if modo == 'cadastro' %}
+                <p class="text-muted small mb-3">
+                    Crie uma senha segura (mínimo 6 caracteres). Ela será necessária para
+                    <strong>futuras atualizações</strong> de cadastro desta unidade.
+                    Guarde-a em local seguro.
+                </p>
+                {% else %}
+                <p class="text-muted small mb-3">
+                    Deixe em branco para manter a senha atual. Preencha apenas se desejar alterá-la.
+                </p>
+                {% endif %}
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="senha">Senha</label>
+                        <input type="password" class="form-control" id="senha" name="senha"
+                               {% if modo == 'cadastro' %}required minlength="6"{% endif %}
+                               autocomplete="new-password">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="confirmar_senha">Confirmar senha</label>
+                        <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
+                               {% if modo == 'cadastro' %}required minlength="6"{% endif %}
+                               autocomplete="new-password">
+                    </div>
+                </div>
+            </section>
+
+            <section class="cadastro-section mb-4">
+                <p class="cadastro-section-title">Dados do Morador Responsável</p>
+                <h2 class="h5 mb-3">Morador responsável</h2>
+                {% for pessoa in lista_responsavel %}
+                <div class="pessoa-item">
+                    {% if modo == 'atualizacao' and pessoa %}
+                    <input type="hidden" name="pessoa_{{ ns.idx }}_id" value="{{ pessoa.id }}">
+                    {% endif %}
+                    {{ campos_pessoa(ns.idx, pessoa, vinculos) }}
+                </div>
+                {% set ns.idx = ns.idx + 1 %}
+                {% endfor %}
+            </section>
+
+            <section class="cadastro-section mb-4">
+                <p class="cadastro-section-title">Outros Moradores / Veículos</p>
+                <h2 class="h5 mb-1">Outros moradores</h2>
+                <p class="text-muted small mb-3">
+                    Inclua familiares ou demais ocupantes da unidade, se houver.
+                </p>
+                <div id="pessoas-container">
+                    {% for pessoa in lista_outros %}
+                    <div class="pessoa-item">
+                        {% if modo == 'atualizacao' and pessoa %}
+                        <input type="hidden" name="pessoa_{{ ns.idx }}_id" value="{{ pessoa.id }}">
+                        {% endif %}
+                        {{ campos_pessoa(ns.idx, pessoa, vinculos) }}
+                    </div>
+                    {% set ns.idx = ns.idx + 1 %}
+                    {% endfor %}
+                </div>
+                <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-pessoa">
+                    + Adicionar morador
+                </button>
+
+                <h2 class="h5 mb-2">Veículos</h2>
+                <div class="mb-3">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="possui-veiculo"
+                               {% if veiculos %}checked{% endif %}>
+                        <label class="form-check-label" for="possui-veiculo">
+                            Possui veículo estacionado no condomínio?
+                        </label>
+                    </div>
+                </div>
+                <div id="veiculos-section" {% if not veiculos %}style="display: none;"{% endif %}>
+                    <div id="veiculos-container">
+                        {% if veiculos %}
+                            {% for veiculo in veiculos %}
+                            <div class="border rounded p-3 mb-3 veiculo-item">
+                                {% set i = loop.index0 %}
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Placa</label>
+                                        <input class="form-control veiculo-field" name="veiculo_{{ i }}_placa" required
+                                               value="{{ veiculo.placa }}">
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Marca</label>
+                                        <input class="form-control veiculo-field" name="veiculo_{{ i }}_marca" required
+                                               value="{{ veiculo.marca }}">
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Cor</label>
+                                        <input class="form-control veiculo-field" name="veiculo_{{ i }}_cor" required
+                                               value="{{ veiculo.cor }}">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="border rounded p-3 mb-3 veiculo-item">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Placa</label>
+                                        <input class="form-control veiculo-field" name="veiculo_0_placa">
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Marca</label>
+                                        <input class="form-control veiculo-field" name="veiculo_0_marca">
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Cor</label>
+                                        <input class="form-control veiculo-field" name="veiculo_0_cor">
+                                    </div>
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="add-veiculo">
+                        + Adicionar veículo
+                    </button>
+                </div>
+            </section>
+
+            <section class="cadastro-section mb-4">
+                <p class="cadastro-section-title">Documentação</p>
+                <h2 class="h5 mb-2">Comprovante de Propriedade</h2>
+                <div class="alert alert-warning mb-0">
+                    <strong>Aviso:</strong> É obrigatória a apresentação do documento de propriedade
+                    (RGI, Contrato de Compra e Venda ou equivalente) diretamente à administração para
+                    a regularização e aprovação final da unidade.
+                </div>
+            </section>
+
+            <section id="contrato-locacao-section" class="cadastro-section mb-4"
+                     {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
+                <h2 class="h5 mb-2">Contrato de Locação</h2>
+                <div class="alert alert-warning mb-0">
+                    <strong>Aviso:</strong> É obrigatória a apresentação do Contrato de Locação
+                    diretamente à administração para a regularização e aprovação final da unidade.
+                </div>
+            </section>
+
+            <section id="proprietario-section" class="cadastro-section mb-4"
+                     {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
+                <h2 class="h5 mb-1">Dados do Proprietário (Dono do Imóvel)</h2>
+                <p class="text-muted small mb-3">
+                    Insira os dados básicos do dono do imóvel. A administração complementará o restante dos dados.
+                </p>
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Nome do Proprietário</label>
+                        <input type="text" class="form-control" name="proprietario_nome"
+                               value="{{ unidade.proprietario_nome if unidade and unidade.proprietario_nome else '' }}">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Telefone do Proprietário (se souber)</label>
+                        <input type="text" class="form-control" name="proprietario_telefone"
+                               value="{{ unidade.proprietario_telefone if unidade and unidade.proprietario_telefone else '' }}">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">E-mail do Proprietário (se souber)</label>
+                        <input type="email" class="form-control" name="proprietario_email"
+                               value="{{ unidade.proprietario_email if unidade and unidade.proprietario_email else '' }}">
+                    </div>
+                </div>
+            </section>
+
+            <div class="d-grid gap-2 pt-2">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}
+                </button>
+                {% if modo == 'cadastro' and slug %}
+                <a href="{{ url_for('tenant_login', slug=slug) }}" class="btn btn-link text-muted text-decoration-none">
+                    Voltar ao início
+                </a>
+                {% endif %}
+            </div>
+        </form>
     </div>
 </div>
 {% endblock %}
@@ -475,73 +564,80 @@
     });
     toggleContratoLocacao();
 
-    // === Adicionar Morador ===
-    document.getElementById("add-pessoa").addEventListener("click", () => {
-        const container = document.getElementById("pessoas-container");
+    function htmlCamposPessoa(index) {
         const vinculoOptions = vinculosOptions.map((v) => `<option value="${v}">${v}</option>`).join("");
-        const wrapper = document.createElement("div");
-        wrapper.className = "border rounded p-3 mb-3 pessoa-item";
-        wrapper.innerHTML = `
+        return `
             <div class="row g-3">
-                <div class="col-12 col-md-6">
+                <div class="col-12">
                     <label class="form-label">Nome completo</label>
-                    <input class="form-control" name="pessoa_${pessoaIndex}_nome" required>
+                    <input class="form-control" name="pessoa_${index}_nome" required>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-12 col-md-6">
                     <label class="form-label">
                         CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
                     </label>
-                    <input class="form-control" name="pessoa_${pessoaIndex}_cpf" required>
+                    <input class="form-control" name="pessoa_${index}_cpf" required>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-12 col-md-6">
                     <label class="form-label">Vínculo</label>
-                    <select class="form-select" name="pessoa_${pessoaIndex}_vinculo" required>${vinculoOptions}</select>
+                    <select class="form-select" name="pessoa_${index}_vinculo" required>${vinculoOptions}</select>
                 </div>
-                <div class="col-12 col-sm-4">
+                <div class="col-12 col-md-6">
                     <label class="form-label">
                         Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
                     </label>
-                    <input class="form-control" name="pessoa_${pessoaIndex}_telefone">
+                    <input class="form-control" name="pessoa_${index}_telefone">
                 </div>
-                <div class="col-12 col-sm-4">
+                <div class="col-12 col-md-6">
                     <label class="form-label">
                         E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
                     </label>
-                    <input type="email" class="form-control" name="pessoa_${pessoaIndex}_email">
+                    <input type="email" class="form-control" name="pessoa_${index}_email">
                 </div>
-                <div class="col-12 col-sm-4">
+                <div class="col-12 col-md-6">
                     <label class="form-label">Data de nascimento</label>
                     <input type="date" class="form-control campo-data-nascimento"
                            autocomplete="bday" data-no-datepicker="true"
-                           name="pessoa_${pessoaIndex}_data_nascimento">
+                           name="pessoa_${index}_data_nascimento">
                     <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
                 </div>
-                <div class="col-12 col-sm-6">
+                <div class="col-12 col-md-6">
                     <label class="form-label">Parentesco</label>
-                    <input class="form-control" name="pessoa_${pessoaIndex}_parentesco">
+                    <input class="form-control" name="pessoa_${index}_parentesco">
                 </div>
-                <div class="col-12 interfone-consentimento">
-                    <label class="form-label d-block mb-2">Consentimento LGPD - Uso do telefone no interfone</label>
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="pessoa_${pessoaIndex}_autoriza_interfone" id="autoriza_interfone_${pessoaIndex}_true" value="true" required>
-                        <label class="form-check-label" for="autoriza_interfone_${pessoaIndex}_true">
-                            Sim, autorizo o uso deste número para o interfone.
-                        </label>
-                    </div>
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="pessoa_${pessoaIndex}_autoriza_interfone" id="autoriza_interfone_${pessoaIndex}_false" value="false" required>
-                        <label class="form-check-label" for="autoriza_interfone_${pessoaIndex}_false">
-                            Não autorizo.
-                        </label>
+                <div class="col-12">
+                    <div class="lgpd-box interfone-consentimento">
+                        <label class="form-label d-block mb-1 fw-semibold">Consentimento LGPD — Uso do telefone no interfone</label>
+                        <p class="small text-muted mb-2">Informe se autoriza o uso deste número no interfone da unidade.</p>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="pessoa_${index}_autoriza_interfone" id="autoriza_interfone_${index}_true" value="true" required>
+                            <label class="form-check-label" for="autoriza_interfone_${index}_true">
+                                Sim, autorizo o uso deste número para o interfone.
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="pessoa_${index}_autoriza_interfone" id="autoriza_interfone_${index}_false" value="false" required>
+                            <label class="form-check-label" for="autoriza_interfone_${index}_false">
+                                Não autorizo.
+                            </label>
+                        </div>
                     </div>
                 </div>
-                <div class="col-12 col-sm-6 d-flex align-items-center pt-sm-4">
+                <div class="col-12">
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="pessoa_${pessoaIndex}_is_responsavel" id="resp_${pessoaIndex}">
-                        <label class="form-check-label" for="resp_${pessoaIndex}">Responsável pela unidade</label>
+                        <input class="form-check-input" type="checkbox" name="pessoa_${index}_is_responsavel" id="resp_${index}">
+                        <label class="form-check-label" for="resp_${index}">Responsável pela unidade</label>
                     </div>
                 </div>
             </div>`;
+    }
+
+    // === Adicionar Morador ===
+    document.getElementById("add-pessoa").addEventListener("click", () => {
+        const container = document.getElementById("pessoas-container");
+        const wrapper = document.createElement("div");
+        wrapper.className = "pessoa-item";
+        wrapper.innerHTML = htmlCamposPessoa(pessoaIndex);
         container.appendChild(wrapper);
         registrarEventosPessoa(wrapper);
         atualizarObrigatoriedadePessoa(wrapper);
@@ -556,15 +652,15 @@
         wrapper.className = "border rounded p-3 mb-3 veiculo-item";
         wrapper.innerHTML = `
             <div class="row g-3">
-                <div class="col-12 col-sm-4">
+                <div class="col-12 col-md-4">
                     <label class="form-label">Placa</label>
                     <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_placa" required>
                 </div>
-                <div class="col-6 col-sm-4">
+                <div class="col-12 col-md-4">
                     <label class="form-label">Marca</label>
                     <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_marca" required>
                 </div>
-                <div class="col-6 col-sm-4">
+                <div class="col-12 col-md-4">
                     <label class="form-label">Cor</label>
                     <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_cor" required>
                 </div>

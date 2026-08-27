@@ -12,6 +12,21 @@ ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 load_dotenv()
 
 
+def _garantir_colunas_usuarios():
+    inspetor = inspect(db.engine)
+    if "usuarios" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("usuarios")}
+    if "senha_atualizada_em" in colunas:
+        return
+
+    db.session.execute(
+        text("ALTER TABLE usuarios ADD COLUMN senha_atualizada_em DATETIME")
+    )
+    db.session.commit()
+
+
 def _garantir_colunas_unidades():
     inspetor = inspect(db.engine)
     if "unidades" not in inspetor.get_table_names():
@@ -828,6 +843,7 @@ def create_app(config=None):
         db.create_all()
         # Garante condominio_id em bancos SQLite legados antes do backfill.
         _garantir_colunas_multi_tenant()
+        _garantir_colunas_usuarios()
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
