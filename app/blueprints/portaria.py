@@ -47,6 +47,21 @@ def _normalizar_documento_visitante(documento):
     return limpo[:20]
 
 
+def _entrada_aberta_visitante(condominio_id, visitante_id):
+    """Registro com saída nula do visitante neste condomínio, se houver.
+
+    Trava de aplicação no lugar do índice parcial SQLite (MySQL não
+    suporta CREATE UNIQUE INDEX ... WHERE). O lock no visitante serializa
+    check-ins concorrentes da mesma pessoa.
+    """
+    db.session.query(Visitante).filter_by(id=visitante_id).with_for_update().first()
+    return RegistroAcesso.query.filter_by(
+        condominio_id=condominio_id,
+        visitante_id=visitante_id,
+        data_saida=None,
+    ).first()
+
+
 def _autorizacao_do_tenant(autorizacao_id, condominio_id):
     """Carrega autorização prévia do mesmo condomínio (anti-IDOR)."""
     return AutorizacaoAcesso.query.filter_by(
@@ -332,11 +347,7 @@ def portaria_acesso_entrada():
         visitante.tipo = tipo
         visitante.empresa = empresa
 
-    entrada_aberta = RegistroAcesso.query.filter_by(
-        condominio_id=condominio_id,
-        visitante_id=visitante.id,
-        data_saida=None,
-    ).first()
+    entrada_aberta = _entrada_aberta_visitante(condominio_id, visitante.id)
     if entrada_aberta:
         nome_aberto = visitante.nome
         unidade_aberta = entrada_aberta.unidade.identificador
@@ -374,10 +385,6 @@ def portaria_acesso_entrada():
     try:
         db.session.commit()
     except IntegrityError:
-        # Fecha a janela de corrida: duas requisições podem passar pela
-        # checagem de "entrada aberta" acima antes de qualquer uma commitar;
-        # o índice único no banco (ux_registro_acesso_aberto) é quem garante
-        # a exclusão.
         db.session.rollback()
         flash(
             f"{visitante.nome} já possui entrada em aberto em outra unidade. "
@@ -434,11 +441,7 @@ def portaria_acesso_autorizada(auth_id):
 
     visitante = _obter_ou_criar_visitante_autorizacao(autorizacao, condominio_id)
 
-    entrada_aberta = RegistroAcesso.query.filter_by(
-        condominio_id=condominio_id,
-        visitante_id=visitante.id,
-        data_saida=None,
-    ).first()
+    entrada_aberta = _entrada_aberta_visitante(condominio_id, visitante.id)
     if entrada_aberta:
         db.session.rollback()
         flash(
@@ -476,9 +479,6 @@ def portaria_acesso_autorizada(auth_id):
     try:
         db.session.commit()
     except IntegrityError:
-        # Mesma corrida do check-in manual: o índice único
-        # ux_registro_acesso_aberto é a garantia final contra duas entradas
-        # abertas simultâneas do mesmo visitante.
         db.session.rollback()
         flash(
             f"{visitante.nome} já possui entrada em aberto em outra unidade. "

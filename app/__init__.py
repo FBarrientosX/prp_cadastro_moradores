@@ -181,35 +181,12 @@ def _garantir_colunas_reservas():
         )
         db.session.commit()
 
-    # Índice único parcial: impede duplo-booking do mesmo espaço/data sob
-    # concorrência. Só cria se não houver violações herdadas (banco legado
-    # com reservas duplicadas de uma corrida anterior a esta correção).
-    duplicados = db.session.execute(
-        text(
-            """
-            SELECT espaco_id, data_reserva, COUNT(*) AS total
-            FROM reservas
-            WHERE status IN ('Pendente', 'Aprovada')
-            GROUP BY espaco_id, data_reserva
-            HAVING COUNT(*) > 1
-            """
-        )
-    ).fetchall()
-    if duplicados:
-        print(
-            "AVISO: existem reservas duplicadas (mesmo espaço/data, ambas "
-            "Pendente/Aprovada) — resolva manualmente antes que o índice "
-            "único de proteção contra duplo-booking possa ser criado."
-        )
-    else:
-        db.session.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_reserva_espaco_data_ativa "
-                "ON reservas (espaco_id, data_reserva) "
-                "WHERE status IN ('Pendente', 'Aprovada')"
-            )
-        )
-        db.session.commit()
+    # MySQL não suporta índices parciais (CREATE UNIQUE INDEX ... WHERE).
+    # ux_reserva_espaco_data_ativa ficava: UNIQUE (espaco_id, data_reserva)
+    # WHERE status IN ('Pendente', 'Aprovada') — válido só no SQLite.
+    # A exclusão de duplo-booking é feita na aplicação antes do commit
+    # (solicitar_reserva / criar_reserva_gestao / responder_reserva).
+    pass
 
 
 def _garantir_coluna_condominio_espacos_comuns():
@@ -445,34 +422,12 @@ def _garantir_colunas_registros_acesso():
         )
         db.session.commit()
 
-    # Índice único parcial: impede duas "entradas abertas" simultâneas do
-    # mesmo visitante sob concorrência. Só cria se não houver violações
-    # herdadas (banco legado com uma corrida anterior a esta correção).
-    duplicados = db.session.execute(
-        text(
-            """
-            SELECT visitante_id, COUNT(*) AS total
-            FROM registros_acesso
-            WHERE data_saida IS NULL
-            GROUP BY visitante_id
-            HAVING COUNT(*) > 1
-            """
-        )
-    ).fetchall()
-    if duplicados:
-        print(
-            "AVISO: existem visitantes com mais de uma entrada em aberto — "
-            "resolva manualmente antes que o índice único de proteção possa "
-            "ser criado."
-        )
-    else:
-        db.session.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_registro_acesso_aberto "
-                "ON registros_acesso (visitante_id) WHERE data_saida IS NULL"
-            )
-        )
-        db.session.commit()
+    # MySQL não suporta índices parciais (CREATE UNIQUE INDEX ... WHERE).
+    # ux_registro_acesso_aberto ficava: UNIQUE (visitante_id) WHERE data_saida IS NULL
+    # — válido só no SQLite. A trava de "uma entrada aberta por visitante"
+    # é feita na aplicação antes do commit (portaria_acesso_entrada /
+    # portaria_acesso_autorizada).
+    pass
 
 
 def _garantir_colunas_multi_tenant():
