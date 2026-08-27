@@ -18,23 +18,24 @@
     </div>
 </div>
 
+{% set aba = aba_ativa if aba_ativa is defined else 'aguardando' %}
 <ul class="nav nav-tabs" id="adminTabs" role="tablist">
     <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="aguardando-tab" data-bs-toggle="tab"
+        <button class="nav-link {% if aba == 'aguardando' %}active{% endif %}" id="aguardando-tab" data-bs-toggle="tab"
                 data-bs-target="#aguardando" type="button" role="tab">
             Aguardando Registro
             <span class="badge bg-warning text-dark ms-1">{{ aguardando_registro|length }}</span>
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="finalizados-tab" data-bs-toggle="tab"
+        <button class="nav-link {% if aba == 'finalizados' %}active{% endif %}" id="finalizados-tab" data-bs-toggle="tab"
                 data-bs-target="#finalizados" type="button" role="tab">
             Cadastros Finalizados
             <span class="badge bg-primary ms-1">{{ finalizados|length }}</span>
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="sindicos-tab" data-bs-toggle="tab"
+        <button class="nav-link {% if aba == 'sindicos' %}active{% endif %}" id="sindicos-tab" data-bs-toggle="tab"
                 data-bs-target="#sindicos" type="button" role="tab">
             Gestão de Síndicos
             <span class="badge bg-secondary ms-1">{{ sindicos|length }}</span>
@@ -42,7 +43,7 @@
     </li>
     {% if current_user and current_user.role == 'admin' %}
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="equipe-tab" data-bs-toggle="tab"
+        <button class="nav-link {% if aba == 'equipe' %}active{% endif %}" id="equipe-tab" data-bs-toggle="tab"
                 data-bs-target="#equipe" type="button" role="tab">
             Equipe e Acessos
             <span class="badge bg-dark ms-1">{{ equipe_acessos|length }}</span>
@@ -53,7 +54,7 @@
 
 <div class="tab-content pt-3" id="adminTabsContent">
     <!-- Aba 1: Aguardando Registro -->
-    <div class="tab-pane fade show active" id="aguardando" role="tabpanel">
+    <div class="tab-pane fade {% if aba == 'aguardando' %}show active{% endif %}" id="aguardando" role="tabpanel">
         {% if aguardando_registro %}
         <div class="table-responsive">
             <table class="table table-striped align-middle">
@@ -114,7 +115,7 @@
     </div>
 
     <!-- Aba 2: Cadastros Finalizados -->
-    <div class="tab-pane fade" id="finalizados" role="tabpanel">
+    <div class="tab-pane fade {% if aba == 'finalizados' %}show active{% endif %}" id="finalizados" role="tabpanel">
         {% if finalizados %}
         <div class="table-responsive">
             <table class="table table-striped align-middle">
@@ -172,7 +173,7 @@
     </div>
 
     <!-- Aba 3: Gestão de Síndicos -->
-    <div class="tab-pane fade" id="sindicos" role="tabpanel">
+    <div class="tab-pane fade {% if aba == 'sindicos' %}show active{% endif %}" id="sindicos" role="tabpanel">
         {% if sindicos %}
         <div class="table-responsive">
             <table class="table table-striped align-middle">
@@ -196,11 +197,10 @@
                         </td>
                         <td>{{ sindico.username }}</td>
                         <td>
-                            <form method="post" action="{{ url_for('admin_alterar_senha_sindico') }}" class="d-flex gap-2">
-                                <input type="hidden" name="usuario_id" value="{{ sindico.id }}">
-                                <input type="text" class="form-control form-control-sm"
+                            <form method="post" action="{{ url_for('admin_alterar_senha_usuario', usuario_id=sindico.id) }}" class="d-flex gap-2">
+                                <input type="password" class="form-control form-control-sm"
                                        name="nova_senha" minlength="6" required
-                                       placeholder="Digite a nova senha">
+                                       placeholder="Digite a nova senha" autocomplete="new-password">
                         </td>
                         <td class="text-end">
                                 <button type="submit" class="btn btn-warning btn-sm">
@@ -219,7 +219,7 @@
     </div>
 
     {% if current_user and current_user.role == 'admin' %}
-    <div class="tab-pane fade" id="equipe" role="tabpanel">
+    <div class="tab-pane fade {% if aba == 'equipe' %}show active{% endif %}" id="equipe" role="tabpanel">
         {% if equipe_acessos %}
         <div class="table-responsive">
             <table class="table table-striped align-middle">
@@ -261,14 +261,21 @@
                         </td>
                         <td class="text-end">
                             {% if usuario.id != current_user.id and usuario.role != 'admin' %}
-                            <form method="post"
-                                  action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"
-                                  class="d-inline"
-                                  onsubmit="return confirm('Tem certeza que deseja excluir este acesso? Esta ação não poderá ser desfeita.');">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    Revogar Acesso
+                            <div class="d-inline-flex flex-wrap gap-2 justify-content-end">
+                                <button type="button" class="btn btn-sm btn-outline-warning"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalSenhaUsuario{{ usuario.id }}">
+                                    Alterar Senha
                                 </button>
-                            </form>
+                                <form method="post"
+                                      action="{{ url_for('admin_excluir_usuario', usuario_id=usuario.id) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Tem certeza que deseja excluir este acesso? Esta ação não poderá ser desfeita.');">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                        Revogar Acesso
+                                    </button>
+                                </form>
+                            </div>
                             {% else %}
                             <span class="text-muted">—</span>
                             {% endif %}
@@ -278,6 +285,44 @@
                 </tbody>
             </table>
         </div>
+        {% for usuario in equipe_acessos %}
+        {% if usuario.id != current_user.id and usuario.role != 'admin' %}
+        <div class="modal fade" id="modalSenhaUsuario{{ usuario.id }}" tabindex="-1"
+             aria-labelledby="modalSenhaUsuarioLabel{{ usuario.id }}" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form method="post"
+                          action="{{ url_for('admin_alterar_senha_usuario', usuario_id=usuario.id) }}">
+                        <div class="modal-header">
+                            <h2 class="modal-title h5" id="modalSenhaUsuarioLabel{{ usuario.id }}">
+                                Alterar senha de {{ usuario.username }}
+                            </h2>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-0">
+                                <label for="nova_senha_usuario_{{ usuario.id }}" class="form-label">Nova Senha</label>
+                                <input type="password" class="form-control"
+                                       id="nova_senha_usuario_{{ usuario.id }}"
+                                       name="nova_senha" minlength="6" required
+                                       autocomplete="new-password"
+                                       placeholder="Mínimo 6 caracteres">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                                Cancelar
+                            </button>
+                            <button type="submit" class="btn btn-warning">
+                                Salvar Nova Senha
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
         {% else %}
         <div class="alert alert-info">Nenhum acesso de equipe cadastrado.</div>
         {% endif %}
@@ -530,4 +575,19 @@
     </div>
 </div>
 {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        const hash = (window.location.hash || "").replace("#", "");
+        if (!hash) {
+            return;
+        }
+        const trigger = document.querySelector('[data-bs-target="#' + hash + '"]');
+        if (trigger) {
+            bootstrap.Tab.getOrCreateInstance(trigger).show();
+        }
+    })();
+</script>
 {% endblock %}

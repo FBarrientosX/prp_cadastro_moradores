@@ -99,6 +99,7 @@
         }
     </style>
     {% endif %}
+    {% block head %}{% endblock %}
 </head>
 <body class="bg-light">
     {% set brand_nome = condominio.nome if condominio else 'PRP Condomínio' %}
