@@ -13,60 +13,191 @@
     </span>
 </div>
 
+{% macro badge_tipo_autorizacao(tipo) %}
+    {% if tipo == 'Prestador' %}
+    <span class="badge text-bg-warning">Prestador</span>
+    {% else %}
+    <span class="badge text-bg-primary">Visitante</span>
+    {% endif %}
+{% endmacro %}
+
+{% macro badge_status_autorizacao(item) %}
+    {% if item.status == 'Concluída' %}
+    <span class="badge text-bg-success">Compareceu</span>
+    {% elif item.status == 'Cancelada' %}
+    <span class="badge text-bg-secondary">Cancelada</span>
+    {% else %}
+    <span class="badge text-bg-danger">Expirada / Não compareceu</span>
+    {% endif %}
+{% endmacro %}
+
 <div class="card border-0 shadow-sm mb-4 border-start border-success border-4">
-    <div class="card-body">
+    <div class="card-header bg-white border-0 pt-3 pb-0">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-            <h2 class="h5 mb-0">
-                <i class="bi bi-calendar-check text-success me-1"></i>
-                Esperados para Hoje (Autorizados)
-            </h2>
-            {% if autorizacoes_hoje %}
-            <span class="badge text-bg-success">{{ autorizacoes_hoje|length }}</span>
-            {% endif %}
+            <div>
+                <h2 class="h5 mb-0">
+                    <i class="bi bi-calendar-check text-success me-1"></i>
+                    Autorizações
+                </h2>
+                <p class="text-muted small mb-0">Hoje no Brasil: {{ data_hoje.strftime('%d/%m/%Y') }}</p>
+            </div>
         </div>
-        {% if autorizacoes_hoje %}
-        <div class="table-responsive">
-            <table class="table table-sm align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Unidade destino</th>
-                        <th>Nome</th>
-                        <th>Tipo</th>
-                        <th>Documento</th>
-                        <th class="text-end">Ação</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in autorizacoes_hoje %}
-                    <tr>
-                        <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                        <td>{{ item.nome_visitante }}</td>
-                        <td>
-                            {% if item.tipo == 'Prestador' %}
-                            <span class="badge text-bg-warning">Prestador</span>
-                            {% else %}
-                            <span class="badge text-bg-primary">Visitante</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ item.documento or '—' }}</td>
-                        <td class="text-end">
-                            <form method="post"
-                                  action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}"
-                                  class="d-inline form-confirmar"
-                                  data-confirm-mensagem="Confirmar chegada de {{ item.nome_visitante }} na unidade {{ item.unidade.identificador }}?">
-                                <button type="submit" class="btn btn-sm btn-success">
-                                    <i class="bi bi-check2-circle me-1"></i>Confirmar Chegada
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <ul class="nav nav-tabs card-header-tabs" id="autorizacoesTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active fw-semibold" id="auth-hoje-tab" data-bs-toggle="tab"
+                        data-bs-target="#auth-hoje" type="button" role="tab"
+                        aria-controls="auth-hoje" aria-selected="true">
+                    Hoje
+                    <span class="badge text-bg-success ms-1">{{ autorizacoes_hoje|length }}</span>
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link fw-semibold" id="auth-futuras-tab" data-bs-toggle="tab"
+                        data-bs-target="#auth-futuras" type="button" role="tab"
+                        aria-controls="auth-futuras" aria-selected="false">
+                    Próximos Dias
+                    <span class="badge text-bg-info ms-1">{{ autorizacoes_futuras|length }}</span>
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link fw-semibold" id="auth-historico-tab" data-bs-toggle="tab"
+                        data-bs-target="#auth-historico" type="button" role="tab"
+                        aria-controls="auth-historico" aria-selected="false">
+                    Histórico / Expirados
+                    <span class="badge text-bg-secondary ms-1">{{ autorizacoes_historico|length }}</span>
+                </button>
+            </li>
+        </ul>
+    </div>
+    <div class="card-body">
+        <div class="tab-content" id="autorizacoesTabsContent">
+            <div class="tab-pane fade show active" id="auth-hoje" role="tabpanel" aria-labelledby="auth-hoje-tab">
+                {% if autorizacoes_hoje %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Unidade destino</th>
+                                <th>Nome</th>
+                                <th>Tipo</th>
+                                <th>Documento</th>
+                                <th class="text-end">Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in autorizacoes_hoje %}
+                            <tr>
+                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                                <td>{{ item.nome_visitante }}</td>
+                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
+                                <td>{{ item.documento or '—' }}</td>
+                                <td class="text-end">
+                                    {% if item.status == 'Pendente' %}
+                                    <form method="post"
+                                          action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}"
+                                          class="d-inline form-confirmar"
+                                          data-confirm-mensagem="Confirmar chegada de {{ item.nome_visitante }} na unidade {{ item.unidade.identificador }}?">
+                                        <button type="submit" class="btn btn-sm btn-success">
+                                            <i class="bi bi-check2-circle me-1"></i>Confirmar Chegada
+                                        </button>
+                                    </form>
+                                    {% elif item.status == 'Concluída' %}
+                                    <span class="badge text-bg-success">Compareceu</span>
+                                    {% elif item.status == 'Cancelada' %}
+                                    <span class="badge text-bg-secondary">Cancelada</span>
+                                    {% else %}
+                                    <span class="badge text-bg-secondary">{{ item.status }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">Nenhuma visita autorizada para hoje.</p>
+                {% endif %}
+            </div>
+
+            <div class="tab-pane fade" id="auth-futuras" role="tabpanel" aria-labelledby="auth-futuras-tab">
+                {% if autorizacoes_futuras %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Data prevista</th>
+                                <th>Unidade destino</th>
+                                <th>Nome</th>
+                                <th>Tipo</th>
+                                <th>Documento</th>
+                                <th class="text-end">Situação</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in autorizacoes_futuras %}
+                            <tr>
+                                <td>
+                                    <span class="badge text-bg-info fs-6 fw-semibold">
+                                        {{ item.data_prevista.strftime('%d/%m/%Y') }}
+                                    </span>
+                                </td>
+                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                                <td>{{ item.nome_visitante }}</td>
+                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
+                                <td>{{ item.documento or '—' }}</td>
+                                <td class="text-end">
+                                    {% if item.status == 'Cancelada' %}
+                                    <span class="badge text-bg-secondary">Cancelada</span>
+                                    {% else %}
+                                    <span class="badge text-bg-light text-muted border">Aguardando a data</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">Nenhuma autorização agendada para os próximos dias.</p>
+                {% endif %}
+            </div>
+
+            <div class="tab-pane fade" id="auth-historico" role="tabpanel" aria-labelledby="auth-historico-tab">
+                {% if autorizacoes_historico %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Data prevista</th>
+                                <th>Unidade destino</th>
+                                <th>Nome</th>
+                                <th>Tipo</th>
+                                <th>Documento</th>
+                                <th class="text-end">Situação</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in autorizacoes_historico %}
+                            <tr>
+                                <td class="text-nowrap">{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
+                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
+                                <td>{{ item.nome_visitante }}</td>
+                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
+                                <td>{{ item.documento or '—' }}</td>
+                                <td class="text-end">{{ badge_status_autorizacao(item) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if autorizacoes_historico|length >= 50 %}
+                <p class="text-muted small mb-0 mt-2">Exibindo as 50 autorizações mais recentes anteriores a hoje.</p>
+                {% endif %}
+                {% else %}
+                <p class="text-muted mb-0">Nenhuma autorização anterior encontrada.</p>
+                {% endif %}
+            </div>
         </div>
-        {% else %}
-        <p class="text-muted mb-0">Nenhuma visita autorizada aguardando no momento.</p>
-        {% endif %}
     </div>
 </div>
 

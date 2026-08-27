@@ -12,10 +12,15 @@ morador, admin, síndico) — são só importadas aqui, dentro de cada view.
 """
 
 import os
-from datetime import date, datetime
+from datetime import datetime
 
 from flask import current_app, flash, redirect, render_template, request, url_for
 from sqlalchemy.exc import IntegrityError
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None
 
 from app import db
 from app.auth import condominio_id_obrigatorio, get_current_user, logout_usuario, portaria_required
@@ -133,14 +138,22 @@ def _obter_ou_criar_visitante_autorizacao(autorizacao, condominio_id):
     return visitante
 
 
+TZ_SAO_PAULO = "America/Sao_Paulo"
+
+
 def _agora_sao_paulo():
     """Retorna datetime local de America/Sao_Paulo (naive, para persistência)."""
-    try:
-        from zoneinfo import ZoneInfo
+    if ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(TZ_SAO_PAULO)).replace(tzinfo=None)
+        except Exception:
+            pass
+    return datetime.utcnow()
 
-        return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-    except Exception:
-        return datetime.utcnow()
+
+def _hoje_sao_paulo():
+    """Data civil de hoje no fuso America/Sao_Paulo (não a do servidor em UTC)."""
+    return _agora_sao_paulo().date()
 
 
 def portaria_logout():
@@ -212,14 +225,39 @@ def portaria_acesso():
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
+    hoje_brasil = _hoje_sao_paulo()
     autorizacoes_hoje = (
         AutorizacaoAcesso.query.join(Unidade)
         .filter(
             AutorizacaoAcesso.condominio_id == condominio_id,
-            AutorizacaoAcesso.status == StatusAutorizacaoAcesso.PENDENTE,
-            AutorizacaoAcesso.data_prevista == date.today(),
+            AutorizacaoAcesso.data_prevista == hoje_brasil,
         )
         .order_by(AutorizacaoAcesso.created_at.asc())
+        .all()
+    )
+    autorizacoes_futuras = (
+        AutorizacaoAcesso.query.join(Unidade)
+        .filter(
+            AutorizacaoAcesso.condominio_id == condominio_id,
+            AutorizacaoAcesso.data_prevista > hoje_brasil,
+        )
+        .order_by(
+            AutorizacaoAcesso.data_prevista.asc(),
+            AutorizacaoAcesso.created_at.asc(),
+        )
+        .all()
+    )
+    autorizacoes_historico = (
+        AutorizacaoAcesso.query.join(Unidade)
+        .filter(
+            AutorizacaoAcesso.condominio_id == condominio_id,
+            AutorizacaoAcesso.data_prevista < hoje_brasil,
+        )
+        .order_by(
+            AutorizacaoAcesso.data_prevista.desc(),
+            AutorizacaoAcesso.created_at.desc(),
+        )
+        .limit(50)
         .all()
     )
     return render_template(
@@ -230,6 +268,9 @@ def portaria_acesso():
         unidades=unidades,
         tipos_visitante=TipoVisitante.CHOICES,
         autorizacoes_hoje=autorizacoes_hoje,
+        autorizacoes_futuras=autorizacoes_futuras,
+        autorizacoes_historico=autorizacoes_historico,
+        data_hoje=hoje_brasil,
     )
 
 
@@ -375,7 +416,7 @@ def portaria_acesso_autorizada(auth_id):
         flash("Esta autorização já foi concluída ou cancelada.", "warning")
         return redirect(url_for("portaria_acesso"))
 
-    if autorizacao.data_prevista != date.today():
+    if autorizacao.data_prevista != _hoje_sao_paulo():
         flash("Esta autorização não é para o dia de hoje.", "warning")
         return redirect(url_for("portaria_acesso"))
 
@@ -708,7 +749,7 @@ def portaria_mudanca_chegar(agendamento_id):
     from app.routes import _agendamento_do_tenant, _registrar_auditoria
 
     usuario = get_current_user()
-    hoje = date.today()
+    hoje = _hoje_sao_paulo()
     agendamento = _agendamento_do_tenant(
         agendamento_id, condominio_id_obrigatorio(usuario)
     )
