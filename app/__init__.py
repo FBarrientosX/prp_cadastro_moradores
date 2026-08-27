@@ -733,10 +733,10 @@ def create_app(config=None):
     app.config.from_mapping(
         SECRET_KEY=secret_key,
         SQLALCHEMY_DATABASE_URI=os.environ.get(
-            "DATABASE_URL", "sqlite:///condominio.db"
+            "SQLALCHEMY_DATABASE_URI", "sqlite:///condominio.db"
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 15}},
+        SQLALCHEMY_ENGINE_OPTIONS={"pool_recycle": 280},
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
         UPLOAD_LOGOS_FOLDER=upload_logos,
         UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
