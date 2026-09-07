@@ -215,6 +215,24 @@ def _reserva_do_tenant(reserva_id, condominio_id):
     )
 
 
+def _existe_reserva_ativa(espaco_id, data_reserva, excluir_id=None):
+    """True se já há reserva Pendente/Aprovada no mesmo espaço e data.
+
+    Trava de aplicação no lugar do índice parcial SQLite (MySQL não
+    suporta CREATE UNIQUE INDEX ... WHERE). O lock no espaço serializa
+    concorrência no mesmo recurso.
+    """
+    db.session.query(EspacoComum).filter_by(id=espaco_id).with_for_update().first()
+    query = Reserva.query.filter(
+        Reserva.espaco_id == espaco_id,
+        Reserva.data_reserva == data_reserva,
+        Reserva.status.in_(("Pendente", "Aprovada")),
+    )
+    if excluir_id is not None:
+        query = query.filter(Reserva.id != excluir_id)
+    return query.first() is not None
+
+
 def _pessoa_do_tenant(pessoa_id, condominio_id):
     """Carrega morador (Pessoa) apenas se a unidade for do tenant (anti-IDOR)."""
     return (
@@ -1343,9 +1361,7 @@ def solicitar_reserva(unidade):
         flash("Este espaço aceita reservas apenas de moradores do bloco vinculado.", "danger")
         return redirect(url_for("reservas"))
 
-    if Reserva.query.filter_by(espaco_id=espaco.id, data_reserva=data_reserva).filter(
-        Reserva.status.in_(["Pendente", "Aprovada"])
-    ).first():
+    if _existe_reserva_ativa(espaco.id, data_reserva):
         flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
         return redirect(url_for("reservas"))
 
@@ -1359,9 +1375,6 @@ def solicitar_reserva(unidade):
     try:
         db.session.commit()
     except IntegrityError:
-        # Fecha a janela de corrida: duas requisições podem passar pela
-        # checagem acima antes de qualquer uma commitar; o índice único no
-        # banco (ux_reserva_espaco_data_ativa) é quem garante a exclusão.
         db.session.rollback()
         flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
         return redirect(url_for("reservas"))
@@ -1412,10 +1425,7 @@ def criar_reserva_gestao():
         flash("Você não tem permissão para criar reserva neste espaço.", "danger")
         return redirect(url_for("reservas"))
 
-    conflito = Reserva.query.filter_by(espaco_id=espaco.id, data_reserva=data_reserva).filter(
-        Reserva.status.in_(["Pendente", "Aprovada"])
-    ).first()
-    if conflito:
+    if _existe_reserva_ativa(espaco.id, data_reserva):
         flash("Já existe uma reserva pendente/aprovada para este espaço nesta data.", "warning")
         return redirect(url_for("reservas"))
 
@@ -1470,6 +1480,14 @@ def responder_reserva(reserva_id):
         return redirect(url_for("reservas"))
 
     if acao == "aprovar":
+        if _existe_reserva_ativa(
+            reserva.espaco_id, reserva.data_reserva, excluir_id=reserva.id
+        ):
+            flash(
+                "Já existe outra reserva pendente/aprovada para este espaço nesta data.",
+                "warning",
+            )
+            return redirect(url_for("reservas"))
         reserva.status = "Aprovada"
     elif acao == "recusar":
         reserva.status = "Recusada"

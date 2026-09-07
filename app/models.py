@@ -354,17 +354,9 @@ class EspacoComum(db.Model):
 
 class Reserva(db.Model):
     __tablename__ = "reservas"
-    __table_args__ = (
-        # Impede duplo-booking do mesmo espaço/data sob concorrência: o banco,
-        # não só a checagem em Python, rejeita a segunda reserva ativa.
-        db.Index(
-            "ux_reserva_espaco_data_ativa",
-            "espaco_id",
-            "data_reserva",
-            unique=True,
-            sqlite_where=db.text("status IN ('Pendente', 'Aprovada')"),
-        ),
-    )
+    # Não usar índice único parcial (sqlite_where): o MySQL não suporta
+    # CREATE UNIQUE INDEX ... WHERE. Duplo-booking de espaço+data é
+    # bloqueado na aplicação antes do commit.
 
     id = db.Column(db.Integer, primary_key=True)
     espaco_id = db.Column(
@@ -616,16 +608,9 @@ class RegistroAcesso(db.Model):
     """Log transacional de entrada/saída na portaria (imutável após criação)."""
 
     __tablename__ = "registros_acesso"
-    __table_args__ = (
-        # Impede duas "entradas abertas" simultâneas do mesmo visitante sob
-        # concorrência (dois check-ins quase ao mesmo tempo).
-        db.Index(
-            "ux_registro_acesso_aberto",
-            "visitante_id",
-            unique=True,
-            sqlite_where=db.text("data_saida IS NULL"),
-        ),
-    )
+    # Não usar índice único parcial (sqlite_where): o MySQL não suporta
+    # CREATE UNIQUE INDEX ... WHERE. Duas entradas abertas do mesmo
+    # visitante são bloqueadas na aplicação antes do commit.
 
     id = db.Column(db.Integer, primary_key=True)
     condominio_id = db.Column(
