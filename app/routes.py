@@ -159,6 +159,19 @@ def _buscar_unidade(bloco, apartamento, condominio_id=None):
     ).first()
 
 
+def _unidade_exige_senha(unidade):
+    """Unidade cadastrada (exceto reprovada) pede senha no login do morador."""
+    if not unidade:
+        return False
+    if unidade.status == StatusUnidade.REPROVADA:
+        return False
+    return unidade.status in (
+        StatusUnidade.PENDENTE,
+        StatusUnidade.APROVADA,
+        StatusUnidade.REGISTRADA,
+    )
+
+
 def _unidade_do_tenant(unidade_id, condominio_id):
     """Carrega unidade garantindo isolamento multi-tenant (anti-IDOR)."""
     return Unidade.query.filter_by(
@@ -840,6 +853,9 @@ def verificar_unidade(slug):
         return bloqueio
     session["tenant_slug"] = condominio.slug
 
+    if request.method == "GET":
+        return redirect(url_for("tenant_login", slug=condominio.slug))
+
     bloco, apartamento = normalizar_bloco_apartamento(
         request.form.get("bloco", ""),
         request.form.get("apartamento", ""),
@@ -873,11 +889,7 @@ def verificar_unidade(slug):
         return redirect(url_for("cadastro_inicial", slug=condominio.slug))
 
     senha = request.form.get("senha", "").strip()
-    exige_senha = unidade.status in (
-        StatusUnidade.PENDENTE,
-        StatusUnidade.APROVADA,
-        StatusUnidade.REGISTRADA,
-    )
+    exige_senha = _unidade_exige_senha(unidade)
 
     if exige_senha:
         if not senha:
@@ -910,6 +922,37 @@ def verificar_unidade(slug):
 
     login_unidade(unidade)
     return redirect(url_for("atualizar_dados"))
+
+
+def status_unidade(slug):
+    """JSON para o login do morador revalidar cadastro ao trocar bloco/apto."""
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    bloco, apartamento = normalizar_bloco_apartamento(
+        request.args.get("bloco", ""),
+        request.args.get("apartamento", ""),
+    )
+    if not validar_unidade(bloco, apartamento):
+        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
+    exige_senha = _unidade_exige_senha(unidade)
+    resposta = jsonify(
+        {
+            "ok": True,
+            "cadastrada": exige_senha,
+            "exige_senha": exige_senha,
+        }
+    )
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
 
 
 def esqueci_senha():
@@ -2265,6 +2308,12 @@ def init_app(app):
         "verificar_unidade",
         verificar_unidade,
         methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/c/<slug>/status-unidade",
+        "status_unidade",
+        status_unidade,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/c/<slug>/cadastro-inicial",
