@@ -122,7 +122,7 @@
 {% if not pendente %}
 <script>
     const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
-    const STATUS_UNIDADE_URL = {{ url_for('status_unidade', slug=slug) | tojson }};
+    const UNIDADES_COM_CADASTRO = new Set({{ unidades_com_cadastro | default([]) | tojson }});
     const blocoSelect = document.getElementById("bloco");
     const apartamentoSelect = document.getElementById("apartamento");
     const campoSenha = document.getElementById("campo-senha-unidade");
@@ -130,7 +130,6 @@
     const btnContinuar = document.getElementById("btn-continuar-unidade");
     const blocoInicial = {{ bloco | tojson }};
     const apartamentoInicial = {{ apartamento | tojson }};
-    let statusUnidadeController = null;
 
     function popularBlocos() {
         if (!blocoSelect) return;
@@ -184,45 +183,15 @@
         }
     }
 
-    function verificarStatusUnidade() {
-        const bloco = blocoSelect ? blocoSelect.value : "";
-        const apartamento = apartamentoSelect ? apartamentoSelect.value : "";
-        if (!bloco || !apartamento) {
-            aplicarEstadoSenha(false);
-            return;
-        }
-
-        if (statusUnidadeController) {
-            statusUnidadeController.abort();
-        }
-        statusUnidadeController = new AbortController();
-
-        const url = new URL(STATUS_UNIDADE_URL, window.location.origin);
-        url.searchParams.set("bloco", bloco);
-        url.searchParams.set("apartamento", apartamento);
-
-        fetch(url.toString(), {
-            headers: { Accept: "application/json" },
-            signal: statusUnidadeController.signal,
-        })
-            .then((resp) => {
-                if (!resp.ok) {
-                    throw new Error("status-unidade");
-                }
-                return resp.json();
-            })
-            .then((data) => {
-                aplicarEstadoSenha(Boolean(data && data.exige_senha));
-            })
-            .catch((err) => {
-                if (err.name === "AbortError") return;
-                aplicarEstadoSenha(false);
-            });
+    function unidadeExigeSenha(bloco, apartamento) {
+        if (!bloco || !apartamento) return false;
+        return UNIDADES_COM_CADASTRO.has(`${bloco}|${apartamento}`);
     }
 
     function aoTrocarUnidade() {
-        aplicarEstadoSenha(false);
-        verificarStatusUnidade();
+        const bloco = blocoSelect ? blocoSelect.value : "";
+        const apartamento = apartamentoSelect ? apartamentoSelect.value : "";
+        aplicarEstadoSenha(unidadeExigeSenha(bloco, apartamento));
     }
 
     if (blocoSelect && apartamentoSelect) {

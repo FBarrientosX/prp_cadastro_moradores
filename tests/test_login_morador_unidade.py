@@ -35,28 +35,16 @@ class LoginMoradorUnidadeTestCase(unittest.TestCase):
         db.session.remove()
         self.ctx.pop()
 
-    def test_status_unidade_cadastrada_exige_senha(self):
-        resposta = self.client.get(
-            "/c/prp/status-unidade",
-            query_string={"bloco": "6", "apartamento": "703"},
-        )
+    def test_login_inclui_snapshot_sem_consulta_ajax(self):
+        resposta = self.client.get("/c/prp/login")
         self.assertEqual(resposta.status_code, 200)
-        dados = resposta.get_json()
-        self.assertTrue(dados["ok"])
-        self.assertTrue(dados["exige_senha"])
-        self.assertTrue(dados["cadastrada"])
-        self.assertEqual(resposta.headers.get("Cache-Control"), "no-store")
-
-    def test_status_unidade_sem_cadastro_nao_exige_senha(self):
-        resposta = self.client.get(
-            "/c/prp/status-unidade",
-            query_string={"bloco": "6", "apartamento": "301"},
-        )
-        self.assertEqual(resposta.status_code, 200)
-        dados = resposta.get_json()
-        self.assertTrue(dados["ok"])
-        self.assertFalse(dados["exige_senha"])
-        self.assertFalse(dados["cadastrada"])
+        html = resposta.get_data(as_text=True)
+        self.assertIn("6|703", html)
+        self.assertNotIn("status-unidade", html)
+        self.assertIn("UNIDADES_COM_CADASTRO", html)
+        self.assertIn("id=\"campo-senha-unidade\"", html)
+        self.assertIn("aoTrocarUnidade", html)
+        self.assertIn("apartamentoSelect.addEventListener(\"change\"", html)
 
     def test_verificar_unidade_cadastrada_sem_senha_pede_senha(self):
         resposta = self.client.post(
@@ -96,14 +84,12 @@ class LoginMoradorUnidadeTestCase(unittest.TestCase):
         self.assertEqual(resposta.status_code, 302)
         self.assertIn("/c/prp/login", resposta.headers.get("Location", ""))
 
-    def test_login_sempre_inclui_campo_senha_e_script_de_revalidacao(self):
-        resposta = self.client.get("/c/prp/login")
-        self.assertEqual(resposta.status_code, 200)
-        html = resposta.get_data(as_text=True)
-        self.assertIn("id=\"campo-senha-unidade\"", html)
-        self.assertIn("status-unidade", html)
-        self.assertIn("aoTrocarUnidade", html)
-        self.assertIn("apartamentoSelect.addEventListener(\"change\"", html)
+    def test_status_unidade_foi_removido(self):
+        resposta = self.client.get(
+            "/c/prp/status-unidade",
+            query_string={"bloco": "6", "apartamento": "703"},
+        )
+        self.assertEqual(resposta.status_code, 404)
 
 
 if __name__ == "__main__":
