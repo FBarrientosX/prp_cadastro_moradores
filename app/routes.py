@@ -782,7 +782,32 @@ def index():
     return redirect(url_for("tenant_login", slug="prp"))
 
 
+def _chaves_unidades_com_cadastro(condominio_id):
+    """Snapshot bloco|apto das unidades que pedem senha no login do morador."""
+    if not condominio_id:
+        return []
+    linhas = (
+        Unidade.query.with_entities(Unidade.bloco, Unidade.apartamento)
+        .filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.status.in_(
+                (
+                    StatusUnidade.PENDENTE,
+                    StatusUnidade.APROVADA,
+                    StatusUnidade.REGISTRADA,
+                )
+            ),
+        )
+        .all()
+    )
+    return [f"{bloco}|{apartamento}" for bloco, apartamento in linhas]
+
+
 def _render_tenant_login(condominio, **extra):
+    extra.setdefault(
+        "unidades_com_cadastro",
+        _chaves_unidades_com_cadastro(condominio.id if condominio else None),
+    )
     return render_template(
         "tenant_login.html",
         **_contexto_index(condominio=condominio, slug=condominio.slug, **extra),
@@ -922,37 +947,6 @@ def verificar_unidade(slug):
 
     login_unidade(unidade)
     return redirect(url_for("atualizar_dados"))
-
-
-def status_unidade(slug):
-    """JSON para o login do morador revalidar cadastro ao trocar bloco/apto."""
-    condominio, bloqueio = _carregar_condominio_entrada(slug)
-    if bloqueio is not None:
-        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
-        resposta.status_code = 403
-        resposta.headers["Cache-Control"] = "no-store"
-        return resposta
-
-    bloco, apartamento = normalizar_bloco_apartamento(
-        request.args.get("bloco", ""),
-        request.args.get("apartamento", ""),
-    )
-    if not validar_unidade(bloco, apartamento):
-        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
-        resposta.headers["Cache-Control"] = "no-store"
-        return resposta
-
-    unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
-    exige_senha = _unidade_exige_senha(unidade)
-    resposta = jsonify(
-        {
-            "ok": True,
-            "cadastrada": exige_senha,
-            "exige_senha": exige_senha,
-        }
-    )
-    resposta.headers["Cache-Control"] = "no-store"
-    return resposta
 
 
 def esqueci_senha():
@@ -2308,12 +2302,6 @@ def init_app(app):
         "verificar_unidade",
         verificar_unidade,
         methods=["GET", "POST"],
-    )
-    app.add_url_rule(
-        "/c/<slug>/status-unidade",
-        "status_unidade",
-        status_unidade,
-        methods=["GET"],
     )
     app.add_url_rule(
         "/c/<slug>/cadastro-inicial",
