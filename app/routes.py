@@ -22,7 +22,7 @@ from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
-from app import db
+from app import ALLOWED_EXTENSIONS, db
 from app.auth import (
     condominio_esta_ativo,
     condominio_id_obrigatorio,
@@ -38,6 +38,7 @@ from app.auth import (
     unidade_required,
     _redirect_login_tenant,
 )
+from app.drive_api import upload_file_stream
 from app.email_service import (
     enviar_email_nova_reserva,
     enviar_email_redefinicao_senha,
@@ -140,6 +141,49 @@ def _salvar_imagem_upload(arquivo, pasta, prefixo="foto"):
     nome_final = f"{secure_filename(prefixo)}_{token}.{extensao}"
     arquivo.save(os.path.join(pasta, nome_final))
     return nome_final, None
+
+
+def _arquivo_documento_valido(arquivo):
+    """Valida presença e extensão de documento de cadastro (pdf/png/jpg/jpeg)."""
+    if not arquivo or not arquivo.filename:
+        return False, None
+    nome_seguro = secure_filename(arquivo.filename)
+    if not nome_seguro or "." not in nome_seguro:
+        return False, "Envie o documento em PDF, PNG, JPG ou JPEG."
+    extensao = nome_seguro.rsplit(".", 1)[-1].lower()
+    if extensao not in ALLOWED_EXTENSIONS:
+        return False, "Envie o documento em PDF, PNG, JPG ou JPEG."
+    return True, nome_seguro
+
+
+def _nome_arquivo_drive(bloco, apartamento, rotulo, filename):
+    """Nome auditável no Drive: bloco-apto_rotulo_arquivo.ext."""
+    original = os.path.basename(filename or "arquivo")
+    return f"{bloco}-{apartamento}_{rotulo}_{original}"
+
+
+def _slug_drive_cadastro(unidade):
+    slug = session.get("cadastro_slug") or session.get("tenant_slug")
+    if not slug and unidade is not None and getattr(unidade, "condominio", None):
+        slug = unidade.condominio.slug
+    return slug or _slug_sessao_ou_prp()
+
+
+def _upload_documento_drive(arquivo, filename, tenant_slug):
+    """
+    Envia FileStorage ao Drive. Retorna (resultado_dict|None, erro_validacao|None).
+    Falha da API devolve (None, None) para não abortar o cadastro.
+    """
+    ok, nome_ou_erro = _arquivo_documento_valido(arquivo)
+    if not ok:
+        if nome_ou_erro:
+            return None, nome_ou_erro
+        return None, None
+
+    resultado = upload_file_stream(
+        arquivo, filename=filename, tenant_slug=tenant_slug
+    )
+    return resultado, None
 
 
 def _salvar_foto_ocorrencia(arquivo, prefixo="ocorrencia"):
@@ -1916,6 +1960,54 @@ def salvar_cadastro():
 
         _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data)
 
+        avisos_upload = []
+        slug_drive = _slug_drive_cadastro(unidade)
+        arquivo_documento = request.files.get("documento")
+        if arquivo_documento and arquivo_documento.filename:
+            resultado_doc, erro_doc = _upload_documento_drive(
+                arquivo_documento,
+                filename=_nome_arquivo_drive(
+                    unidade.bloco,
+                    unidade.apartamento,
+                    "comprovante",
+                    arquivo_documento.filename,
+                ),
+                tenant_slug=slug_drive,
+            )
+            if erro_doc:
+                raise ValueError(erro_doc)
+            if resultado_doc:
+                unidade.documento_drive_id = resultado_doc.get("id")
+                unidade.documento_url = resultado_doc.get("webViewLink")
+                unidade.documento_status = StatusDocumento.PENDENTE
+            else:
+                avisos_upload.append(
+                    "o comprovante de residência/propriedade não foi enviado ao Drive"
+                )
+
+        arquivo_documento2 = request.files.get("documento2")
+        if arquivo_documento2 and arquivo_documento2.filename:
+            resultado_doc2, erro_doc2 = _upload_documento_drive(
+                arquivo_documento2,
+                filename=_nome_arquivo_drive(
+                    unidade.bloco,
+                    unidade.apartamento,
+                    "comprovante2",
+                    arquivo_documento2.filename,
+                ),
+                tenant_slug=slug_drive,
+            )
+            if erro_doc2:
+                raise ValueError(erro_doc2)
+            if resultado_doc2:
+                unidade.documento2_drive_id = resultado_doc2.get("id")
+                unidade.documento2_url = resultado_doc2.get("webViewLink")
+                unidade.documento_status = StatusDocumento.PENDENTE
+            else:
+                avisos_upload.append(
+                    "o anexo adicional não foi enviado ao Drive"
+                )
+
         if _responsavel_e_locatario(pessoas_data):
             if not modo_atualizacao:
                 unidade.contrato_locacao_status = StatusDocumento.PENDENTE
@@ -1927,6 +2019,29 @@ def salvar_cadastro():
             unidade.proprietario_email = dados_proprietario["proprietario_email"]
             if not modo_atualizacao:
                 unidade.proprietario_cpf = None
+
+            arquivo_contrato = request.files.get("contrato_locacao")
+            if arquivo_contrato and arquivo_contrato.filename:
+                resultado_ctr, erro_ctr = _upload_documento_drive(
+                    arquivo_contrato,
+                    filename=_nome_arquivo_drive(
+                        unidade.bloco,
+                        unidade.apartamento,
+                        "contrato",
+                        arquivo_contrato.filename,
+                    ),
+                    tenant_slug=slug_drive,
+                )
+                if erro_ctr:
+                    raise ValueError(erro_ctr)
+                if resultado_ctr:
+                    unidade.contrato_locacao_drive_id = resultado_ctr.get("id")
+                    unidade.contrato_locacao_url = resultado_ctr.get("webViewLink")
+                    unidade.contrato_locacao_status = StatusDocumento.PENDENTE
+                else:
+                    avisos_upload.append(
+                        "o contrato de locação não foi enviado ao Drive"
+                    )
         else:
             unidade.contrato_locacao_drive_id = None
             unidade.contrato_locacao_url = None
@@ -1935,8 +2050,6 @@ def salvar_cadastro():
             unidade.proprietario_cpf = None
             unidade.proprietario_telefone = None
             unidade.proprietario_email = None
-            unidade.contrato_locacao_drive_id = None
-            unidade.contrato_locacao_url = None
 
         if modo_atualizacao:
             unidade.data_alteracao = datetime.utcnow()
@@ -1944,6 +2057,14 @@ def salvar_cadastro():
                 unidade.status = StatusUnidade.PENDENTE
 
         db.session.commit()
+
+        if avisos_upload:
+            flash(
+                "Cadastro salvo, mas "
+                + " e ".join(avisos_upload)
+                + ". Envie o(s) arquivo(s) à administração se necessário.",
+                "warning",
+            )
 
         if modo_atualizacao:
             if requer_nova_aprovacao:

@@ -34,6 +34,8 @@ class StatusUnidade:
 class StatusDocumento:
     PENDENTE = "Pendente"
     ENTREGUE = "Entregue"
+    APROVADO = "Aprovado"
+    REJEITADO = "Rejeitado"
     NAO_ENVIADO = "Nao Enviado"
     NAO_APLICAVEL = "Nao Aplicavel"
 
@@ -248,6 +250,8 @@ class Unidade(db.Model):
     )
     documento_drive_id = db.Column(db.String(100), nullable=True)
     documento_url = db.Column(db.String(500), nullable=True)
+    documento2_drive_id = db.Column(db.String(100), nullable=True)
+    documento2_url = db.Column(db.String(500), nullable=True)
     documento_status = db.Column(
         db.String(20), nullable=False, default=StatusDocumento.NAO_ENVIADO
     )

@@ -70,6 +70,27 @@ def _garantir_colunas_unidades():
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN senha_atualizada_em DATETIME"
         )
+    if "documento_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_drive_id VARCHAR(100)"
+        )
+    if "documento_url" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_url VARCHAR(500)"
+        )
+    if "documento2_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento2_drive_id VARCHAR(100)"
+        )
+    if "documento2_url" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento2_url VARCHAR(500)"
+        )
+    if "documento_status" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_status "
+            "VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))

@@ -131,7 +131,7 @@
                         <th>Destinatário</th>
                         <th>Transportadora</th>
                         <th>Data/hora de recebimento</th>
-                        <th>Recebido por</th>
+                        <th>Código de Rastreio</th>
                         <th class="text-end">Ação</th>
                     </tr>
                 </thead>
@@ -158,7 +158,7 @@
                                 Tentativas de contato: {{ item.tentativas_contato if item.tentativas_contato is not none else 1 }}
                             </div>
                         </td>
-                        <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
+                        <td>{{ item.codigo_rastreio or '—' }}</td>
                         <td class="text-end">
                             <div class="d-inline-flex flex-wrap gap-1 justify-content-end">
                                 <button type="button" class="btn btn-sm btn-primary"

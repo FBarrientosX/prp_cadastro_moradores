@@ -319,7 +319,8 @@ def sindico_validar_unidade(unidade_id):
     apartamento = unidade.apartamento
 
     unidade_tinha_documentos_validados = (
-        unidade.documento_status == StatusDocumento.ENTREGUE
+        unidade.documento_status
+        in (StatusDocumento.ENTREGUE, StatusDocumento.APROVADO)
         or unidade.contrato_locacao_status == StatusDocumento.ENTREGUE
     )
 

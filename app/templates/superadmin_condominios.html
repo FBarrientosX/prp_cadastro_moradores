@@ -182,8 +182,9 @@
                         </div>
                         <div class="col-md-8">
                             <label class="form-label" for="logo">Logo</label>
-                            <input type="file" class="form-control" id="logo" name="logo" accept="image/*">
-                            <div class="form-text">PNG, JPG, SVG ou WEBP. Altura recomendada até 80px.</div>
+                            <input type="file" class="form-control" id="logo" name="logo"
+                                   accept="image/png, image/jpeg, image/webp, image/gif">
+                            <small class="text-muted d-block mt-1">Formatos aceitos: PNG, JPG ou WEBP. Arquivos SVG não são permitidos por medidas de segurança.</small>
                         </div>
 
                         <div class="col-12">
@@ -388,7 +389,8 @@
                     <div class="mb-0">
                         <label class="form-label" for="logo_{{ condo.id }}">Nova logo</label>
                         <input type="file" class="form-control" id="logo_{{ condo.id }}"
-                               name="logo" accept="image/*">
+                               name="logo" accept="image/png, image/jpeg, image/webp, image/gif">
+                        <small class="text-muted d-block mt-1">Formatos aceitos: PNG, JPG ou WEBP. Arquivos SVG não são permitidos por medidas de segurança.</small>
                         <div class="form-text">Deixe em branco para manter a logo atual.</div>
                     </div>
                 </div>

@@ -286,7 +286,11 @@ def admin_dashboard():
     documentos_pendentes = base_unidades.filter(
         or_(
             Unidade.documento_status.in_(
-                [StatusDocumento.PENDENTE, StatusDocumento.NAO_ENVIADO]
+                [
+                    StatusDocumento.PENDENTE,
+                    StatusDocumento.NAO_ENVIADO,
+                    StatusDocumento.REJEITADO,
+                ]
             ),
             and_(
                 Unidade.pessoas.any(
@@ -515,15 +519,87 @@ def admin_excluir_unidade(unidade_id):
 
 
 @admin_required
+def admin_validar_documentacao(unidade_id):
+    from app.drive_api import delete_from_drive
+    from app.models import PerfilDestinoNotificacao
+    from app.routes import (
+        _criar_notificacao,
+        _registrar_auditoria,
+        _unidade_do_tenant,
+    )
+
+    condominio_id = condominio_id_obrigatorio()
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
+    acao = (request.form.get("acao") or "").strip().lower()
+    usuario = get_current_user()
+
+    if acao == "aprovar":
+        unidade.documento_status = StatusDocumento.APROVADO
+        if usuario:
+            _registrar_auditoria(
+                usuario,
+                f"Documentação aprovada — Bloco {unidade.bloco}, "
+                f"Apto {unidade.apartamento}.",
+            )
+        db.session.commit()
+        flash(
+            f"Documentação da unidade Bloco {unidade.bloco}, "
+            f"Apto {unidade.apartamento} aprovada.",
+            "success",
+        )
+        return redirect(url_for("admin_index"))
+
+    if acao == "rejeitar":
+        if unidade.documento_drive_id:
+            delete_from_drive(unidade.documento_drive_id)
+        if unidade.documento2_drive_id:
+            delete_from_drive(unidade.documento2_drive_id)
+
+        unidade.documento_drive_id = None
+        unidade.documento_url = None
+        unidade.documento2_drive_id = None
+        unidade.documento2_url = None
+        unidade.documento_status = StatusDocumento.REJEITADO
+
+        _criar_notificacao(
+            condominio_id,
+            PerfilDestinoNotificacao.MORADOR,
+            "Documentação invalidada",
+            (
+                "A documentação da sua unidade foi invalidada pela administração. "
+                "É necessário enviar novamente os documentos pelo painel "
+                "(Atualizar Dados)."
+            ),
+            unidade_id=unidade.id,
+        )
+        if usuario:
+            _registrar_auditoria(
+                usuario,
+                f"Documentação rejeitada/invalidada — Bloco {unidade.bloco}, "
+                f"Apto {unidade.apartamento}.",
+            )
+        db.session.commit()
+        flash(
+            f"Documentação da unidade Bloco {unidade.bloco}, "
+            f"Apto {unidade.apartamento} invalidada. O morador foi notificado.",
+            "warning",
+        )
+        return redirect(url_for("admin_index"))
+
+    flash("Ação de validação documental inválida.", "danger")
+    return redirect(url_for("admin_index"))
+
+
+@admin_required
 def admin_validar_documento(unidade_id):
     from app.routes import _unidade_do_tenant
 
     unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    unidade.documento_status = StatusDocumento.ENTREGUE
+    unidade.documento_status = StatusDocumento.APROVADO
     db.session.commit()
     flash(
         f"Documento da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
-        f"marcado como entregue/validado.",
+        f"marcado como aprovado.",
         "success",
     )
     return redirect(url_for("admin_index"))
@@ -558,14 +634,14 @@ def admin_validar_documentos(unidade_id):
     from app.routes import _unidade_do_tenant
 
     unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
-    unidade.documento_status = StatusDocumento.ENTREGUE
+    unidade.documento_status = StatusDocumento.APROVADO
     if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
         unidade.contrato_locacao_status = StatusDocumento.ENTREGUE
 
     db.session.commit()
     flash(
         f"Documentos da unidade Bloco {unidade.bloco}, Apto {unidade.apartamento} "
-        f"marcados como entregues/validados.",
+        f"marcados como aprovados/validados.",
         "success",
     )
     return redirect(url_for("admin_index"))
@@ -578,13 +654,18 @@ def admin_atualizar_status_documentos(unidade_id):
     unidade = _unidade_do_tenant(unidade_id, condominio_id_obrigatorio())
     documento_status = request.form.get("documento_status", "").strip()
     contrato_status = request.form.get("contrato_locacao_status", "").strip()
-    status_permitidos = {StatusDocumento.PENDENTE, StatusDocumento.ENTREGUE}
+    status_permitidos = {
+        StatusDocumento.PENDENTE,
+        StatusDocumento.ENTREGUE,
+        StatusDocumento.APROVADO,
+        StatusDocumento.REJEITADO,
+    }
 
     if documento_status in status_permitidos:
         unidade.documento_status = documento_status
 
     if unidade.contrato_locacao_status != StatusDocumento.NAO_APLICAVEL:
-        if contrato_status in status_permitidos:
+        if contrato_status in {StatusDocumento.PENDENTE, StatusDocumento.ENTREGUE}:
             unidade.contrato_locacao_status = contrato_status
     else:
         unidade.contrato_locacao_status = StatusDocumento.NAO_APLICAVEL
@@ -1059,6 +1140,12 @@ def register(app):
         "/admin/excluir-unidade/<int:unidade_id>",
         "admin_excluir_unidade",
         admin_excluir_unidade,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/unidade/<int:unidade_id>/validar_documentacao",
+        "admin_validar_documentacao",
+        admin_validar_documentacao,
         methods=["POST"],
     )
     app.add_url_rule(
