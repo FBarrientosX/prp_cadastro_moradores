@@ -633,6 +633,7 @@ class RegistroAcesso(db.Model):
         db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
     )
     observacoes = db.Column(db.Text, nullable=True)
+    placa_veiculo = db.Column(db.String(10), nullable=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("registros_acesso", lazy=True)
@@ -713,6 +714,7 @@ class AutorizacaoAcesso(db.Model):
         default=StatusAutorizacaoAcesso.PENDENTE,
         index=True,
     )
+    placa_veiculo = db.Column(db.String(10), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     condominio = db.relationship(

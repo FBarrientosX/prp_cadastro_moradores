@@ -421,7 +421,7 @@ def _garantir_colunas_encomendas():
 
 
 def _garantir_colunas_registros_acesso():
-    """Garante porteiro_saida_id em registros_acesso (SQLite legado)."""
+    """Garante porteiro_saida_id e placa_veiculo em registros_acesso (legado)."""
     inspetor = inspect(db.engine)
     if "registros_acesso" not in inspetor.get_table_names():
         return
@@ -440,12 +440,41 @@ def _garantir_colunas_registros_acesso():
         )
         db.session.commit()
 
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("registros_acesso")}
+    if "placa_veiculo" not in colunas:
+        db.session.execute(
+            text(
+                "ALTER TABLE registros_acesso ADD COLUMN placa_veiculo VARCHAR(10)"
+            )
+        )
+        db.session.commit()
+
     # MySQL não suporta índices parciais (CREATE UNIQUE INDEX ... WHERE).
     # ux_registro_acesso_aberto ficava: UNIQUE (visitante_id) WHERE data_saida IS NULL
     # — válido só no SQLite. A trava de "uma entrada aberta por visitante"
     # é feita na aplicação antes do commit (portaria_acesso_entrada /
     # portaria_acesso_autorizada).
     pass
+
+
+def _garantir_colunas_autorizacoes_acesso():
+    """Garante placa_veiculo em autorizacoes_acesso (bancos já existentes)."""
+    inspetor = inspect(db.engine)
+    if "autorizacoes_acesso" not in inspetor.get_table_names():
+        return
+
+    colunas = {
+        coluna["name"] for coluna in inspetor.get_columns("autorizacoes_acesso")
+    }
+    if "placa_veiculo" in colunas:
+        return
+
+    db.session.execute(
+        text(
+            "ALTER TABLE autorizacoes_acesso ADD COLUMN placa_veiculo VARCHAR(10)"
+        )
+    )
+    db.session.commit()
 
 
 def _garantir_colunas_multi_tenant():
@@ -831,6 +860,7 @@ def create_app(config=None):
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
         _garantir_colunas_registros_acesso()
+        _garantir_colunas_autorizacoes_acesso()
         _garantir_colunas_encomendas()
 
     _garantir_tabelas_parceiros(app)

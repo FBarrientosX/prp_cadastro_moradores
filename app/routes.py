@@ -2140,6 +2140,9 @@ def morador_autorizacoes(unidade):
             flash("A data prevista não pode ser anterior a hoje.", "danger")
             return redirect(url_for("morador_autorizacoes"))
 
+        placa_raw = (request.form.get("placa_veiculo") or "").strip()
+        placa_veiculo = placa_raw.upper() if placa_raw else None
+
         autorizacao = AutorizacaoAcesso(
             condominio_id=unidade.condominio_id,
             unidade_id=unidade.id,
@@ -2148,6 +2151,7 @@ def morador_autorizacoes(unidade):
             data_prevista=data_prevista,
             tipo=tipo,
             status=StatusAutorizacaoAcesso.PENDENTE,
+            placa_veiculo=placa_veiculo,
         )
         db.session.add(autorizacao)
         _criar_notificacao(

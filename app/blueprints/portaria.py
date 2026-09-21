@@ -307,6 +307,8 @@ def portaria_acesso_entrada():
     tipo = (request.form.get("tipo", "") or "").strip()
     empresa = (request.form.get("empresa", "") or "").strip() or None
     unidade_id_raw = (request.form.get("unidade_id", "") or "").strip()
+    placa_raw = (request.form.get("placa_veiculo") or "").strip()
+    placa_veiculo = placa_raw.upper() if placa_raw else None
 
     if not documento or not nome or tipo not in TipoVisitante.CHOICES:
         flash("Preencha documento, nome e tipo para registrar a entrada.", "danger")
@@ -367,6 +369,7 @@ def portaria_acesso_entrada():
         data_entrada=agora,
         data_saida=None,
         porteiro_id=usuario.id,
+        placa_veiculo=placa_veiculo,
     )
     db.session.add(registro)
     _registrar_auditoria(
@@ -452,6 +455,13 @@ def portaria_acesso_autorizada(auth_id):
         )
         return redirect(url_for("portaria_acesso"))
 
+    placa_portaria = (request.form.get("placa_veiculo") or "").strip().upper()
+    if placa_portaria:
+        placa_veiculo = placa_portaria
+    else:
+        placa_auth = (autorizacao.placa_veiculo or "").strip()
+        placa_veiculo = placa_auth.upper() if placa_auth else None
+
     agora = _agora_sao_paulo()
     registro = RegistroAcesso(
         condominio_id=condominio_id,
@@ -460,6 +470,7 @@ def portaria_acesso_autorizada(auth_id):
         data_entrada=agora,
         data_saida=None,
         porteiro_id=usuario.id,
+        placa_veiculo=placa_veiculo,
     )
     db.session.add(registro)
     autorizacao.status = StatusAutorizacaoAcesso.CONCLUIDA
