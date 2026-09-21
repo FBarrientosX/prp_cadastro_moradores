@@ -2,91 +2,147 @@
 
 ---
 
-Este documento consolida, em uma única referência, a documentação técnica e de produto do SaaS multi-tenant de gestão de condomínios (Flask + SQLAlchemy + SQLite), incluindo seu módulo de clube de vantagens. Reúne visão de produto, arquitetura, modelo de dados, fluxos de negócio por papel de usuário, o funcionamento do clube de vantagens e um levantamento de riscos técnicos confirmados por verificação adversarial do código — com o status pós-sprint de segurança (itens **[CORRIGIDO]** e pendências remanescentes). Destina-se ao time interno como material de referência de arquitetura e produto.
+Este documento é a referência técnica e de produto do SaaS multi-tenant de gestão de condomínios (Flask + SQLAlchemy), incluindo o módulo de Clube de Vantagens. Descreve o que o sistema **faz hoje**, como foi construído (da origem single-tenant PRP até a plataforma), o modelo de dados, os fluxos por papel, as decisões de isolamento, a sprint de segurança e as limitações ainda abertas.
+
+Não descreve arquitetura futura não implementada como se já existisse. Quando um campo existe no banco mas o runtime ainda não o usa (ex.: fluxo de mudança `"Simples"`), isso fica explícito.
+
+Destina-se ao time interno: onboarding de quem vai manter o código, revisão de produto e continuidade das evoluções.
 
 ## sumário
 
-- [visão geral do produto e modelo de negócio](#visao-geral-produto)
+- [linha do tempo — o que foi feito](#linha-do-tempo)
+- [visão geral do produto](#visao-geral-produto)
 - [arquitetura técnica](#arquitetura-tecnica)
+- [multi-tenant e isolamento](#multi-tenant)
+- [autenticação, sessão e recuperação de senha](#autenticacao)
 - [modelo de dados](#modelo-de-dados)
-- [fluxos de negócio](#fluxos-de-negocio)
+- [fluxos de negócio por papel](#fluxos-de-negocio)
+- [smart diff — atualização de cadastro](#smart-diff)
 - [clube de vantagens](#clube-de-vantagens)
-- [integração com serviços externos e configuração de ambiente](#integracoes-operacao-limitacoes)
-- [achados técnicos e riscos identificados](#achados-tecnicos-riscos)
+- [interface, templates e bibliotecas](#interface)
+- [e-mail](#email)
+- [integrações, ambiente e operação](#integracoes-operacao-limitacoes)
+- [migrações leves e consistência](#migracoes)
+- [catálogo de rotas](#catalogo-rotas)
+- [achados técnicos, sprint de segurança e pendências](#achados-tecnicos-riscos)
+
+---
+
+<a id="linha-do-tempo"></a>
+
+## linha do tempo — o que foi feito
+
+O repositório nasceu como **cadastro de moradores de um único condomínio** (PRP). Cada camada abaixo foi acrescentada em cima da anterior, sem reescrita total. Entender essa sequência explica por que o schema tem `condominio_id` nullable em tabelas antigas, por que as rotas vivem em `app/blueprints/` sem a classe `Blueprint` do Flask, e por que o boot ainda roda dezenas de `_garantir_colunas_*`.
+
+### 1. núcleo de cadastro (produto original)
+
+- Unidade identificada por bloco + apartamento, com senha própria (o morador **não** é um `Usuario`).
+- Pessoas (responsável, vínculo proprietário/locatário/morador, menoridade, interfone) e veículos.
+- Status da unidade: `Pendente` → `Aprovada` (síndico) → `Registrada` (administração).
+- Validação unificada do síndico (recusar morador com motivo, aprovar o restante, ou apagar a unidade se todos forem recusados).
+- Smart Diff: correção de telefone/e-mail/CPF **não** devolve a unidade para `Pendente`; inclusão/remoção de morador ou veículo, sim.
+- Recuperação de senha do morador com anti-enumeração de e-mail.
+
+### 2. operação do condomínio
+
+- Agendamento de mudanças (entrada/saída) com antecedência mínima de 3 dias e bloqueio de domingo; dupla aprovação síndico → administração; check-in na portaria no dia.
+- Reservas de área comum (`EspacoComum` / `Reserva`), calendário FullCalendar, pagamento e jurisdição (admin vs síndico do bloco).
+- Portaria: visitantes/prestadores, registro de entrada/saída, encomendas (foto, rastreio, notificação ao morador), autorizações prévias criadas pelo morador.
+- Ocorrências (helpdesk/kanban) e notificações internas portaria ↔ morador.
+- Auditoria (`LogAuditoria`) nas ações sensíveis.
+
+### 3. clube de vantagens (módulo anexo)
+
+- Parceiro comercial com portal próprio (`parceiro_id`, sem tenant).
+- Cupons com limite total (contador atômico) e limite por unidade; QR no resgate; validação no balcão.
+- Catálogo **global** da plataforma: `Parceiro` e `Cupom` não têm `condominio_id`. Métricas por condomínio só via `ResgateCupom.unidade_id → Unidade.condominio_id`.
+
+### 4. virada SaaS multi-tenant
+
+- Tenant raiz `Condominio` + `ConfiguracaoCondominio` (white-label: cor, logo, rótulos Bloco/Apto).
+- Login por slug: `/c/<slug>/login` (morador e equipe no mesmo formulário, abas distintas).
+- Papel `superadmin` da plataforma (`condominio_id` nulo): cria clientes, primeiro admin, ativa/desativa (soft delete), CRUD global de parceiros.
+- `SindicoAgrupamento` substitui o campo único `bloco_responsavel` (síndico 1:N).
+- Soft delete do cliente (`Condominio.ativo`); porta do slug inativo renderiza `condominio_suspenso.html`.
+- Helpers anti-IDOR (`_unidade_do_tenant`, etc.) e `session.clear()` em todo login de contexto.
+- Seed de transição: se o banco estiver vazio, cria o cliente legado `"PRP Condomínio"` (`slug=prp`) e faz backfill de `condominio_id`.
+
+### 5. extração de rotas (sem Flask Blueprint)
+
+O arquivo monolítico `app/routes.py` foi fatiado em módulos por perfil (`app/blueprints/parceiro.py`, `superadmin.py`, `sindico.py`, `admin.py`, `portaria.py`). A extração **preserva os nomes de endpoint** com `app.add_url_rule(...)`, de propósito: a classe `flask.Blueprint` prefixaria `admin.admin_index` e quebraria todos os `url_for` dos templates.
+
+O núcleo compartilhado (cadastro, login tenant, reservas, clube do morador, helpers `_algo`) permanece em `routes.py`. Os módulos importam esses helpers **dentro da view**, não no topo do arquivo, para evitar import circular.
+
+### 6. sprint de segurança, concorrência e MySQL
+
+Pacote aplicado no código atual (detalhe na [seção de achados](#achados-tecnicos-riscos)):
+
+- `SECRET_KEY` obrigatória no boot (`RuntimeError` se ausente).
+- Tokens de reset com `condominio_id` no payload + invalidação por `senha_atualizada_em`.
+- `session.clear()` em login de unidade e de parceiro.
+- XSS da portaria: confirmações saíram de `onsubmit` inline para `data-confirm-mensagem`.
+- Resgate de cupom atômico (`UPDATE ... total_resgatado + 1 WHERE ...`).
+- Aprovação/rejeição de mudança com `UPDATE ... WHERE status = esperado`.
+- Duplo-booking de reserva e “entrada aberta” de visitante: **trava na aplicação** (`with_for_update`), não índice parcial SQLite — o MySQL não suporta `CREATE UNIQUE INDEX ... WHERE`.
+- Síndico não apaga unidade com documento já `Entregue`; admin não exclui unidade com encomenda pendente.
+- Kanban de ocorrências recortado pela jurisdição do síndico.
+- `SQLALCHEMY_ENGINE_OPTIONS = {"pool_recycle": 280}` para conexões ociosas (MySQL).
 
 ---
 
 <a id="visao-geral-produto"></a>
 
-## gestão de condomínios com clube de vantagens — visão geral do produto
+## visão geral do produto
 
 ### o que o produto faz hoje
 
-A aplicação é um SaaS multi-tenant de **gestão de condomínio**, com um segundo módulo, mais novo e menor, de **clube de vantagens** ligando o condomínio a parceiros comerciais locais. O tenant raiz é `Condominio` (`app/models.py`), identificado por slug único (`/c/<slug>/login`), com soft-delete (campo `ativo`) e configuração própria por cliente em `ConfiguracaoCondominio` — cor e logo (white-label), nomenclatura de bloco/unidade (`label_agrupamento`/`label_unidade`), se o condomínio usa agrupamentos e subsíndicos, e se o fluxo de aprovação de mudança é "Simples" ou "Dupla" (síndico + administração).
+A aplicação é um **SaaS multi-tenant de gestão de condomínio**. O comprador é o condomínio (ou sua administradora). O Clube de Vantagens é um segundo módulo, mais novo, que liga moradores a parceiros comerciais locais — catálogo único da plataforma, não um marketplace por cliente.
 
-O núcleo funcional, hoje, cobre:
+O tenant raiz é `Condominio` (`app/models.py`), identificado por **slug único** na URL (`/c/<slug>/login`). Cada cliente tem:
 
-- **cadastro e ciclo de vida da unidade** — moradores se cadastram por bloco/apartamento, vinculam pessoas (proprietário, locatário, morador, com CPF/telefone/e-mail e possibilidade de menor de idade), veículos, e enviam documentos (comprovante de propriedade, contrato de locação) com upload e validação, incluindo integração com Google Drive (`app/drive_api.py`)
+- soft-delete (`ativo`); condomínio inativo não entra no painel — vê `condominio_suspenso.html`;
+- `ConfiguracaoCondominio` 1:1: cor primária e logo (white-label), rótulos de agrupamento/unidade (`label_agrupamento` / `label_unidade`, padrão "Bloco" / "Apto"), flags `usa_agrupamentos` e `tem_subsindicos`, e o campo `fluxo_aprovacao_mudanca` (`Simples` | `Dupla`).
 
-- **fluxo de aprovação** — unidade e moradores passam por estados (`Pendente` → `Aprovada`/`Registrada`/`Reprovada`), aprovados por síndico e/ou administração conforme a configuração do condomínio
+**Importante sobre mudanças:** o Super Admin grava `fluxo_aprovacao_mudanca`, mas o **runtime ainda implementa só o fluxo duplo** (Pendente Síndico → Pendente Administração → Aprovada). Não existe atalho “Simples” nas views de síndico/admin/morador. Tratar o campo como configuração persistida, não como regra já ligada ponta a ponta.
 
-- **reservas de área comum** — espaços (`EspacoComum`) com regras de dias de funcionamento, valor e gestão por bloco ou geral, e reservas (`Reserva`) com aprovação e controle de pagamento
+O núcleo funcional cobre:
 
-- **agendamento de mudanças** — entrada/saída de unidade (`AgendamentoMudanca`) com fluxo de aprovação simples ou dupla e confirmação de chegada pela portaria
+1. **Cadastro e ciclo de vida da unidade** — moradores se cadastram por bloco/apartamento, vinculam pessoas e veículos, definem senha da unidade. Documentos (comprovante / contrato de locação) têm **status operacional** (`Pendente` / `Entregue` / `Nao Enviado` / `Nao Aplicavel`) conferido pela administração. As colunas de Google Drive existem no model; o upload **não está ligado a nenhuma rota** hoje (ver [integrações](#integracoes-operacao-limitacoes)).
+2. **Aprovação** — síndico valida pessoas da unidade; administração registra a unidade (`Registrada`) após conferir documentos.
+3. **Reservas de área comum** — espaços com dias, valor e gestão por administração ou por bloco do síndico.
+4. **Mudanças** — entrada/saída com D+3, sem domingo, dupla aprovação e check-in na portaria.
+5. **Portaria** — visitantes/prestadores, encomendas, autorizações prévias, notificações ao morador.
+6. **Ocorrências** — chamados do morador; kanban para admin/síndico.
+7. **Auditoria** — `LogAuditoria` por usuário e condomínio.
+8. **Clube de vantagens** — catálogo global; resgate por unidade; validação pelo parceiro.
 
-- **portaria** — controle de acesso de visitantes e prestadores com registro de entrada/saída imutável (`RegistroAcesso`), gestão de encomendas (recebimento, entrega, notificação ao morador) e confirmação de chegada de mudanças
+Estado de transição do banco: tabelas antigas (`usuarios`, `unidades`, `espacos_comuns`, `logs_auditoria`, `agendamentos_mudanca`) ainda têm `condominio_id` **nullable** (legado PRP). Módulos novos (`visitantes`, `registros_acesso`, `encomendas`, `autorizacoes_acesso`, `notificacoes`, `ocorrencias`) nascem com `condominio_id` **NOT NULL**.
 
-- **autorizações de acesso** — o morador pré-autoriza um visitante esperado; a portaria dá baixa na chegada
+A planta física usada em `validar_unidade()` (`BLOCOS_ANDARES` em `app/utils.py`) ainda é a do PRP (blocos 1–8, 7 ou 8 andares, 8 aptos por andar). **Todos os tenants passam por essa validação no cadastro público.** White-label muda o texto da UI, não a geometria dos blocos.
 
-- **ocorrências** — chamados no estilo helpdesk/kanban (manutenção, reclamação, sugestão, outros), tratados por síndico e/ou administração
-
-- **notificações internas** — alertas bidirecionais entre portaria e morador
-
-- **auditoria** — log de ações administrativas por condomínio/usuário (`LogAuditoria`)
-
-- **clube de vantagens** — parceiros comerciais cadastram cupons; o morador resgata por unidade; parceiro, admin do condomínio e super admin acompanham métricas de resgate/validação
-
-Vale registrar o estado de transição multi-tenant do banco: tabelas mais antigas (`Usuario`, `Unidade`, `EspacoComum`, `LogAuditoria`, `AgendamentoMudanca`) ainda têm `condominio_id` nullable, herança de um sistema legado single-tenant (o "PRP"); os módulos construídos já pensando em múltiplos condomínios (`Visitante`, `RegistroAcesso`, `Encomenda`, `AutorizacaoAcesso`, `Notificacao`, `Ocorrencia`) já nascem com `condominio_id` obrigatório.
+A unicidade de `Unidade` no banco continua `UniqueConstraint("bloco", "apartamento")` **sem** `condominio_id`. As buscas de negócio filtram pelo tenant; dois condomínios não podem, no schema atual, ter o mesmo par bloco+apto.
 
 ### para quem
 
-- **condomínios e suas administradoras** — o comprador/gestor do produto, que ganha um painel de administração por condomínio (documentos, unidades, usuários, ocorrências, mudanças)
+- **Condomínios e administradoras** — cliente pagante; painel por tenant (cadastros, documentos, equipe, ocorrências, mudanças, reservas, analytics do clube).
+- **Síndicos / subsíndicos** — jurisdição por `SindicoAgrupamento`; aprovam cadastros e mudanças do bloco; tratam ocorrências e reservas do recorte.
+- **Moradores** — autoatendimento na unidade: cadastro, reservas, mudanças, autorizações, ocorrências, clube.
+- **Portaria** — entrada/saída, encomendas, check-in de mudança, notificações.
+- **Parceiros comerciais** — público secundário: cupons para moradores de **todos** os condomínios da instalação.
 
-- **síndicos** — atuam dentro do condomínio, com jurisdição que pode ser recortada por bloco/agrupamento (`SindicoAgrupamento`), aprovando cadastros e mudanças
+### papéis
 
-- **moradores** — usuários finais que se autoatendem: cadastro, reservas, mudanças, autorizações de acesso, ocorrências, clube de vantagens
+Definidos em `Role` (`app/models.py`) e aplicados por decorators em `app/auth.py`. O morador **não** é `Usuario`.
 
-- **equipe de portaria** — operação diária de entrada/saída, encomendas e notificações
-
-- **comércio local (parceiros comerciais)** — público-alvo secundário e mais incipiente: empresas que oferecem cupons de desconto aos moradores através do clube de vantagens
-
-O produto está hoje centrado no condomínio como cliente; o comércio local é atendido por uma camada anexa, não o carro-chefe.
-
-### os seis papéis de usuário
-
-Os papéis são definidos em `Role` (`app/models.py`) e aplicados via decorators em `app/auth.py`; o morador não é um `Usuario` — ele autentica a **unidade** (`Unidade.password_hash`), um mecanismo de login separado.
-
-- **super admin da plataforma** — dono da operação SaaS, sem `condominio_id` fixo. Opera fora do escopo de um tenant específico: cria condomínios, cadastra o primeiro admin de cada um, define white-label, ativa/desativa clientes (soft delete) e — no lado do clube de vantagens — é quem cadastra, edita, bloqueia e ativa parceiros comerciais na plataforma (`app/blueprints/superadmin.py`). É o único papel com visão cross-tenant.
-
-- **admin do condomínio** — dono operacional de um condomínio (`condominio_id` obrigatório). Gerencia usuários da equipe, valida documentos e contratos de locação, define senha de síndico, acompanha e trata ocorrências (junto com o síndico) e mudanças (junto com o assistente), e é quem enxerga o clube de vantagens e seus indicadores do lado do condomínio (`admin_clube_vantagens`, `admin_clube_vantagens_analytics`).
-
-- **assistente** — papel operacional mais restrito que o admin, também preso a um `condominio_id`. Nos routes protegidos por `admin_or_assistente_required`, cobre tarefas do dia a dia (registrar morador, alterar senha de unidade, excluir unidade, tratar mudanças) mas não acessa validação de documentos, gestão de usuários, senha de síndico nem o clube de vantagens — essas ficam exclusivas de `admin_required`.
-
-- **síndico** — escopo dentro do condomínio, podendo ser limitado a um ou mais agrupamentos/blocos específicos via `SindicoAgrupamento` (arquitetura pensada para condomínios com subsíndicos). Aprova/reprova unidades e moradores do seu bloco, é a primeira instância do fluxo de aprovação dupla de mudanças, e trata ocorrências em conjunto com o admin (`admin_or_sindico_required`).
-
-- **porteiro** — vinculado a um `condominio_id`, opera exclusivamente a portaria: entrada/saída de visitantes e prestadores, encomendas (receber, entregar, notificar morador) e confirmação de chegada de mudanças agendadas. Não acessa telas administrativas.
-
-- **morador** — não é um `Usuario`, autentica a `Unidade` (bloco + apartamento + senha). Faz o próprio cadastro inicial, mantém pessoas/veículos da unidade, solicita reservas de área comum, agenda mudanças, cria autorizações de acesso para visitantes esperados, abre ocorrências, recebe notificações e resgata cupons do clube de vantagens.
-
-Fora dos seis papéis "de condomínio" existe ainda o **parceiro comercial**, com sessão própria (`parceiro_id`) e login isolado (`parceiro_login`), sem relação com `condominio_id`/tenant — é o ator do lado comercial, não um papel do condomínio em si.
-
-### a camada de parceiros comerciais: hoje e para onde pode evoluir
-
-Hoje, `Parceiro` e `Cupom` são explicitamente de **escopo global** (comentário no próprio modelo: "sem condominio_id") — um único catálogo de parceiros e cupons é compartilhado por todos os condomínios da plataforma, não existe um marketplace segmentado por cliente. O isolamento por tenant só aparece de forma indireta e a posteriori: `ResgateCupom` se liga a `unidade_id`, e é a unidade que carrega o `condominio_id`, permitindo cortar métricas de resgate por condomínio depois do fato — mas não controlar, na entrada, quais parceiros um condomínio específico vê.
-
-O ciclo de vida do parceiro também reflete esse estágio inicial: quem cadastra, aprova, bloqueia e reativa parceiros é exclusivamente o super admin da plataforma (não há autosserviço de onboarding comercial); o parceiro, uma vez ativo, loga em portal próprio para manter seu catálogo de cupons (título, descrição, prefixo de código, validade, limite total e por unidade) e ver as próprias métricas de resgate/validação. Do lado do condomínio, o admin tem uma tela de visualização e analytics do clube de vantagens; do lado do morador, existe uma página de resgate ligada à própria unidade.
-
-Dado que hoje o fundador do produto descreve a gestão de condomínio como o foco imediato e o clube de vantagens como uma segunda frente ainda incipiente, os pontos de evolução mais evidentes na própria arquitetura atual (não implementados, mas coerentes com o desenho existente) seriam: dar a `Parceiro`/`Cupom` um recorte opcional por `condominio_id` (permitindo curadoria ou exclusividade por cliente, hoje impossível porque o modelo é global); abrir um fluxo de autosserviço/onboarding para parceiros (hoje dependente do super admin); e amadurecer os indicadores hoje expostos ao admin do condomínio em algo que sustente a venda do clube de vantagens como benefício percebido pelo síndico/morador, e não apenas um catálogo de cupons anexo ao produto principal.
+| Papel | Persistência | Tenant | O que faz |
+|---|---|---|---|
+| Super Admin | `Usuario.role=superadmin` | nenhum (`condominio_id` NULL) | Plataforma: clientes, white-label, primeiro admin, parceiros globais |
+| Admin local | `role=admin` | obrigatório | Dono operacional do condomínio |
+| Assistente | `role=assistente` | obrigatório | Fila de cadastros, senha de unidade, mudanças, reservas da admin |
+| Síndico | `role=sindico` | obrigatório + agrupamentos | Cadastros, mudanças 1ª instância, ocorrências e reservas do bloco |
+| Porteiro | `role=porteiro` | obrigatório | Só portaria |
+| Morador | `Unidade` + senha | `Unidade.condominio_id` | Autoatendimento da unidade |
+| Parceiro | tabela `parceiro` | **global** | Cupons e validação; sessão `parceiro_id` |
 
 ---
 
@@ -96,142 +152,197 @@ Dado que hoje o fundador do produto descreve a gestão de condomínio como o foc
 
 ### stack
 
-- **flask** como framework web — sem uso da classe `Blueprint` nativa (ver adiante)
-- **sqlalchemy** (via `flask_sqlalchemy`) como orm, com `db = SQLAlchemy()` instanciado uma única vez em `app/__init__.py` e reaproveitado por todos os módulos
-- **sqlite** como banco de dados (`instance/condominio.db` em produção), configurado por `SQLALCHEMY_DATABASE_URI` com fallback para `sqlite:///condominio.db` — preparado para trocar de engine via variável de ambiente `DATABASE_URL`, mas hoje 100% sqlite
-- integrações externas síncronas: `smtplib` direto para e-mail (`app/email_service.py`, sem fila) e oauth "installed app" para o google drive (`app/drive_api.py`, com `token.json` local)
-- jinja2 para os templates, com um `context_processor` global (`inject_nav_context`, registrado em `create_app`) que injeta em toda página o usuário logado, a unidade logada, o condomínio ativo e contadores de notificação/reservas pendentes
+- **Flask 3.0** (`run.py` → `create_app()`), host `0.0.0.0:5000` em debug.
+- **SQLAlchemy 2** via Flask-SQLAlchemy; `db = SQLAlchemy()` único em `app/__init__.py`.
+- **Banco:** variável **`SQLALCHEMY_DATABASE_URI`** (não `DATABASE_URL`), fallback `sqlite:///condominio.db`. `pool_recycle=280` para reciclar conexões ociosas (cenário MySQL). Não há `connect_args` de timeout SQLite no `create_app()` atual.
+- **Frontend:** Jinja2, Bootstrap 5.3, Bootstrap Icons, JavaScript nativo.
+- **E-mail:** `smtplib` síncrono Gmail SSL (`smtp.gmail.com:465`), sem fila.
+- **Drive:** OAuth “installed app” em `app/drive_api.py` (`client_secret.json` + `token.json`); módulo presente, **sem chamada a partir de rotas**.
+- **python-dotenv:** `load_dotenv()` no topo de `app/__init__.py`.
 
-### app factory (`app/__init__.py`)
+### app factory (`create_app`)
 
-A aplicação é montada por `create_app(config=None)`, o padrão de app factory do flask: cria o `Flask(__name__)`, aplica a config (com override opcional via parâmetro `config`, usado em testes), chama `db.init_app(app)`, registra o `context_processor` de navegação, importa `app.routes` e chama `routes.init_app(app)` — que por sua vez registra o núcleo de rotas e os cinco módulos de `app/blueprints/`.
+Ordem real do boot:
 
-Depois disso, ainda dentro de `create_app`, roda a sequência de bootstrap dentro de um `app.app_context()`:
+1. Pastas de upload: `static/uploads/{logos,parceiros,ocorrencias,encomendas}`.
+2. `SECRET_KEY` do ambiente (ou `config` de teste). Ausente → `RuntimeError` explicando como gerar a chave.
+3. `SQLALCHEMY_DATABASE_URI`, `SQLALCHEMY_TRACK_MODIFICATIONS=False`, `pool_recycle=280`, `MAX_CONTENT_LENGTH=10MB`.
+4. `db.init_app(app)`.
+5. `context_processor` `inject_nav_context`: usuário, unidade, condomínio, RGB da cor primária, contador de reservas pendentes (jurisdição do papel), sino de notificações.
+6. `routes.init_app(app)` — núcleo + `register()` dos cinco módulos.
+7. Dentro de `app.app_context()`:
+   - `db.create_all()` (tabelas novas);
+   - `_garantir_colunas_multi_tenant()`
+   - `_garantir_colunas_usuarios()` (`senha_atualizada_em`)
+   - `_garantir_coluna_slug_condominio()`
+   - `_garantir_colunas_whitelabel()`
+   - `_garantir_coluna_ativo_condominio()`
+   - `_seed_condominio_transicao()` (PRP + backfill + `_seed_superadmin()`)
+   - `_migrar_sindico_agrupamentos()`
+   - `_garantir_colunas_unidades()` / `_pessoas()` / `_reservas()` / `_espacos_comuns`
+   - `_garantir_colunas_parceiros()` / `_cupom()`
+   - `_garantir_tabela_agendamentos_mudanca()`
+   - `_garantir_colunas_registros_acesso()` / `_encomendas()`
+8. `_garantir_tabelas_parceiros(app)` chama `db.create_all()` de novo no contexto.
+
+### por que “blueprints” sem a classe Blueprint
+
+Cada arquivo em `app/blueprints/` documenta no docstring: registrar com `app.add_url_rule(regra, "nome_do_endpoint", view)` **sem** `flask.Blueprint`.
+
+`Blueprint.route` geraria endpoints `admin.admin_index`. Os templates chamam `url_for('admin_index')`, `url_for('portaria_acesso_autorizada', auth_id=...)`, etc. A extração só moveu funções; mudar o nome do endpoint quebraria a UI.
+
+`routes.init_app(app)`:
 
 ```python
-db.create_all()
-_garantir_colunas_multi_tenant()
-_garantir_coluna_slug_condominio()
-_garantir_colunas_whitelabel()
-_garantir_coluna_ativo_condominio()
-_seed_condominio_transicao()
-_migrar_sindico_agrupamentos()
-_garantir_colunas_unidades()
-_garantir_colunas_pessoas()
-_garantir_colunas_reservas()
-_garantir_coluna_condominio_espacos_comuns()
-_garantir_colunas_parceiros()
-_garantir_colunas_cupom()
-_garantir_tabela_agendamentos_mudanca()
-_garantir_colunas_registros_acesso()
-_garantir_colunas_encomendas()
+parceiro_routes.register(app)
+superadmin_routes.register(app)
+sindico_routes.register(app)
+admin_routes.register(app)
+portaria_routes.register(app)
+# em seguida add_url_rule do núcleo (login tenant, cadastro, reservas, clube, ...)
 ```
 
-`db.create_all()` cria as tabelas que ainda não existem a partir dos models — cobre bancos novos. Em seguida, cada `_garantir_colunas_*`/`_garantir_coluna_*` cuida de bancos **já existentes** (o `instance/condominio.db` do cliente real), ajustando o schema para o que o código atual espera.
-
-### "migração manual" via `_garantir_colunas_*`
-
-Cada uma dessas funções segue o mesmo formato: usa `sqlalchemy.inspect(db.engine)` para checar se a tabela existe e quais colunas ela já tem, monta uma lista de `ALTER TABLE ... ADD COLUMN ...` só para o que falta, executa com `text(...)` e dá `commit`. Exemplo em `_garantir_colunas_unidades`:
-
-```python
-def _garantir_colunas_unidades():
-    inspetor = inspect(db.engine)
-    if "unidades" not in inspetor.get_table_names():
-        return
-    colunas = {coluna["name"] for coluna in inspetor.get_columns("unidades")}
-    alteracoes = []
-    if "contrato_locacao_drive_id" not in colunas:
-        alteracoes.append(
-            "ALTER TABLE unidades ADD COLUMN contrato_locacao_drive_id VARCHAR(100)"
-        )
-    ...
-    for alteracao in alteracoes:
-        db.session.execute(text(alteracao))
-    if alteracoes:
-        db.session.commit()
-```
-
-Isso roda **a cada boot da aplicação**, não apenas uma vez — cada função é idempotente por construção (o `if coluna not in colunas` faz o próprio `ALTER TABLE` funcionar como guarda). Algumas indo além de simples `ADD COLUMN`: `_garantir_colunas_reservas` recria a tabela inteira (`RENAME TO ... _old` → `CREATE TABLE` novo sem a constraint `NOT NULL` antiga → `INSERT INTO ... SELECT` → `DROP TABLE ..._old`) quando precisa afrouxar uma coluna que era obrigatória, porque o sqlite não suporta `ALTER COLUMN` para relaxar `NOT NULL`. Funções como `_seed_condominio_transicao`, `_garantir_coluna_condominio_espacos_comuns` e `_migrar_sindico_agrupamentos` já misturam SQL bruto com fallback/backfill de dados (ex.: criar o "Cliente Nº 1" — o condomínio legado — se ainda não existir, e popular `condominio_id` nas linhas antigas que estavam `NULL`).
-
-**Por que existe esse padrão em vez de Alembic.** O sistema nasceu single-tenant (um único condomínio, sem conceito de `Condominio`/tenant) e foi evoluindo em produção, com um banco sqlite real do cliente já em uso, para o modelo multi-tenant atual (`Condominio` como tenant raiz, `condominio_id` espalhado pelas tabelas). Não há um histórico de migrações versionado desde o início — o schema evoluiu organicamente junto com o código, e cada nova feature que exigia uma coluna nova ganhou sua própria função `_garantir_colunas_*` chamada no boot, em vez de uma migration formal. É, na prática, uma "migração" ad-hoc feita à mão, comentada em português explicando a intenção (ex.: `"""Isolamento multi-tenant: condominio_id em áreas comuns + backfill no cliente legado."""`).
-
-O trade-off é explícito:
-- **vantagem**: zero fricção de setup — não há Alembic para configurar, gerar revisões ou aplicar (`flask db upgrade`) em cada deploy; o próprio boot do app já deixa o schema em dia, o que importa muito num projeto pequeno com um único banco sqlite de produção e sem pipeline de deploy elaborado
-- **custo**: não existe histórico de versões do schema (não dá para saber, olhando só o banco, "em que migration ele está"), não há `downgrade`, cada função precisa reimplementar manualmente a lógica de idempotência e de backfill que o Alembic dá de graça, e o código de bootstrap (`app/__init__.py`) cresce a cada mudança de schema, misturando definição de schema com lógica de dado (seeds, backfills) — o arquivo já concentra mais de uma dúzia dessas funções e tende a continuar crescendo enquanto o app não migrar para uma ferramenta de migração real
-
-### estrutura de módulos pós-refatoração
-
-Nesta sessão, `app/routes.py` (que concentrava todas as rotas) foi dividido: o núcleo compartilhado permanece em `app/routes.py` (~2325 linhas — cadastro de morador, login unificado morador+equipe via `tenant_login`, reservas de área comum, clube de vantagens do lado morador, mudanças do morador, autorizações de acesso, ocorrências do morador, notificações, e a maior parte dos helpers privados `_algo` usados por todos os módulos), e cinco módulos de rota foram extraídos para `app/blueprints/`, um por perfil de usuário:
+### árvore do projeto
 
 ```
 app/
-├── __init__.py            # app factory + _garantir_colunas_* + seeds
-├── auth.py                 # sessão, decorators de autorização, resolução de condominio_id
-├── models.py                # models SQLAlchemy (Condominio = tenant raiz)
-├── routes.py                # núcleo compartilhado + init_app() + helpers privados _*
-├── utils.py                  # slug, estrutura de blocos/apto, tokens, sanitização html, upload de logo
-├── email_service.py          # smtplib síncrono (Gmail)
-├── drive_api.py               # OAuth Google Drive (installed app + token.json)
+├── __init__.py              # factory, _garantir_*, seeds, context processor
+├── auth.py                  # sessão, slug, decorators, resolução de tenant
+├── models.py                # Condominio = tenant raiz
+├── routes.py                # núcleo + init_app + helpers _*
+├── utils.py                 # planta PRP, tokens, Quill sanitizado, logo parceiro
+├── email_service.py
+├── drive_api.py             # não ligado às rotas
 ├── blueprints/
-│   ├── __init__.py            # vazio
-│   ├── parceiro.py             # portal do parceiro comercial (register(app))
-│   ├── superadmin.py            # painel do super admin da plataforma (register(app))
-│   ├── sindico.py                # painel do síndico (register(app))
-│   ├── admin.py                   # painel do admin/assistente local (register(app))
-│   └── portaria.py                 # painel da portaria (register(app))
-├── static/
-│   ├── css/, js/
-│   └── uploads/
-│       ├── logos/, parceiros/, ocorrencias/, encomendas/
+│   ├── __init__.py          # vazio
+│   ├── parceiro.py
+│   ├── superadmin.py
+│   ├── sindico.py
+│   ├── admin.py
+│   └── portaria.py
+├── static/css|js|uploads/
 └── templates/
-    ├── base.html, auth_base.html, login.html, tenant_login.html, ...
-    ├── admin/                   # ex.: ocorrencias_kanban.html
-    ├── morador/                  # ex.: ocorrencias.html
-    ├── portaria/                  # ex.: acesso.html, dashboard.html, encomendas.html
-    └── includes/                   # parciais reutilizáveis (ex.: sino_notificacoes.html)
+    ├── base.html, auth_base.html, portaria_base.html,
+    │   parceiro_base.html, superadmin_base.html
+    ├── admin/, morador/, portaria/, includes/
+run.py
+.env.example
+requirements.txt
 ```
 
-Cada arquivo em `app/blueprints/` expõe uma função `register(app)` que chama `app.add_url_rule(...)` diretamente para cada rota, em vez de instanciar `flask.Blueprint` e usar `@bp.route(...)`. A escolha é deliberada e está documentada no docstring do próprio `admin.py`: "sem a classe Blueprint do Flask, apenas `register(app)` chamando `app.add_url_rule` para preservar os endpoints originais". O motivo concreto é que `Blueprint.route()` sempre registra o endpoint com o prefixo do nome do blueprint (`nome_do_blueprint.nome_da_view`), enquanto `app.add_url_rule(regra, "endpoint_sem_prefixo", view)` permite escolher o nome do endpoint livremente. Como as rotas foram apenas *movidas* de `routes.py` para os módulos — não reescritas — usar `Blueprint` mudaria o nome de endpoint de, por exemplo, `admin_ocorrencias_atualizar_status` para `admin.admin_ocorrencias_atualizar_status`, e isso quebraria todas as chamadas `url_for("admin_ocorrencias_atualizar_status", ...)` já espalhadas pelos templates (ex.: `app/templates/admin/ocorrencias_kanban.html` chama `url_for('admin_ocorrencias_atualizar_status', id=item.id)`; `app/templates/portaria/acesso.html` chama `url_for('portaria_acesso_autorizada', auth_id=item.id)`). Em `app/blueprints/parceiro.py`, o `register(app)` ilustra o padrão:
+### helpers compartilhados (import tardio)
 
-```python
-def register(app):
-    """Registra as rotas do Portal do Parceiro preservando os endpoints legados."""
-    app.add_url_rule(
-        "/parceiro", "parceiro_login", parceiro_login, methods=["GET", "POST"]
-    )
-    app.add_url_rule(
-        "/parceiro/dashboard", "parceiro_dashboard", parceiro_dashboard, methods=["GET"]
-    )
-    ...
-```
+Vários `_algo` vivem em `routes.py` porque síndico, admin, portaria e o próprio núcleo os usam. Importar no **topo** de `admin.py` puxaria `app.routes` no meio do carregamento de `init_app` → import circular.
 
-E o `init_app(app)` em `routes.py` importa e chama o `register` de cada módulo:
+Padrão: `from app.routes import _unidade_do_tenant` **dentro** da view. Exemplos:
 
-```python
-def init_app(app):
-    from app.blueprints import admin as admin_routes
-    from app.blueprints import parceiro as parceiro_routes
-    from app.blueprints import portaria as portaria_routes
-    from app.blueprints import sindico as sindico_routes
-    from app.blueprints import superadmin as superadmin_routes
+- admin (mudanças, exclusão, ocorrências): `_agendamento_do_tenant`, `_unidade_do_tenant`, `_validar_data_mudanca`, `_registrar_auditoria`, `_sindico_gerencia_bloco`;
+- portaria: `_condominio_id_portaria`, `_criar_notificacao`, `_agendamento_do_tenant`, `_salvar_imagem_upload`;
+- síndico: `_blocos_codigo_sindico`, `_sindico_gerencia_bloco`, `_emails_unicos`.
 
-    parceiro_routes.register(app)
-    superadmin_routes.register(app)
-    sindico_routes.register(app)
-    admin_routes.register(app)
-    portaria_routes.register(app)
-```
+---
 
-### helpers privados compartilhados, importados sob demanda
+<a id="multi-tenant"></a>
 
-Vários helpers com prefixo `_` continuam definidos em `app/routes.py` porque são usados por mais de um módulo (inclusive por partes do próprio `routes.py` que ainda não foram extraídas). Em vez de subir esses helpers para um módulo comum no topo da árvore, cada blueprint faz `from app.routes import _algo` **dentro da própria view function**, não no topo do arquivo. Isso evita import circular: `app/routes.py` só termina de definir tudo (incluindo `init_app`) quando `routes.init_app(app)` é chamado a partir de `create_app`, e é exatamente dentro desse `init_app` que os módulos de `app/blueprints/` são importados pela primeira vez — se o import de `_algo` estivesse no topo de `app/blueprints/admin.py`, o Python tentaria carregar `app.routes` (que ainda está no meio da própria execução) antes dele terminar. Adiando o `from app.routes import _algo` para dentro da view, o import só roda na hora da requisição, quando `app.routes` já está totalmente carregado.
+## multi-tenant e isolamento
 
-Exemplos concretos encontrados no código:
-- `app/blueprints/admin.py`, dentro da view `admin_mudancas_agendamento` (linha ~798): `from app.routes import _agendamento_do_tenant, _registrar_auditoria, _unidade_do_tenant, _validar_data_mudanca` — resolve o agendamento de mudança e a unidade escopados ao tenant do admin logado, e grava o log de auditoria, tudo com lógica que também é usada pelo módulo da portaria
-- `app/blueprints/portaria.py`, espalhado por praticamente todas as views (ex.: linha ~156, ~178, ~237): `from app.routes import _condominio_id_portaria` — resolve o `condominio_id` do porteiro logado; e `_criar_notificacao`/`_registrar_auditoria`, usados junto em várias rotas (ex.: linha ~237: `from app.routes import _condominio_id_portaria, _criar_notificacao, _registrar_auditoria`) para registrar a notificação e a auditoria de uma ação de portaria
-- `app/blueprints/sindico.py`, na view de dashboard (linha ~99): `from app.routes import _blocos_codigo_sindico, _label_agrupamentos_sindico` — traduz os agrupamentos/blocos sob responsabilidade do síndico logado (`SindicoAgrupamento`) para os códigos e rótulos usados nos filtros das telas
+### princípio
 
-O próprio docstring de `app/blueprints/admin.py` documenta esse acoplamento remanescente: "várias funções privadas continuam em `app/routes.py` por serem compartilhadas com módulos ainda não extraídos (`_validar_data_mudanca` com `mudancas_morador`, `_unidade_do_tenant` / `_usuario_do_tenant` / `_agendamento_do_tenant` / `_ocorrencia_do_tenant` com portaria, `_registrar_auditoria` e `_label_agrupamentos_sindico` de forma ampla) — são só importadas aqui, dentro de cada view."
+Toda entidade **local** (unidade, usuário da equipe, agendamento, espaço, reserva, ocorrência, visitante, encomenda, autorização, notificação, log) é lida/alterada com filtro de `condominio_id` do ator autenticado. Não se usa `Model.query.get_or_404(id)` sem tenant.
+
+Helpers anti-IDOR:
+
+- `routes.py`: `_unidade_do_tenant`, `_usuario_do_tenant`, `_agendamento_do_tenant`, `_ocorrencia_do_tenant`, `_pessoa_do_tenant`, `_espaco_do_tenant`, `_reserva_do_tenant` (join com `EspacoComum.condominio_id`), `_buscar_unidade(bloco, apto, condominio_id)` (sem id de tenant **não consulta**).
+- `portaria.py`: `_autorizacao_do_tenant`, `_registro_acesso_do_tenant`, `_encomenda_do_tenant`.
+
+### resolução de tenant (`app/auth.py`)
+
+- Equipe: `usuario.condominio_id` via `condominio_id_obrigatorio()` — fonte de verdade nas rotas administrativas.
+- Morador: `unidade.condominio_id`.
+- Porta pública: slug da URL + sessão (`tenant_slug`, `cadastro_condominio_id`, `cadastro_slug`).
+- `resolver_condominio_id(..., permitir_fallback=True)` cai no PRP só em fluxos públicos legados. Admin/síndico/portaria **não** devem usar esse fallback.
+- `_condominio_id_da_sessao()` (esqueci senha) **não** faz fallback PRP — evita vazar existência de e-mail cross-tenant.
+- Condomínio inativo: `_resposta_condominio_inativo` / `condominio_suspenso.html`.
+
+### sessão
+
+Três contextos, nunca misturados:
+
+| Contexto | Chaves | Login limpa a sessão? |
+|---|---|---|
+| Equipe / Super Admin | `user_id`, `role`, `condominio_id`, `tenant_slug` | `login_usuario()` faz `session.clear()` |
+| Unidade | `unidade_id`, bloco/apto, `condominio_id`, `tenant_slug` | `login_unidade()` faz `session.clear()` |
+| Parceiro | `parceiro_id` | `parceiro_login` faz `session.clear()` |
+
+`get_current_user()` e `get_unidade_logada()` recusam se `session['condominio_id']` divergir do registro (Super Admin é exceção: opera sem tenant obrigatório).
+
+Decorators de equipe local exigem `condominio_id` preenchido e chamam `_sincronizar_sessao_tenant`.
+
+### o que é global de propósito
+
+`Parceiro` e `Cupom` **não** têm `condominio_id`. Um parceiro ativo aparece para moradores de todos os clientes. `ResgateCupom` isola métricas só indiretamente (pela unidade).
+
+### seed de transição
+
+`_seed_condominio_transicao`:
+
+- se não houver condomínio, cria `"PRP Condomínio"` + `ConfiguracaoCondominio`;
+- garante `slug=prp` no legado;
+- backfill de `condominio_id` em unidades, usuários (exceto `superadmin`), agendamentos e logs;
+- chama `_seed_superadmin()`: se não existir Super Admin, cria `username=superadmin` com senha definida no código de seed. **Trocar imediatamente** em qualquer ambiente compartilhado.
+
+`_migrar_sindico_agrupamentos` lê a coluna SQLite legado `bloco_responsavel` (já removida do model) e cria `SindicoAgrupamento`.
+
+---
+
+<a id="autenticacao"></a>
+
+## autenticação, sessão e recuperação de senha
+
+### portas de entrada
+
+| URL | Quem |
+|---|---|
+| `/c/<slug>/login` | Morador (bloco/apto/senha) e equipe (username/senha) no mesmo tenant |
+| `/c/<slug>/sindico/login` | Síndico (alias; equipe também entra pela aba equipe) |
+| `/sindico/login`, `/admin/login` | Legado → PRP / tenant da sessão |
+| `/superadmin/login` | Só `role=superadmin` |
+| `/parceiro` e `/parceiro/login` | Parceiro (`usuario_login` ou e-mail) |
+
+Cadastro público: `/c/<slug>/verificar-unidade` e `/c/<slug>/cadastro-inicial`. Aliases `/verificar-unidade` e `/cadastro-inicial` redirecionam para o slug `prp`.
+
+Equipe autenticada no POST de `tenant_login` é filtrada por `condominio_id == condominio.id` **e** role em admin/assistente/síndico/porteiro — um admin do condomínio A não entra pelo slug do B com o mesmo username (usernames são únicos **globalmente** na tabela `usuarios`).
+
+Após login da equipe: síndico → dashboard do síndico; porteiro → portaria; admin → `admin_dashboard`; assistente → `admin_index`.
+
+Unidade `Pendente`: `verificar_unidade` não completa o login; mostra estado pendente. `Aprovada`/`Registrada`: exige senha e vai para `/atualizar-dados`. Sem cadastro (ou `Reprovada`, que é apagada na hora): vai para cadastro inicial, gravando `cadastro_*` na sessão.
+
+### decorators
+
+| Decorator | Efeito |
+|---|---|
+| `superadmin_required` | Só Super Admin; senão `/superadmin/login` |
+| `admin_required` | Admin local com tenant |
+| `admin_or_assistente_required` | Admin ou assistente com tenant |
+| `admin_or_sindico_required` | Kanban de ocorrências |
+| `sindico_required` | Síndico com tenant |
+| `portaria_required` | Porteiro, admin local **ou** Super Admin |
+| `unidade_required` | Injeta `unidade` na view |
+| `parceiro_required` | `session['parceiro_id']` |
+| `acesso_reservas_required` | Unidade ou equipe; **bloqueia porteiro** |
+| `gestao_espacos_required` | Admin, assistente ou síndico |
+
+### recuperação de senha
+
+Anti-enumeração: a mensagem é sempre *"Se o e-mail estiver cadastrado, enviaremos instruções..."*. SMTP falho vira aviso genérico, sem confirmar conta.
+
+- Morador: busca só `Unidade`+`Pessoa` responsável/`proprietario_email` **do `condominio_id` da sessão**. Sem tenant na sessão, não resolve.
+- Parceiro: só tabela `parceiro`, envio se `status==Ativo`.
+- Salts distintos: `recuperacao-morador` / `recuperacao-parceiro`.
+- Token (`URLSafeTimedSerializer`, `max_age=3600`): payload `{"email", "condominio_id"}`. A redefinição usa o tenant **do token**, não o da sessão no clique. Payload legado (e-mail puro) é rejeitado no fluxo do morador.
+- `set_password()` grava `senha_atualizada_em`. Token emitido antes desse instante é recusado (uso único efetivo).
+
+Parceiro: login por `usuario_login`; fallback e-mail; se login vazio no sucesso, preenche com o e-mail. O parceiro **pode editar o e-mail** no perfil; `usuario_login` não é alterado pelo próprio parceiro (Super Admin edita os dois).
 
 ---
 
@@ -239,150 +350,172 @@ O próprio docstring de `app/blueprints/admin.py` documenta esse acoplamento rem
 
 ## modelo de dados
 
-O esquema é organizado em torno de um tenant raiz — `Condominio` — do qual derivam, direta ou indiretamente, todas as demais entidades do sistema.
+Constantes de domínio em `app/models.py`: `Role`, `StatusUnidade`, `StatusDocumento`, `VinculoPessoa`, `StatusAgendamentoMudanca`, `TipoVisitante`, `StatusEncomenda`, `StatusAutorizacaoAcesso`, `PerfilDestinoNotificacao`, `StatusOcorrencia`, `CategoriaOcorrencia`.
 
-### tenant raiz e configuração white-label
+### tenant e white-label
 
-**`Condominio`** é o tenant raiz do SaaS: cada cliente da plataforma é um registro nessa tabela, identificado por um `slug` único (usado nas URLs e no login por tenant) e, opcionalmente, um `cnpj`. Não há hard delete — a desativação de um cliente é feita via soft-delete (campo `ativo`), preservando o histórico.
+**`Condominio`** (`condominio`): `nome`, `slug` único, `cnpj`, `ativo`, `data_cadastro`. Sem hard delete.
 
-**`ConfiguracaoCondominio`** tem relação 1:1 com `Condominio` e concentra tudo que varia entre clientes sem exigir mudança de código — a camada de white-label e regras operacionais:
-- **identidade visual**: `cor_primaria` (aplicada no tema da interface) e `logo_filename` (logo do condomínio).
-- **nomenclatura customizável**: `label_agrupamento` e `label_unidade` permitem que cada condomínio chame seus agrupamentos e unidades pelo termo que preferir (por padrão, "Bloco" e "Apto"), além de `usa_agrupamentos` (liga/desliga o conceito de agrupamento) e `tem_subsindicos` (habilita síndicos por agrupamento).
-- **fluxo de aprovação de mudança**: `fluxo_aprovacao_mudanca` alterna entre `"Simples"` (aprovação direta) e `"Dupla"` (aprovação em duas etapas — síndico e depois administração), refletido nos status intermediários de `AgendamentoMudanca`.
+**`ConfiguracaoCondominio`**: `label_agrupamento`, `label_unidade`, `usa_agrupamentos`, `tem_subsindicos`, `fluxo_aprovacao_mudanca` (persistido; runtime de mudança ainda é duplo), `cor_primaria` (`#RRGGBB`, default `#0d6efd`), `logo_filename`.
 
-### identidade e acesso
+**`SindicoAgrupamento`**: `usuario_id`, `condominio_id`, `nome_agrupamento`. Um síndico pode ter vários blocos.
 
-- **`Usuario`** — conta de acesso da equipe operacional (super admin da plataforma, admin, assistente, síndico ou porteiro), com papel definido por `role` e vínculo a um condomínio.
-- **`Unidade`** — a unidade habitacional (bloco + apartamento) que representa o "tenant do morador": tem login próprio (senha), passa por um fluxo de status (pendente → aprovada/registrada ou reprovada) e centraliza os documentos de comprovação de posse/locação.
-- **`Pessoa`** — moradores vinculados a uma unidade, com vínculo (proprietário, locatário ou morador) e indicação de responsável/autorização de interfone.
-- **`Veiculo`** — veículos cadastrados por unidade, para controle de acesso.
-- **`SindicoAgrupamento`** — associação N:N entre um `Usuario` síndico e os agrupamentos (blocos) de um condomínio sob sua responsabilidade, substituindo o antigo campo único `bloco_responsavel` por um modelo 1:N.
+### identidade
 
-### portaria
+**`Usuario`**: `username` único global, `password_hash`, `role`, `condominio_id` (NULL só Super Admin), `senha_atualizada_em`. Propriedades `is_superadmin`, `is_admin`, `is_sindico`, `is_assistente`, `is_porteiro`.
 
-- **`Visitante`** — cadastro de visitante ou prestador de serviço, com documento único por condomínio (não global).
-- **`RegistroAcesso`** — log transacional de entrada/saída de um visitante na portaria, associado à unidade visitada e ao(s) porteiro(s) responsável(is) pela entrada e pela saída.
-- **`Encomenda`** — pacote recebido na portaria para uma unidade, com rastreamento de status (pendente/entregue) e dos porteiros de recebimento e entrega.
-- **`AutorizacaoAcesso`** — autorização prévia criada pelo próprio morador para liberar a entrada de um visitante/prestador em data futura, com status próprio (pendente, concluída, cancelada).
+**`Unidade`**: `condominio_id`, `bloco`, `apartamento`, senha, `status`, datas, documentos (`documento_drive_id/url/status`, `contrato_locacao_*`), proprietário externo, `notificacao_sindico`, `senha_atualizada_em`. Relacionamentos: pessoas, veículos, resgates, mudanças, acessos, encomendas, ocorrências.
 
-### operação
+**`Pessoa`**: nome, CPF, vínculo, telefone, e-mail, parentesco, nascimento, `is_responsavel`, `autoriza_interfone`.
 
-- **`EspacoComum`** — área comum reservável (salão de festas, churrasqueira etc.), com regras de gestão (por síndico ou administração), vínculo opcional a um bloco específico e valor de reserva.
-- **`Reserva`** — reserva de uma unidade sobre um `EspacoComum` em uma data, com status e valor pago.
-- **`AgendamentoMudanca`** — solicitação de entrada/saída de mudança de uma unidade, com fluxo de status que varia conforme a configuração de aprovação simples ou dupla do condomínio, e registro do porteiro que recebeu a mudança.
-- **`Ocorrencia`** — chamado de helpdesk/livro digital de ocorrências aberto por uma unidade, categorizado e com acompanhamento de status até resolução.
-- **`Notificacao`** — alerta interno trocado entre portaria e moradores, direcionado por perfil de destino.
-- **`LogAuditoria`** — trilha de auditoria de ações realizadas por usuários da equipe operacional.
+**`Veiculo`**: placa, marca, cor.
 
-### clube de vantagens
+### áreas comuns
 
-- **`Parceiro`** — empresa parceira cadastrada na plataforma, com seu próprio login, categoria, descrição e status de aprovação.
-- **`Cupom`** — cupom de desconto/benefício oferecido por um parceiro, com prefixo de código, validade e limites de uso (total e por unidade).
-- **`ResgateCupom`** — registro transacional do resgate de um cupom por uma unidade, com código único gerado e controle de utilização.
+**`EspacoComum`**: `condominio_id`, `nome`, `tipo`, `gerenciado_por` (`admin` ou síndico), `bloco_vinculado`, `apenas_moradores_bloco`, `dias_funcionamento` (csv `seg,ter,...`), `valor_reserva`.
 
-### estado de transição multi-tenant
+**`Reserva`**: `espaco_id`, `unidade_id` nullable (gestão pode criar sem unidade), `data_reserva`, `status` (Pendente/Aprovada/Recusada/Cancelada), `motivo_reserva`, `valor_pago`. Conflito de data no mesmo espaço: `_existe_reserva_ativa` com lock no espaço — **sem** índice único parcial.
 
-O sistema nasceu single-tenant (um único condomínio, "PRP") e está em processo de evolução para multi-tenant completo, o que se reflete diretamente no esquema:
+### clube (global)
 
-- nas tabelas **herdadas do sistema legado** — `usuarios`, `unidades`, `agendamentos_mudanca`, `logs_auditoria`, `espacos_comuns` — a coluna `condominio_id` é **nullable**, adicionada via `ALTER TABLE` em tempo de boot (funções `_garantir_colunas_*` em `app/__init__.py`), com comentários no código indicando que ainda "estão em transição".
-- nas tabelas **construídas já pensando em multi-tenant** — `Visitante`, `RegistroAcesso`, `Encomenda`, `AutorizacaoAcesso`, `Notificacao`, `Ocorrencia` — `condominio_id` já é **NOT NULL** desde a criação, garantindo isolamento estrito por design.
-- no boot da aplicação, a função de seed (`_seed_condominio_transicao`) garante a existência de um condomínio "Cliente Nº 1" com `slug="prp"` (criado automaticamente se a tabela `condominio` estiver vazia) e faz o **backfill** de `condominio_id = <id do PRP>` em todas as linhas legadas que ainda estejam com o campo nulo — exceto usuários com `role="superadmin"`, que permanecem propositalmente sem tenant, já que o super admin opera na camada da plataforma, acima de qualquer condomínio individual.
+**`Parceiro`**: empresa, `usuario_login`, `email`, senha, contato, categoria, endereço, descrição HTML, logo, Instagram/Facebook, `ativo` legado + `status` Pendente/Ativo/Bloqueado, `senha_atualizada_em`.
 
-### isolamento global do clube de vantagens
+**`Cupom`**: prefixo, validade, `limite_total`, `limite_por_unidade` (default 1), `total_resgatado` (contador atômico), `data_desativacao`. Sem reativação.
 
-`Parceiro` e `Cupom` são, por design, entidades **globais**: não possuem coluna `condominio_id`. Um parceiro comercial cadastrado na plataforma — e os cupons que ele emite — ficam visíveis e resgatáveis por moradores de **todos** os condomínios clientes, não apenas de um tenant específico. É um modelo de negócio deliberado (um único catálogo de benefícios compartilhado entre todos os clientes da SaaS), mas que quebra o isolamento estrito de dados que o restante do esquema persegue: não há como um condomínio "esconder" ou restringir catálogo de parceiros de outro.
+**`ResgateCupom`**: `codigo_unico`, `status` Ativo/Utilizado, `data_resgate`, `data_utilizacao`.
 
-O único ponto em que o tenant volta a aparecer nessa cadeia é indireto: `ResgateCupom` não tem `condominio_id` próprio, mas referencia `unidade_id` — e é através de `Unidade.condominio_id` que se torna possível segmentar métricas de resgate por condomínio (ex.: "quantos cupons o condomínio X resgatou"), ainda que o cupom e o parceiro em si continuem sendo recursos compartilhados por toda a base de clientes.
+### operação e portaria
+
+**`LogAuditoria`**: `condominio_id`, `usuario_id`, `mensagem`.
+
+**`AgendamentoMudanca`**: tipo Entrada/Saída, `data_mudanca`, status (Pendente Síndico / Pendente Administração / Aprovada / Rejeitada / Cancelada), `motivo_rejeicao`, `data_chegada`, `porteiro_id`.
+
+**`Visitante`**: único por (`condominio_id`, `documento`); tipo Visitante/Prestador; `empresa` opcional.
+
+**`RegistroAcesso`**: entrada/saída; `porteiro_id` e `porteiro_saida_id`; uma entrada aberta (`data_saida IS NULL`) por visitante travada na aplicação.
+
+**`Encomenda`**: destinatário, transportadora, rastreio, foto, status Pendente/Entregue, porteiros de recebimento/entrega.
+
+**`AutorizacaoAcesso`**: nome, documento, `data_prevista`, tipo, status Pendente/Concluída/Cancelada.
+
+**`Notificacao`**: `perfil_destino` MORADOR (exige `unidade_id`) ou PORTARIA (`unidade_id` nulo), `lida`.
+
+**`Ocorrencia`**: título, descrição, categoria, status Aberto/Em Andamento/Resolvido, `foto_arquivo`.
 
 ---
 
 <a id="fluxos-de-negocio"></a>
 
-## fluxos de negócio
+## fluxos de negócio por papel
 
 ### super admin da plataforma
 
-Login isolado em `/superadmin/login`, restrito a usuários com `Role.SUPERADMIN` (sem vínculo a `condominio_id`). O dashboard (`superadmin_dashboard`) mostra contadores globais: total de condomínios, parceiros ativos e usuários (excluindo o próprio super admin).
+Login `/superadmin/login`. Layout `superadmin_base.html` (sidebar escura). Dashboard: totais globais de condomínios, parceiros ativos e usuários (exceto o próprio papel).
 
-- **onboarding de um novo condomínio (tenant)**: em `/superadmin/condominios` (POST), preenche nome, slug (normalizado e validado como único), CNPJ e a configuração operacional do tenant — rótulos customizáveis (`label_agrupamento`/`label_unidade`, ex. "Bloco"/"Apto" ou "Torre"/"Unidade"), se usa agrupamentos, se tem subsíndicos, o fluxo de aprovação de mudança ("Simples" ou "Dupla") e a cor primária/logo (white-label). Isso cria um `Condominio` + `ConfiguracaoCondominio` na mesma transação.
-- em seguida cria o **primeiro admin local** (`superadmin_condominio_primeiro_admin`), um `Usuario` com `role=ADMIN` vinculado ao `condominio_id` recém-criado — é esse admin que depois cria o restante da equipe (assistente, síndico, porteiro).
-- pode editar dados básicos e configuração depois (`superadmin_condominio_editar` — o slug é imutável) e a identidade visual isoladamente (`superadmin_condominio_whitelabel`).
-- **soft delete de tenant**: `superadmin_condominio_desativar` marca `ativo=False` sem apagar nada; a porta `/c/<slug>/` passa a responder 403 com `condominio_suspenso.html` (`_resposta_condominio_inativo`). `superadmin_condominio_ativar` reverte.
-- **clube de vantagens é catálogo global**, sem `condominio_id` — só o super admin cadastra/edita parceiros (`superadmin_parceiros_criar`/`superadmin_parceiro_editar`), com status inicial "Pendente" e senha padrão `senha123`. Pode bloquear um parceiro (`superadmin_parceiro_bloquear`), o que desativa em massa todos os cupons dele (`Cupom.query...update({"ativo": False})`), ou reativá-lo (`superadmin_parceiro_ativar`). Toda ação de bloqueio/reativação é auditada via `_registrar_auditoria`.
+**Onboarding de cliente** (`POST /superadmin/condominios`): nome, slug (normalizado `[a-z0-9-]+`, único, ≤50), CNPJ, rótulos, flags de agrupamento/subsíndico, fluxo Simples/Dupla (persistido), cor e logo. Cria `Condominio` + `ConfiguracaoCondominio` na mesma transação.
 
-### admin/assistente do condomínio
+Em seguida, **primeiro admin local** (`POST .../primeiro-admin`): `Usuario` `role=admin` amarrado ao `condominio_id`. É esse admin quem cria assistente, síndico e porteiro.
 
-Login pela aba "equipe" do login unificado do tenant (`tenant_login`, `/c/<slug>/login?tab=equipe`), autenticado por `username`+senha com `role` em ADMIN/ASSISTENTE/SÍNDICO/PORTEIRO e `condominio_id` da própria porta de entrada.
+Edição posterior: dados e config (`slug` imutável); white-label isolado; desativar (`ativo=False`) / reativar. Slug desativado responde a tela de suspensão.
 
-- **dashboard executivo** (`admin_dashboard`, só ADMIN): KPIs escopados por `condominio_id` — unidades registradas, aguardando registro (aprovadas mas sem doc validado), documentos pendentes (considerando também contrato de locação quando o responsável é locatário) — e três gráficos (cadastros por bloco, série temporal de 30 dias, proporção por status).
-- **fila operacional** (`admin_index`, ADMIN ou ASSISTENTE): lista unidades "Aguardando registro" (já aprovadas pelo síndico) e "Finalizadas", além da lista de síndicos e de toda a equipe com acesso.
-- **fluxo de validação documental do morador** (o elo entre aprovação do síndico e liberação plena do app): depois que o síndico aprova a unidade (`StatusUnidade.APROVADA`), ela cai na fila do admin, que confere o documento pessoal e/ou o contrato de locação enviados e marca cada um como `ENTREGUE` (`admin_validar_documento`, `admin_validar_contrato_locacao`, ou os dois juntos em `admin_validar_documentos`; pode também reverter manualmente via `admin_atualizar_status_documentos`). Só então marca a unidade como `REGISTRADA` (`admin_registrar`), único ponto que faz essa transição — fechando o onboarding.
-- gestão de unidades: redefine senha da unidade (`admin_unidade_alterar_senha`), apaga cadastro por completo liberando a unidade para novo registro (`admin_excluir_unidade`, exclusivo de ADMIN), e mantém dados do proprietário para unidades alugadas (`admin_salvar_proprietario`).
-- gestão de equipe: cria assistente/síndico/porteiro (`admin_criar_usuario` — síndico exige escolha de bloco responsável, que gera um `SindicoAgrupamento`), redefine senha de síndico (`admin_alterar_senha_sindico`) e revoga acessos (`admin_excluir_usuario`, não pode revogar a si mesmo, restrito a assistente/síndico/porteiro).
-- **ocorrências**: kanban (`admin_ocorrencias`, compartilhado com o síndico via `admin_or_sindico_required`) com colunas Aberto/Em Andamento/Resolvido; a transição de status é feita em `admin_ocorrencias_atualizar_status`, protegida por `condominio_id` (anti-IDOR) e auditada.
-- **mudanças (segunda instância de aprovação)**: quando o síndico aprova uma solicitação de mudança, ela vira `PENDENTE_ADMINISTRACAO`; o admin aprova definitivamente (`APROVADA`) ou rejeita com motivo obrigatório em `admin_mudancas`. O admin também pode cadastrar uma mudança já aprovada diretamente (bypass do fluxo do morador/síndico), respeitando a mesma regra de antecedência mínima de 3 dias e proibição de domingo (`_validar_data_mudanca`).
-- **clube de vantagens (somente leitura)**: `admin_clube_vantagens` mostra analytics (cupons por parceiro, resgates por bloco, evolução, top unidades, taxa de conversão) escopados ao próprio condomínio — a mutação de parceiros/cupons é exclusiva do super admin.
-- **reservas**: quando logado como ADMIN/ASSISTENTE, gerencia os espaços com `gerenciado_por="admin"` — aprova/recusa (`responder_reserva`), cria reserva já aprovada diretamente (`criar_reserva_gestao`), atualiza pagamento (`atualizar_pagamento_reserva`, que auto-aprova quando o valor pago atinge o valor da reserva) e cancela (`cancelar_reserva`).
+**Parceiros globais:** criar (status `Pendente`, senha inicial `senha123` informada no flash), editar, bloquear (desativa cupons da vitrine em massa) e reativar. Auditoria em bloqueio/reativação.
+
+Logo do condomínio aceita png/jpg/jpeg/gif/webp/**svg** (`_LOGO_EXTENSIONS`) — pendência de XSS em SVG (ver achados). Logo de parceiro **não** aceita SVG.
+
+### admin e assistente do condomínio
+
+Login na aba equipe de `/c/<slug>/login`. Layout `base.html` com cor/logo do tenant.
+
+**Só admin**
+
+- Dashboard executivo (`/admin/dashboard`, Chart.js): unidades registradas, aguardando registro, documentos pendentes (inclui contrato se o responsável é locatário), cadastros por bloco, série de 30 dias, proporção de status — tudo filtrado por `condominio_id`.
+- Validação documental: marcar comprovante e/ou contrato `Entregue`, ou ajustar status manualmente.
+- Equipe: criar assistente/síndico/porteiro (síndico exige bloco → `SindicoAgrupamento`); alterar senha desses papéis (não a própria nesta tela); revogar acesso (não autoexclusão).
+- Clube: **somente analytics** do próprio condomínio (`admin_clube_vantagens`). Sem CRUD de parceiro.
+- Menu Portaria (com botão voltar ao painel no `portaria_base.html`).
+- Botão Excluir/Resetar cadastro na UI; a rota até aceita assistente no decorator, mas a view devolve “Acesso negado” se `role != admin`. Bloqueia se houver encomenda `Pendente`.
+
+**Admin e assistente**
+
+- Fila `/admin`: abas Aguardando Registro (`Aprovada`), Cadastros Finalizados (`Registrada`), Gestão de Síndicos; aba Equipe só admin.
+- `POST /admin/registrar/<id>`: `Aprovada` → `Registrada`.
+- Alterar senha da unidade.
+- Mudanças: segunda instância (UPDATE condicional) e criação avulsa já `Aprovada`, com as mesmas regras D+3 / domingo.
+- Reservas dos espaços `gerenciado_por=admin`.
+
+**Ocorrências:** admin e síndico (`admin_or_sindico_required`). Síndico só vê/atualiza unidades dos seus agrupamentos.
 
 ### síndico
 
-Login próprio por tenant (`/c/<slug>/sindico/login`), escopado por `condominio_id` **e** por jurisdição de bloco/agrupamento, guardada em `SindicoAgrupamento` (um síndico pode responder por um ou mais blocos).
+Login `/c/<slug>/sindico/login` ou aba equipe. Jurisdição: `_sindico_gerencia_bloco` / `_blocos_codigo_sindico` a partir de `SindicoAgrupamento`.
 
-- **dashboard** (`sindico_dashboard`): monta um mapa de todos os apartamentos dos blocos sob sua jurisdição, com status "Aguardando Morador" (sem cadastro), Pendente, Aprovada ou Registrada.
-- **aprovação do cadastro inicial do morador** — o coração do fluxo do síndico, com três granularidades:
-&nbsp;&nbsp;// `sindico_aprovar`: aprova a unidade inteira de uma vez (`PENDENTE` → `APROVADA`).
-&nbsp;&nbsp;// `sindico_reprovar`: reprova a unidade inteira ainda pendente, **excluindo** o cadastro (a unidade volta a "Aguardando Morador").
-&nbsp;&nbsp;// `sindico_reprovar_pessoa`: reprova/exclui **um morador específico** dentro de uma unidade pendente (exige motivo dentre 3 opções válidas), grava um aviso na tela da unidade (`_adicionar_notificacao_sindico`, campo `notificacao_sindico`) e envia e-mail de reprovação ao responsável.
-&nbsp;&nbsp;// `sindico_validar_unidade`: fluxo granular completo numa única submissão — o síndico marca quais moradores da unidade reprova (motivo obrigatório para cada um) e aprova os demais; se sobrar ao menos um morador aprovado, a unidade vira `APROVADA` (e-mail de sucesso ou de "validação parcial" se houve reprovados); se **todos** forem reprovados, a unidade inteira é excluída.
-- **mudanças** (`sindico_mudancas`): aprova (`PENDENTE_SINDICO` → `PENDENTE_ADMINISTRACAO`, repassando ao admin) ou rejeita com motivo as solicitações de mudança dos moradores dos seus blocos.
-- **reservas**: gerencia os espaços vinculados ao seu agrupamento (`gerenciado_por="sindico"`) com as mesmas ações do admin (aprovar/recusar, criar direto, pagamento, cancelar), mas restrito à própria jurisdição (`_sindico_gerencia_bloco`).
-- toda ação de aprovação/reprovação/mudança fica registrada em auditoria (`_registrar_auditoria`).
+Dashboard: mapa de todos os aptos dos blocos (planta PRP), inclusive “Aguardando Morador”. Modal único de validação.
+
+**Validação unificada** (`POST /sindico/validar-unidade/<id>`):
+
+- só unidade `Pendente` do próprio tenant e bloco;
+- checkboxes `pessoas_reprovadas` + `motivo_pessoa_<id>` (três motivos válidos);
+- remove só os marcados; e-mails únicos dos aprovados;
+- se restar ≥1 morador → `Aprovada` + e-mail de sucesso ou validação parcial;
+- se todos recusados **e** documento/contrato já `Entregue` → **não apaga** a unidade (fica `Pendente`, auditoria) — protege dados validados após um Smart Diff crítico;
+- se todos recusados sem documento validado → `delete` da unidade (mapa volta a aguardar).
+
+Rotas pontuais `sindico_aprovar` / `sindico_reprovar` / `sindico_reprovar_pessoa` ainda existem; o fluxo de UI principal é o unificado.
+
+Mudanças: `PENDENTE_SINDICO` → `PENDENTE_ADMINISTRACAO` (ou rejeita com motivo), sempre com UPDATE condicional.
+
+Reservas: só espaços cujo `bloco_vinculado` está na jurisdição.
 
 ### porteiro
 
-Login também pela aba "equipe" do `tenant_login`, com `role=PORTEIRO`. Dashboard (`portaria_dashboard`) mostra contadores ao vivo: visitantes no local, prestadores no local e encomendas pendentes.
+Dashboard: visitantes no local, prestadores no local, encomendas pendentes, mudanças do dia. Horário operacional em **America/Sao_Paulo** (`zoneinfo`).
 
-**controle de acesso ponta a ponta**:
-1. **entrada manual** (`portaria_acesso_entrada`): porteiro informa documento (normalizado/sem pontuação), nome, tipo (Visitante ou Prestador+empresa) e a unidade de destino. O sistema cria ou reaproveita o `Visitante` pelo documento, bloqueia uma segunda entrada se já houver uma em aberto para a mesma pessoa, grava o `RegistroAcesso` com horário local de São Paulo e o porteiro responsável, e **dispara notificação automática ao morador** da unidade ("Chegada na portaria — o visitante/prestador X acabou de entrar").
-2. **entrada expressa via autorização prévia do morador** (`portaria_acesso_autorizada`): valida que existe uma `AutorizacaoAcesso` pendente para o dia, reaproveita/cria o `Visitante` pelo documento da autorização, cria o `RegistroAcesso`, marca a autorização como `CONCLUIDA` e dispara a mesma notificação ao morador.
-3. **saída** (`portaria_acesso_saida`): fecha o `RegistroAcesso` em aberto (`data_saida` + `porteiro_saida_id`).
+**Acesso**
 
-**encomendas ponta a ponta**:
-1. **recebimento** (`portaria_encomendas_receber`): registra destinatário, transportadora, código de rastreio e foto do pacote (upload), status `PENDENTE`; notifica o morador ("Nova encomenda").
-2. **lembrete** (`portaria_encomendas_notificar`): reenvia notificação, só permitido para encomendas ainda pendentes.
-3. **entrega** (`portaria_encomendas_entregar`): marca `ENTREGUE`, registrando porteiro e horário.
+1. Entrada manual: documento normalizado (alfanumérico), nome, tipo, unidade. Reusa `Visitante` pelo documento do tenant; lock no visitante; recusa segunda entrada aberta; notifica o morador.
+2. Entrada por autorização: `AutorizacaoAcesso` pendente do dia → cria registro, marca autorização `Concluída`, notifica.
+3. Saída: preenche `data_saida` + `porteiro_saida_id`.
 
-- **mudanças**: `portaria_mudanca_chegar` registra a chegada do caminhão no dia agendado — só aceito se a mudança já estiver `APROVADA` (passou pelas duas aprovações) e for exatamente o dia marcado.
-- todas as ações relevantes (entrada, saída, encomenda, chegada) são auditadas.
+**Encomendas:** receber (foto PNG/JPG/WEBP ≤2MB, rastreio), reenviar notificação só se pendente, entregar. Leitura de QR (`html5-qrcode`) na tela.
+
+**Mudança:** check-in só se `Aprovada`, **na data de hoje** (São Paulo), sem `data_chegada` prévia. `/portaria/mudancas` redireciona ao dashboard.
+
+Admin e Super Admin podem abrir a portaria; o template oferece volta ao painel correspondente (`role == 'admin'` | `'superadmin'` — não existe `current_user.perfil`).
 
 ### morador (unidade)
 
-**onboarding ponta a ponta**:
-1. Acessa `/c/<slug>/login`, informa bloco+apartamento (`verificar_unidade`). Se a unidade não tem cadastro (ou estava `REPROVADA` — nesse caso é excluída na hora), é redirecionado a `cadastro_inicial`.
-2. Preenche `cadastro_morador.html`: pessoas do domicílio (com vínculo Proprietário/Locatário/Morador), veículos, dados do proprietário quando o responsável é locatário, e define a senha da unidade. `salvar_cadastro` cria a `Unidade` com status `PENDENTE`.
-3. Aguarda a aprovação do síndico do seu bloco (aprovação total, granular por pessoa, ou reprovação) — se reprovado, recebe e-mail com o motivo.
-4. Uma vez `APROVADA`, o morador já consegue logar normalmente (login passa a exigir senha) e usar `atualizar_dados`; documento pessoal e/ou contrato de locação ficam pendentes até o admin validá-los.
-5. O admin marca a unidade como `REGISTRADA` (`admin_registrar`), concluindo o onboarding.
-6. A qualquer momento o morador pode reenviar/editar seus dados (`atualizar_dados`/`salvar_cadastro` em modo atualização). Alterações consideradas sensíveis — troca de responsável/proprietário, ou inclusão/remoção de morador ou veículo — fazem a unidade **voltar automaticamente para `PENDENTE`** (`_requer_nova_aprovacao_sindico`), reabrindo o ciclo de aprovação do síndico.
+1. `/c/<slug>/login` → bloco+apto.
+2. Sem cadastro → formulário (`cadastro_morador.html` em `auth_base.html`): pessoas, veículos, senha ≥6, dados do dono se locatário. `salvar_cadastro` cria `Unidade` `Pendente` no `cadastro_condominio_id` da sessão.
+3. Síndico valida.
+4. `Aprovada`: login com senha; app liberado; documentos ainda podem estar pendentes na administração.
+5. Admin marca `Registrada`.
+6. Atualização: ver [Smart Diff](#smart-diff).
 
-**uso do app depois de aprovado/registrado**:
-- **clube de vantagens**: navega cupons ativos de parceiros (catálogo global), resgata respeitando `limite_total` da oferta e `limite_por_unidade`; o resgate gera um código único no formato `PRP-<BLOCO><APTO>-<PREFIXO>-<SUFIXO>`, usado depois na validação pelo parceiro.
-- **reservas**: vê os espaços disponíveis para sua unidade (respeitando `apenas_moradores_bloco`/`bloco_vinculado`), solicita reserva (`Pendente`) e recebe e-mail quando o síndico/admin aprova ou recusa.
-- **mudanças**: solicita entrada/saída com no mínimo 3 dias de antecedência e nunca aos domingos (`_validar_data_mudanca`); a solicitação nasce `PENDENTE_SINDICO` → aprovação do síndico → `PENDENTE_ADMINISTRACAO` → aprovação definitiva do admin → `APROVADA`. Pode cancelar enquanto ainda pendente.
-- **autorizações de acesso**: pré-cadastra um visitante/prestador esperado com data prevista, o que notifica a portaria; no dia, o porteiro faz o check-in expresso a partir dessa autorização. O morador pode cancelar enquanto ainda estiver `PENDENTE`.
-- **ocorrências**: abre chamados com categoria (Manutenção/Reclamação/Sugestão/Outros) e foto opcional; acompanha o andamento (Aberto/Em Andamento/Resolvido) conforme admin/síndico atualizam o kanban.
-- **notificações**: recebe avisos de chegada na portaria, novas encomendas/lembretes e avisos do próprio síndico (removíveis da tela via `limpar_notificacao_sindico`).
+Depois de aprovado/registrado: clube, reservas, mudanças (cancelar só enquanto pendente), autorizações, ocorrências (foto opcional), notificações, limpar aviso textual do síndico (`notificacao_sindico`).
 
-### parceiro comercial
+Ocorrências exigem unidade `Aprovada` ou `Registrada` (`_unidade_pode_abrir_ocorrencia`).
 
-- **cadastro** é feito exclusivamente pelo super admin (`superadmin_parceiros_criar`), com status inicial `Pendente` e senha padrão `senha123`.
-- **login isolado** em `/parceiro` (sessão própria `parceiro_id`, sem relação com `condominio_id`/tenant — é um catálogo compartilhado entre todos os condomínios).
-- enquanto `status="Pendente"`, o dashboard exibe apenas a tela `parceiro_pendente.html`; o próprio parceiro precisa clicar para **ativar seu cadastro** (`parceiro_aprovar`, que muda status para `Ativo`) antes de operar cupons.
-- uma vez `Ativo`: dashboard mostra métricas (cupons ativos, total de validações, histórico de resgates).
-- **gestão de cupons**: cria (`parceiro_cupons_criar` — título, descrição em rich-text sanitizado, prefixo do código, validade, limite total e limite por unidade) e desativa permanentemente (`parceiro_cupons_desativar` — não há reversão).
-- **validação do resgate**: recebe do morador (presencialmente ou por telefone) o código único gerado no resgate, digita em `parceiro_validar_codigo`; o sistema confere que o código pertence a este parceiro e está `Ativo`, e muda para `Utilizado`.
-- mantém o próprio perfil comercial (nome, contato, categoria, descrição, redes sociais, logo) via `parceiro_perfil_editar`, e tem fluxo próprio de recuperação de senha por token (`parceiro_esqueci_senha`/`parceiro_redefinir_senha`).
-- pode ser **bloqueado pelo super admin** (`status="Bloqueado"`), o que desativa em massa todos os seus cupons e impede login funcional (mensagem de suspensão); reativado depois via `superadmin_parceiro_ativar`.
+---
+
+<a id="smart-diff"></a>
+
+## smart diff — atualização de cadastro
+
+Objetivo: o morador corrige telefone ou CPF **sem** reabrir aprovação do síndico.
+
+O diff roda **antes** de persistir, comparando o POST com o snapshot no banco (`_requer_nova_aprovacao_sindico`). `_salvar_pessoas_veiculos` continua apagando e recriando pessoas/veículos; por isso o snapshot precisa ser anterior ao save.
+
+**Silencioso** (mantém `Aprovada`/`Registrada`): contato; dados pessoais de quem já existia; marca/cor do veículo com a **mesma placa**; telefone/e-mail do proprietário externo sem troca de nome.
+
+**Crítico** (volta `Pendente`):
+
+- `_houve_add_remove_pessoas` — conjunto de IDs (campo oculto `pessoa_{i}_id`); sem IDs, pareamento por CPF ou nome+nascimento;
+- `_houve_add_remove_veiculos` — conjunto de placas normalizadas;
+- `_houve_mudanca_proprietario_ou_responsavel` — troca de responsável, vínculo, locatário↔não locatário, ou nome do dono externo.
+
+`_validar_ids_pessoas_unidade` impede ID de outra unidade no form.
+
+Flash crítico vs. silencioso; `data_alteracao` sempre atualiza.
 
 ---
 
@@ -390,277 +523,283 @@ Login também pela aba "equipe" do `tenant_login`, com `role=PORTEIRO`. Dashboar
 
 ## clube de vantagens
 
-O clube de vantagens é o módulo que conecta parceiros comerciais (lojas, restaurantes, serviços) aos moradores dos condomínios atendidos pela plataforma, oferecendo cupons de desconto resgatáveis pela unidade e validados presencialmente pelo parceiro.
+Módulo anexo: um catálogo para **toda** a instalação. Gestão de parceiros = Super Admin. Admin do condomínio = relatórios do próprio tenant. Parceiro = portal comercial. Morador = vitrine e resgate.
 
-### cadastro e aprovação do parceiro — atenção a uma inconsistência de design
+### ciclo de vida do parceiro
 
-Hoje não existe autocadastro público de parceiro: quem cria a conta é sempre o **super admin**, em `/superadmin/parceiros` (`superadmin_parceiros_criar`, em `app/blueprints/superadmin.py`). Ao criar o registro, o parceiro nasce com `status = "Pendente"` e uma senha padrão fixa (`senha123`), que ele deve trocar depois de logar.
+1. Super Admin cria: `Pendente`, `ativo=True`, senha inicial `senha123`.
+2. Parceiro loga. Enquanto pendente, vê `parceiro_pendente.html` (sem sidebar) com botão que POSTa `parceiro_aprovar` — **o próprio parceiro se ativa** (`status=Ativo`). Não há gate humano obrigatório além de ter recebido usuário/senha.
+3. Super Admin também pode `superadmin_parceiro_ativar`.
+4. Ativo: cupons, validação, perfil (incluindo e-mail, logo, redes, descrição Quill sanitizada).
+5. Bloqueio: `Bloqueado`, `ativo=False`, cupons `ativo=False`; login recusado. Reativação só Super Admin. Cupom individual desativado pelo parceiro **não** volta.
 
-O ponto que merece destaque: **existem dois caminhos distintos para tirar o parceiro do estado "Pendente" e o código não deixa claro qual dos dois é o oficial**:
+Há, portanto, dois caminhos para sair de Pendente. No código atual o status funciona mais como “aceite de onboarding” do que como aprovação compliance. Confirmar intenção de produto antes de tratar como bug.
 
-1. **super admin ativa manualmente** — rota `superadmin_parceiro_ativar` (`app/blueprints/superadmin.py`), que seta `status = "Ativo"` e `ativo = True`, com log de auditoria da ação.
-2. **o próprio parceiro se autoaprova** — ao logar pela primeira vez com `status = "Pendente"`, o `parceiro_dashboard` (`app/blueprints/parceiro.py`) redireciona para o template `parceiro_pendente.html`, que exibe um botão **"Aprovar e Ativar Meu Cadastro"**. Esse botão faz um POST para `parceiro_aprovar`, uma rota protegida apenas por `@parceiro_required` (login de parceiro), **sem nenhuma checagem de permissão de administrador**. O handler simplesmente faz `parceiro.status = "Ativo"; parceiro.ativo = True` e comita.
+### cupom e resgate
 
-Ou seja, qualquer parceiro que receba usuário e senha consegue se autoativar com um único clique, sem qualquer validação humana da plataforma — o estado "Pendente" hoje funciona como uma tela de "aceite de termos", não como um portão de aprovação de fato. Não há como saber pelo código se isso é intencional (uma espécie de onboarding self-service, com o super admin "aprovando" apenas retroativamente/casos de bloqueio) ou um resquício do fluxo antigo que deveria ter sido travado para exigir aprovação humana antes de o parceiro poder criar cupons e aparecer na vitrine dos moradores. Vale confirmar a intenção com o time antes de tratar isso como bug ou como recurso.
+Criação: título, HTML sanitizado (`html_rico_form`: p, br, strong/b, em/i, u), prefixo, validade opcional, limite total opcional, limite por unidade (default 1).
 
-### como o parceiro cria e gerencia cupons
+Vitrine do morador: parceiro `Ativo`, cupom `ativo`, validade, tetos.
 
-Uma vez `Ativo` (por qualquer um dos dois caminhos acima), o parceiro acessa `/parceiro/cupons` e cria ofertas via `parceiro_cupons_criar`, informando:
+`clube_vantagens_resgatar`:
 
-- **título**, **descrição** (HTML rico sanitizado) e **código prefixo** (usado depois na composição do código de resgate) — campos obrigatórios;
-- **data de validade** (opcional; sem data, o cupom não expira);
-- **limite total de resgates** (opcional; em branco, é ilimitado);
-- **limite por unidade** (padrão 1, se não informado ou inválido).
+1. checagens defensivas;
+2. `UPDATE cupom SET total_resgatado = total_resgatado + 1 WHERE id=? AND (limite_total IS NULL OR total_resgatado < limite_total)`;
+3. se `rowcount=0`, oferta esgotada (rollback);
+4. revalida limite por unidade na mesma transação;
+5. gera `PRP-{BLOCO}{APTO}-{PREFIXO}-{SUFIXO}` (até 20 tentativas); falha de código faz rollback para não consumir a vaga;
+6. `ResgateCupom` `Ativo`.
 
-O cupom nasce `ativo = True`. A desativação (`parceiro_cupons_desativar`) é **permanente** — não existe rota para reativar um cupom desativado, apenas para criar um novo. O parceiro também acompanha, por cupom, o total resgatado e o total já validado (`_metricas_resgates_por_cupom`), e vê um histórico dos últimos 20 resgates no dashboard.
+QR no cliente (`qrcode.js`) aponta para `/parceiro/validacao?codigo=...`.
 
-### como o morador resgata
+Validação: código existe, cupom é deste parceiro, status ainda `Ativo` → `Utilizado` + `data_utilizacao`. Sem reversão. Quem tem o código, valida.
 
-Na tela `clube_vantagens` (`app/routes.py`), o morador logado (`@unidade_required`) vê apenas cupons de parceiros com `status = "Ativo"`, cupons `ativo = True` e ainda dentro da validade. A listagem já filtra no servidor os cupons esgotados: compara o total de resgates do cupom com `limite_total` e o total de resgates *daquela unidade* com `limite_por_unidade`, escondendo o que já bateu o teto.
+Analytics admin local: joins em `Unidade.condominio_id`. Super Admin vê auditoria cruzada da plataforma.
 
-No resgate (`clube_vantagens_resgatar`), as mesmas checagens são refeitas de forma defensiva (cupom ativo, parceiro ativo, validade, limite total, limite por unidade) antes de gravar. O código único é gerado no formato `PRP-{BLOCO}{APARTAMENTO}-{PREFIXO}-{SUFIXO}`, com sufixo de 4 caracteres alfanuméricos aleatórios, tentando até 20 vezes até achar uma combinação inédita em `ResgateCupom.codigo_unico` (colisão praticamente não acontece, mas o código trata o caso). O `ResgateCupom` nasce com `status = "Ativo"`.
+### lacunas de produto (não implementadas)
 
-### como o parceiro valida o código na loja física
+Sem associação Parceiro↔Condomínio; sem cobrança/comissão; autoativação do pendente; analytics de negócio raso; limites estáticos (não “1 por mês”); dependência operacional do Super Admin para onboarding.
 
-Em `/parceiro/validacao`, o parceiro digita o código recebido do morador (`parceiro_validar_codigo`). O sistema busca o `ResgateCupom` pelo `codigo_unico` e confere, nesta ordem: (1) se o resgate existe; (2) se o cupom pertence a esse parceiro (um parceiro não valida código de outro); (3) se o status ainda é `"Ativo"` (evita reuso). Passando nas três checagens, marca `status = "Utilizado"` e grava `data_utilizacao`, exibindo bloco/apartamento da unidade para conferência visual no balcão. Não há reversão de validação nem qualquer conferência de identidade além do próprio código — quem detém o código, resgata.
+---
 
-### catálogo global, sem segmentação por condomínio
+<a id="interface"></a>
 
-`Parceiro`, `Cupom` e `ResgateCupom` **não têm `condominio_id`** — os próprios comentários no `models.py` são explícitos: *"escopo GLOBAL (sem condominio_id)"*. Isso significa que todo parceiro cadastrado pelo super admin aparece para **todos os moradores de todos os condomínios da plataforma** ao mesmo tempo, sem qualquer curadoria ou opt-in por tenant. Não existe hoje o conceito de "este parceiro atende apenas o Condomínio X" nem de o síndico/admin do condomínio escolher quais parceiros aparecem para seus moradores. O único vínculo com o tenant é indireto, via `ResgateCupom.unidade_id → Unidade.condominio_id`, usado exclusivamente para permitir corte por condomínio em relatórios (ex.: a auditoria do super admin já faz `join(Unidade)` para listar os últimos 100 resgates da plataforma).
+## interface, templates e bibliotecas
 
-### lacunas para virar um produto de verdade
+### bases por contexto (não misturar)
 
-Dado que o próprio fundador enquadra isso como uma "segunda frente" — o foco atual é gestão de condomínio —, o código hoje reflete exatamente isso: um módulo funcional em sua mecânica central (cupom → resgate → validação), mas ainda sem a camada de produto/negócio que sustentaria uma operação multi-tenant de parceiros comerciais:
+| Base | Quem | Identidade |
+|---|---|---|
+| `base.html` | morador, síndico, admin, assistente | `--bs-primary` do white-label |
+| `portaria_base.html` | portaria | visual próprio + sino |
+| `parceiro_base.html` | parceiro ativo | verde `--parceiro-brand-dark` |
+| `superadmin_base.html` | plataforma | escuro / accent roxo |
+| `auth_base.html` | login, cadastro, recuperação, suspenso | sem app shell |
 
-- **sem escopo por condomínio.** Não há tabela de associação Parceiro↔Condomínio nem flag de "condomínios atendidos". Qualquer parceiro cadastrado pelo super admin passa a ser visto por moradores de clientes que talvez nem estejam na área de atuação daquele comércio — não há curadoria geográfica nem comercial por tenant.
-- **gate de aprovação inconsistente.** Como descrito acima, o próprio parceiro pode se autoativar sem validação humana da plataforma, o que esvazia o propósito do status "Pendente" como controle de qualidade/compliance antes de o parceiro publicar ofertas.
-- **nenhuma cobrança ou modelo comercial.** Não existe campo de plano, mensalidade, comissão por resgate/validação, nem qualquer rotina de faturamento ligada a parceiro ou cupom — a entidade `Parceiro` não tem nenhum atributo financeiro.
-- **analytics limitado e sem consolidação por condomínio.** O parceiro só enxerga métricas agregadas do próprio negócio (cupons ativos, total de validações, últimos 20 resgates). O super admin tem uma trilha de auditoria simples (últimos 100 resgates da plataforma inteira), mas não há dashboards de conversão, ticket médio, desempenho por condomínio, por bloco, por período, nem exportação de dados — tudo hoje é lista crua, sem agregações de negócio.
-- **sem gestão de identidade/duplicidade entre tenants.** Como o cadastro de parceiro é manual pelo super admin (sem autosserviço), qualquer expansão da base de parceiros depende de trabalho operacional humano — não há fluxo de onboarding self-service para o parceiro se cadastrar e pedir para atender um ou mais condomínios específicos.
-- **sem controle de capacidade/estoque por período.** Os limites existentes (`limite_total`, `limite_por_unidade`) são estáticos e por cupom; não há recorrência (ex.: "1 por unidade por mês") nem estoque reposto automaticamente — esgotado o limite total, o cupom fica indisponível até o parceiro criar um novo, manualmente.
+Sidebars: `nav-pills`, ativo por `request.endpoint`, offcanvas no mobile. Menus de Super Admin **não** entram no `base.html` do cliente (só atalho “Ir para Plataforma” se essa sessão cair ali).
+
+Anti dead-end da portaria: botão voltar conforme `role`.
+
+Padrões: `nav-tabs` em telas densas, modais em vez de tabelas largas, `flash` + alert dismissible, `confirm` em ações perigosas.
+
+Datas: Flatpickr (`type=text` + `.datepicker`), locale pt, valor `Y-m-d`. Evitar `<input type="date">`.
+
+Outras libs CDN: FullCalendar 6 (reservas), Chart.js 4 (dashboards), qrcode.js, html5-qrcode, Quill 1.3 + `quill-rich.js` / sanitização no POST.
+
+Uploads de imagem (ocorrência, encomenda, logo parceiro): png/jpg/jpeg/webp, 2MB, nome aleatorizado.
+
+---
+
+<a id="email"></a>
+
+## e-mail
+
+`app/email_service.py`. Uma conta Gmail (`MAIL_USERNAME` / `MAIL_PASSWORD`) para todos os tenants. Sem fila, timeout 15s, bloqueante no request.
+
+Funções: redefinição (morador/parceiro), reprovação individual (legado), validação sucesso/parcial do síndico, nova reserva, resposta de reserva.
+
+Lote na validação: destinatários = e-mails únicos dos **aprovados**. Falha SMTP não desfaz o commit; só flash.
+
+Assuntos ainda usam o prefixo “PRP Condomínio”, mesmo em instalação white-label.
 
 ---
 
 <a id="integracoes-operacao-limitacoes"></a>
 
-## integração com serviços externos e configuração de ambiente
+## integrações, ambiente e operação
 
-### google drive — fluxo oauth "installed app" e o risco do token.json
+### variáveis (`.env`, não versionado)
 
-`app/drive_api.py` integra com o Google Drive usando `google_auth_oauthlib.flow.InstalledAppFlow`, o fluxo oauth 2.0 pensado para aplicações desktop instaladas na máquina do usuário — não para um processo de servidor rodando sem interface gráfica.
+| Variável | Uso |
+|---|---|
+| `SECRET_KEY` | Sessão Flask + tokens. **Obrigatória.** `.env.example` instrui `secrets.token_hex(32)`. |
+| `SQLALCHEMY_DATABASE_URI` | Conexão. Default SQLite. |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | SMTP. Ausentes → `RuntimeError` no envio. |
 
-A função `obter_credenciais()` (linhas 18-41) segue esta lógica:
+Não existe `DATABASE_URL` no código. Arquivos locais no `.gitignore`: `.env`, `client_secret.json`, `token.json`, `*.db`, `instance/`, uploads.
 
-- lê `token.json` do disco (raiz do projeto, `TOKEN_PATH`), se existir, via `Credentials.from_authorized_user_file`.
-- se as credenciais estiverem ausentes/inválidas e houver `refresh_token`, tenta `creds.refresh(Request())` dentro de um `try/except Exception` que descarta qualquer erro e apenas seta `creds = None` — a causa real da falha de refresh (token revogado, expirado, revogação manual pelo usuário, etc.) é silenciada.
-- se ainda assim não houver credenciais válidas, cai em `InstalledAppFlow.from_client_secrets_file(...).run_local_server(port=8080)` — isso abre um servidor local na porta 8080 e espera um humano completar o consentimento oauth num navegador na mesma máquina.
+### Google Drive
 
-Isso é frágil especificamente porque, num servidor de produção sem tela e sem navegador local, **o dia em que o `refresh_token` deixar de funcionar** (revogação manual, token não usado por muito tempo, troca de senha da conta Google, app oauth ainda em modo "testing" no console — que expira refresh tokens em 7 dias, ou o limite de tokens simultâneos por client/usuário do Google) **o fallback automático não existe**: o código tenta abrir um navegador e ocupar a porta 8080 num processo que não tem para quem mostrar isso, travando ou falhando a chamada sem qualquer alerta operacional (o erro de refresh já foi engolido pelo `except Exception` genérico).
+`InstalledAppFlow.run_local_server(port=8080)` — fluxo de aplicativo instalado, inadequado para servidor headless. `DRIVE_FOLDER_ID` hardcoded. Arquivo público (`anyone/reader`). Refresh engolido em `except Exception`.
 
-Outros pontos observados:
+`upload_to_drive()` **não é chamado** por nenhuma rota. `salvar_cadastro` não envia arquivo; só zera ou ignora colunas `*_drive_id`. O admin marca status documental sem conferir um binário no Drive. Risco latente para quando a integração for religada.
 
-- `CLIENT_SECRET_PATH` e `TOKEN_PATH` apontam para dois arquivos na raiz do projeto (`client_secret.json`, `token.json`), listados no `.gitignore` — ou seja, precisam ser provisionados manualmente em qualquer ambiente novo, fora do padrão `.env` usado pelo resto da aplicação.
-- `DRIVE_FOLDER_ID` está hardcoded como constante no código-fonte, não como variável de ambiente — não há como apontar tenants diferentes para pastas diferentes.
-- `upload_to_drive()` concede permissão pública (`{"type": "anyone", "role": "reader"}`) a cada arquivo enviado — qualquer pessoa com o link acessa o documento, sem controle de acesso por condomínio.
-- busca no repositório não encontrou nenhuma chamada a `upload_to_drive()` a partir de rotas/blueprints hoje — o módulo está definido mas não conectado a nenhum fluxo em produção. As colunas que o suportariam já existem no model `Unidade` (`contrato_locacao_drive_id`, `contrato_locacao_url`, `contrato_locacao_status`, adicionadas em `_garantir_colunas_unidades()` em `app/__init__.py`), então a fragilidade descrita acima é um risco latente para quando essa integração for de fato ligada a uma rota.
+### limitações operacionais conhecidas
 
-### envio de e-mail — smtp gmail direto e síncrono, sem fila
+- SMTP síncrono: request pode esperar até 15s; sem retry/fila; um remetente para todos os clientes.
+- SQLite: escritor único; boot com vários workers pode colidir em `_garantir_colunas_*` e seeds (ver achados).
+- Planta de blocos única (PRP) para validação de cadastro de qualquer tenant.
+- Unicidade `bloco+apartamento` global, não por condomínio.
+- Sem CSRF token / Flask-WTF; cookies sem `SESSION_COOKIE_SECURE` explícito (depende do default `SameSite=Lax` do browser).
+- Username de `Usuario` único na plataforma inteira.
 
-`app/email_service.py` não usa fila de mensagens, worker assíncrono nem serviço transacional de e-mail. `_enviar_email()` abre uma conexão `smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15)` diretamente dentro da função chamada pela rota, faz login e `sendmail` de forma bloqueante, e retorna (ou levanta exceção).
+---
 
-Implicações observadas no código:
+<a id="migracoes"></a>
 
-- os pontos de chamada em `app/routes.py` (ex.: `esqueci_senha`, linha ~910; notificação de nova reserva, linha ~1313) envolvem o envio num `try/except Exception`, mas o `except` só é alcançado *depois* que a chamada de rede termina ou estoura o timeout de 15s — ou seja, no pior caso (smtp do gmail lento ou inacessível), a requisição http fica presa por até 15 segundos antes de cair no `except` e mostrar um `flash` de aviso ao usuário.
-- não há retry automático nem fila de reenvio: se o envio falhar (rede instável, limite de envio do gmail, senha de app inválida), a mensagem é simplesmente perdida — o usuário só vê um aviso genérico ("não foi possível enviar o e-mail...") e precisaria repetir a ação manualmente.
-- como não há `Celery`, `RQ` ou qualquer outro worker/fila no `requirements.txt`, todo o custo de latência do smtp (conexão, `STARTTLS`/ssl handshake, login, envio) é pago dentro do ciclo request/response do Flask, no mesmo processo que atende a requisição do usuário.
-- a aplicação inteira usa uma única conta gmail (uma credencial `MAIL_USERNAME`/`MAIL_PASSWORD`) como remetente — em um SaaS multi-tenant, todos os condomínios enviam e-mails a partir da mesma conta, sem isolamento de remetente por tenant.
+## migrações leves e consistência
 
-### variáveis de ambiente
+Não há Alembic. Cada boot introspecta o schema (`inspect`) e faz `ALTER TABLE ... ADD COLUMN` só do que falta — idempotente.
 
-Carregadas via `load_dotenv()` no topo de `app/__init__.py` (arquivo `.env`, não versionado):
+Regras:
 
-- `SECRET_KEY` — chave de sessão/assinatura (`itsdangerous`, tokens de redefinição de senha). **Obrigatória:** o boot falha com `RuntimeError` se estiver ausente (sem fallback hardcoded). Documentada em `.env.example`.
-- `DATABASE_URL` — string de conexão sqlalchemy, com fallback `sqlite:///condominio.db`.
-- `MAIL_USERNAME` / `MAIL_PASSWORD` — credenciais smtp do gmail (`app/email_service.py`). Sem uma delas, `_enviar_email()` levanta `RuntimeError` explícito.
-- arquivos (não variáveis de ambiente, mas configuração externa obrigatória) — `client_secret.json` e `token.json`, na raiz do projeto, exigidos pela integração com o Google Drive.
+- SQLite não relaxa NOT NULL com `ALTER COLUMN`; `_garantir_colunas_reservas` já recriou a tabela (RENAME/CREATE/INSERT/DROP) uma vez para tornar `unidade_id` nullable. Não copiar esse padrão sem necessidade.
+- Evitar `DEFAULT CURRENT_TIMESTAMP` em ADD COLUMN no SQLite.
+- Índices únicos **parciais** (`WHERE status IN (...)`) foram **retirados** do model para caber no MySQL. A exclusão equivalente está na aplicação (`_existe_reserva_ativa`, `_entrada_aberta_visitante`).
+- Soft delete para histórico (cupom, parceiro, condomínio). Hard delete: unidade (admin, sem encomenda pendente) e revogação de usuário da equipe.
 
-O arquivo `.env.example` documenta `SECRET_KEY` (obrigatória) e as credenciais SMTP.
+Nova coluna: campo no model **e** `_garantir_*` correspondente.
 
-### limitações técnicas conhecidas (observadas no código)
+---
 
-- fluxo oauth do Google Drive é o modelo "installed app" (browser local + `run_local_server(porta 8080)`), inadequado para reautenticação num servidor headless sem interação humana.
-- falha no refresh do token do Drive é silenciada (`except Exception: creds = None`) — a causa real do problema se perde antes de cair no fluxo interativo, que por sua vez não tem como funcionar sem um humano com navegador na mesma máquina do processo.
-- `upload_to_drive()` não é chamado por nenhuma rota atualmente (confirmado por busca no repositório) — a integração está pronta no model (`Unidade.contrato_locacao_drive_id/url/status`) mas desconectada; o risco descrito acima só se materializa quando alguém ligar essa funcionalidade a uma rota.
-- `DRIVE_FOLDER_ID` fixo no código e permissão de leitura pública (`"anyone"`, `"reader"`) por arquivo enviado — sem isolamento de pasta/acesso por condomínio (tenant).
-- credenciais do Drive vivem em dois arquivos soltos na raiz do projeto (`client_secret.json`, `token.json`), fora do padrão `.env` usado pelo resto da aplicação — provisionamento manual e não documentado por ambiente.
-- envio de e-mail é 100% síncrono dentro do ciclo request/response, com timeout fixo de 15s por tentativa, sem fila e sem worker assíncrono no projeto (`Celery`/`RQ` ausentes do `requirements.txt`).
-- sem retry automático de e-mail — falha vira apenas um `flash` de aviso ao usuário; a mensagem não é reenviada nem persistida para nova tentativa.
-- uma única conta gmail (`MAIL_USERNAME`) atende a todos os condomínios da instalação — sem isolamento de remetente por tenant.
-- banco de dados padrão é sqlite (`DATABASE_URL` default `sqlite:///condominio.db`), com `connect_args={"timeout": 15}` para mitigar `database is locked` — modelo de escritor único do sqlite é um teto de concorrência para um saas multi-tenant em crescimento.
-- migrações de schema são feitas por dezenas de funções `_garantir_colunas_*()`/`_garantir_tabela_*()` chamadas sequencialmente a cada boot do `create_app()`, cada uma reintrospectando o schema via `inspect(db.engine)` — não há framework de migração versionado (ex.: Alembic), nem rollback; o custo de boot cresce a cada nova função adicionada.
+<a id="catalogo-rotas"></a>
+
+## catálogo de rotas
+
+### núcleo (`routes.py`)
+
+`/`, `/c/<slug>/login`, `/c/<slug>/verificar-unidade`, `/c/<slug>/cadastro-inicial`, aliases legados, `/esqueci_senha`, `/redefinir_senha/<token>`, `/atualizar-dados`, `/salvar-cadastro`, `/limpar-notificacao-sindico`, `/sair`, `/clube_vantagens`, `POST .../resgatar/<id>`, `/reservas` e sub-rotas (solicitar, gestao/criar, responder, pagamento, cancelar, espacos/salvar), `GET /api/reservas/eventos`, `/mudancas`, `/morador/autorizacoes`, `/morador/ocorrencias`, `/notificacoes`.
+
+### superadmin
+
+`/superadmin/login|logout`, `/superadmin`, `/superadmin/condominios` (+ primeiro-admin, whitelabel, editar, desativar, ativar), `/superadmin/parceiros` (+ criar, editar, bloquear, ativar).
+
+### admin
+
+`/admin/login` (redirect PRP), `/admin/logout`, `/admin/dashboard`, `/admin`, clube + analytics (analytics redireciona ao clube), usuarios novo/excluir/alterar-senha, registrar, alterar senha unidade, excluir unidade, validar documentos, salvar proprietário, ocorrências, mudanças.
+
+### síndico
+
+`/c/<slug>/sindico/login`, `/sindico/login` legado, logout, `/sindico`, aprovar/reprovar/reprovar-pessoa/validar-unidade, `/sindico/mudancas`.
+
+### portaria
+
+`/portaria`, `/portaria/dashboard`, logout, acesso (entrada, autorizada, saida), encomendas (receber, entregar, notificar), `POST /portaria/mudanca/<id>/chegar`.
+
+### parceiro
+
+`/parceiro`, `/parceiro/login`, logout, esqueci/redefinir senha, dashboard, validacao, validar_codigo, aprovar, cupons (+ criar, desativar), perfil (+ editar).
 
 ---
 
 <a id="achados-tecnicos-riscos"></a>
 
-## achados técnicos e riscos identificados
+## achados técnicos, sprint de segurança e pendências
 
-Os achados abaixo foram confirmados por verificação adversarial direta no código. Estão organizados por severidade (crítico → alto → médio → baixo) e, dentro de cada nível, agrupados por categoria. Os itens 17 a 21 (dimensão *database-migrations*) não trouxeram campo de severidade explícito na verificação original; a classificação usada para posicioná-los abaixo é uma avaliação própria, feita a partir do impacto descrito no cenário de falha de cada um.
+Verificação adversarial no código. Itens **[CORRIGIDO]** descrevem a falha histórica e o estado atual. Itens sem a tag permanecem abertos.
 
-### status após a sprint de segurança
+### resumo da sprint
 
-A **grande maioria** dos riscos abaixo foi **[CORRIGIDA]** na última sprint de segurança, arquitetura e concorrência. Os títulos marcados com **[CORRIGIDO]** descrevem o cenário histórico (como o código falhava) e a linha **Resolução:** resume como o sistema ficou blindado. Itens **sem** essa tag permanecem abertos / pendentes de hardening.
-
-Resumo do pacote aplicado: `SECRET_KEY` obrigatória no boot; XSS da portaria fora de atributos inline; tokens de reset amarrados a tenant + carimbo `senha_atualizada_em`; `session.clear()` em logins de unidade e parceiro; índices/UPDATE atômicos contra corridas de reserva, cupom, mudança e check-in; e proteções contra perda de documentos / exclusão com encomenda pendente.
+`SECRET_KEY` obrigatória; XSS da portaria fora de JS inline; tokens de reset com tenant + `senha_atualizada_em`; `session.clear()` em unidade e parceiro; corridas de cupom e mudança com UPDATE condicional; trava de aplicação para reserva e visitante (em vez de índice parcial SQLite, por causa do MySQL); documentos validados preservados na reprovação total; exclusão de unidade bloqueada com encomenda pendente; kanban do síndico recortado por bloco.
 
 ### crítico
 
-#### 1. `SECRET_KEY` com fallback hardcoded permite forjar sessão de qualquer papel **[CORRIGIDO]**
-`app/__init__.py` — *categoria: session-forgery*
+#### 1. `SECRET_KEY` com fallback hardcoded **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** se a variável de ambiente `SECRET_KEY` não estiver definida no deploy real, qualquer pessoa com acesso ao código-fonte — que continha o valor literal `"dev-change-me-in-production"` — conseguia forjar um cookie de sessão Flask assinado válido com `session['user_id']` de um super admin. Como `get_current_user()` e `get_unidade_logada()` só refazem a busca pelo id da sessão e nunca revalidam mais nada além do `condominio_id`, o cookie forjado passava simultaneamente em `superadmin_required`, `admin_required`, `sindico_required`, `portaria_required` e `unidade_required` — bypass total de autenticação para qualquer papel.
-- **Resolução:** removido o fallback hardcoded; `create_app()` agora levanta `RuntimeError` se `SECRET_KEY` não estiver no ambiente (ou no `config` de teste). A variável passou a constar como obrigatória em `.env.example`.
+Histórico: fallback `"dev-change-me-in-production"` permitia forjar cookie de qualquer papel.  
+**Agora:** boot aborta sem a variável.
 
-#### 2. XSS armazenado em contexto JavaScript via nome de visitante **[CORRIGIDO]**
-`app/templates/portaria/acesso.html` — *categoria: stored-xss-js-context*
+#### 2. XSS em nome de visitante no `onsubmit` **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** um morador autenticado cadastrava autorização com `nome_visitante` contendo payload JS; o valor era interpolado em `onsubmit="confirm('...')"` na portaria. O Jinja escapava a aspa como entidade HTML, mas o navegador decodificava a entidade antes de executar o atributo como JavaScript — XSS no browser do porteiro, com potencial de `fetch()` autenticado (sem CSRF) em rotas da portaria.
-- **Resolução:** confirmações passaram a usar atributo `data-confirm-mensagem` (contexto HTML escapado pelo Jinja) lido por event listeners JS — sem interpolação em `onsubmit`/`onclick` inline.
+Histórico: interpolação em atributo JS na portaria.  
+**Agora:** `data-confirm-mensagem` + listener; Jinja escapa HTML.
 
 ### alto
 
-#### 3. redefinição de senha do morador não valida o tenant do token **[CORRIGIDO]**
-`app/routes.py` / `app/utils.py` — *categoria: cross-tenant-password-reset*
+#### 3. reset de senha cross-tenant **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** `gerar_token_redefinicao(email, ...)` codificava apenas o e-mail. Com o mesmo e-mail em unidades de dois condomínios e `session['condominio_id']` apontando para outro tenant, `redefinir_senha()` podia trocar a senha da unidade errada.
-- **Resolução:** o payload assinado do token inclui `condominio_id`; `verificar_token_redefinicao()` devolve `(email, condominio_id, emitido_em)` e `redefinir_senha()` resolve a unidade **somente** pelo tenant do token (não pela sessão atual). Links legados sem tenant são rejeitados.
+Token carrega `condominio_id`; resolução usa o tenant do token. Link legado sem tenant é recusado.
 
-#### 4. token de redefinição de senha é reutilizável dentro da janela de validade **[CORRIGIDO]**
-`app/utils.py` / models `Unidade` e `Parceiro` — *categoria: password-reset-token-reuse*
+#### 4. reuso do token na janela de 1h **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** `verificar_token_redefinicao()` só checava assinatura e prazo (`max_age=3600s`). Um link vazado podia ser reutilizado várias vezes na mesma hora, inclusive após a troca legítima de senha. O mesmo padrão existia em `parceiro_redefinir_senha`.
-- **Resolução:** coluna `senha_atualizada_em` em `Unidade` e `Parceiro`, preenchida em `set_password()`. As rotas de reset comparam `emitido_em` do token com esse carimbo e rejeitam links emitidos antes da última troca (uso único efetivo na janela de 1 hora).
+`senha_atualizada_em` em `Unidade`, `Parceiro` e `Usuario`; `set_password()` atualiza o carimbo.
 
-#### 5. upload de logo em SVG permite XSS armazenado público
-`app/blueprints/superadmin.py` — *categoria: unrestricted-file-upload-xss*
+#### 5. upload de logo SVG (XSS armazenado) — **aberto**
 
-- **cenário de falha:** `_salvar_logo_condominio` permite upload de `.svg` como logo do condomínio (`_LOGO_EXTENSIONS` inclui `svg`), sem checagem de conteúdo/magic-bytes, e o arquivo fica publicamente acessível em `/static/uploads/logos/`. Um super admin (ou uma sessão comprometida) envia um SVG contendo `<script>`/`onload` com payload de exfiltração de cookie; `secure_filename()` só normaliza o nome, não o conteúdo. Qualquer visitante — inclusive não autenticado, já que o logo aparece em `login.html`/`tenant_login.html` — que abra a URL do SVG diretamente no navegador faz o navegador renderizar o SVG como documento de topo e executar o script embutido no mesmo domínio da aplicação.
-- **sugestão de correção:** remover `svg` de `_LOGO_EXTENSIONS` (alinhando com o whitelist já usado em `utils.salvar_logo_parceiro`/`_salvar_imagem_upload`, restrito a `{png,jpg,jpeg,webp}`), ou, se SVG for necessário, sanitizar removendo `<script>`/atributos `on*` e servir com `Content-Disposition: attachment` ou CSP que bloqueie script inline.
+`_salvar_logo_condominio` ainda permite `.svg`. O arquivo é público em `/static/uploads/logos/` e aparece no login do tenant. Logo de parceiro já restringe a raster.  
+Sugestão: tirar `svg` da allowlist, ou sanitizar e CSP.
 
-#### 6. corrida em reserva de área comum permite double-booking **[CORRIGIDO]**
-`app/routes.py` / `app/models.py` — *categoria: race-condition*
+#### 6. double-booking de reserva **[CORRIGIDO]** (estratégia atualizada)
 
-- **cenário de falha (histórico):** duas requisições concorrentes reservavam o mesmo `espaco_id`+`data_reserva`; ambas passavam no `SELECT` de conflito e ambas inseriam — double-booking.
-- **Resolução:** índice único parcial `ux_reserva_espaco_data_ativa` em `Reserva` (`espaco_id` + `data_reserva` onde status ∈ Pendente/Aprovada), com tratamento de `IntegrityError` na criação. O banco rejeita a segunda reserva ativa.
+Histórico: duas requisições passavam no SELECT. A documentação antiga citava índice único parcial `ux_reserva_espaco_data_ativa`.  
+**Agora:** esse índice **não existe** (MySQL). `_existe_reserva_ativa` faz `with_for_update()` no `EspacoComum` e consulta reservas Pendente/Aprovada. Comentário equivalente em `_garantir_colunas_reservas`.
 
-#### 7. corrida no resgate de cupom permite exceder limite contratado **[CORRIGIDO]**
-`app/routes.py` — *categoria: race-condition*
+#### 7. corrida no resgate de cupom **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** dois cliques simultâneos faziam `COUNT()` antes do `INSERT` e ultrapassavam `limite_total` / `limite_por_unidade`.
-- **Resolução:** reserva atômica via `UPDATE cupom SET total_resgatado = total_resgatado + 1 WHERE ... total_resgatado < limite_total`, com checagem de `rowcount` e revalidação do limite por unidade na mesma transação (lock de escrita do SQLite).
+`UPDATE` atômico em `total_resgatado` + revalidação do limite por unidade.
 
-#### 8. reprovar todos os moradores de uma unidade já registrada apaga documentos validados **[CORRIGIDO]**
-`app/blueprints/sindico.py` — *categoria: data-loss*
+#### 8. apagar unidade com documentos já Entregue **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** reprovação total em unidade com documentos já `Entregue` executava `db.session.delete(unidade)` e perdia documento/contrato/proprietário validados.
-- **Resolução:** antes da exclusão, `sindico_validar_unidade` verifica se `documento_status` ou `contrato_locacao_status` já estavam `Entregue`; nesse caso a unidade **não** é apagada — permanece `Pendente` com auditoria, preservando os dados documentais.
+`sindico_validar_unidade` mantém a unidade `Pendente` se comprovante ou contrato já estavam `Entregue`.
 
-#### 9. exclusão de unidade deixa encomendas/acessos/ocorrências órfãos **[CORRIGIDO]**
-`app/blueprints/admin.py` / `app/models.py` — *categoria: orphaned-data*
+#### 9. exclusão de unidade com encomenda pendente **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** `admin_excluir_unidade` apagava a unidade sem tratar `Encomenda` pendente; a portaria quebrava ao processar registro órfão.
-- **Resolução:** exclusão administrativa bloqueada enquanto houver encomenda `Pendente` vinculada; relacionamentos de cadastro do morador (`Pessoa`/`Veiculo`/`AgendamentoMudanca`) seguem com cascade; histórico operacional (encomendas/acessos/ocorrências) é tratado como dado de portaria, não apagado às cegas.
+`admin_excluir_unidade` recusa; histórico de portaria não tem cascade cego a partir da unidade.
 
-#### 10. migrações concorrentes (`_garantir_colunas_*`) quebram boot sob múltiplos workers
-`app/__init__.py` — *categoria: concurrent-migration-race* (severidade avaliada: alta)
+#### 10. migrações concorrentes no boot — **aberto**
 
-- **cenário de falha:** como `run.py` chama `create_app()` no nível do módulo, subir com `gunicorn -w 4 run:app` sem `--preload` dispara N processos chamando `create_app()` concorrentemente contra o mesmo SQLite. Se falta, por exemplo, a coluna `notificacao_sindico` em `unidades`, os 4 workers inspecionam o schema quase simultaneamente, todos veem a coluna ausente e todos tentam o mesmo `ALTER TABLE`. O primeiro commita; os demais recebem `sqlite3.OperationalError: duplicate column name`, não capturado em nenhum lugar da cadeia, derrubando `create_app()` e o worker inteiro durante o boot.
-- **sugestão de correção:** rodar as migrações uma única vez antes do fork dos workers (`gunicorn --preload`, ou um comando de migração dedicado executado no deploy antes de subir a aplicação), ou envolver cada `ALTER TABLE` em `try/except OperationalError` ignorando "duplicate column".
+Vários workers chamando `create_app()` podem disputar o mesmo `ALTER TABLE` no SQLite (`duplicate column`) e derrubar o worker.  
+Sugestão: `--preload`, comando de migrate único, ou `try/except OperationalError`.
 
 ### médio
 
-#### 11. sessão mista permite super admin operar portaria de outro condomínio sem selecionar tenant **[CORRIGIDO]**
-`app/auth.py` — *categoria: superadmin-session-tenant-confusion*
+#### 11–12. sessão mista Super Admin / unidade / parceiro **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** super admin autenticado fazia login como morador na mesma aba; `login_unidade()` setava `condominio_id` sem limpar `user_id`/`role`. Rotas de portaria liberavam o super admin operando o tenant da unidade sem seleção explícita.
-- **Resolução:** `login_unidade()` chama `session.clear()` antes de gravar os dados da unidade (espelhando `login_usuario()`), eliminando `user_id`/`role` residuais.
+`session.clear()` em `login_unidade` e no login do parceiro.
 
-#### 12. `login_unidade()` não limpa sessão anterior (session fixation entre papéis) **[CORRIGIDO]**
-`app/auth.py` / `app/blueprints/parceiro.py` — *categoria: session-fixation*
+#### 13. kanban do síndico sem recorte de bloco **[CORRIGIDO]**
 
-- **cenário de falha (histórico):** admin/síndico/porteiro que entrava como unidade sem logout ficava com sessão mista (`admin_required` + `unidade_required` na mesma cookie). O login do parceiro também podia herdar chaves de staff/morador.
-- **Resolução:** `session.clear()` no início de `login_unidade()` e no login bem-sucedido do parceiro (`parceiro_login`), antes de setar apenas as chaves do perfil autenticado.
+Listagem e update usam `_sindico_gerencia_bloco` / join em `Unidade.bloco`.
 
-#### 13. kanban de ocorrências do admin ignora jurisdição de bloco do síndico **[CORRIGIDO]**
-`app/blueprints/admin.py` — *categoria: sindico-jurisdiction-bypass*
+#### 14. enumeração de e-mail por timing — **aberto**
 
-- **cenário de falha (histórico):** síndico de um bloco via/atualizava ocorrências de todo o condomínio no kanban `admin_ocorrencias`.
-- **Resolução:** `admin_ocorrencias_atualizar_status` (e listagem associada) aplica `_sindico_gerencia_bloco` quando `role=SINDICO`, alinhado ao restante do módulo do síndico.
+SMTP só dispara se o e-mail existe; a resposta textual é igual, o tempo não. Vale para morador e parceiro.
 
-#### 14. enumeração de e-mail por tempo de resposta em "esqueci minha senha"
-`app/routes.py` — *categoria: email-enumeration-timing*
+#### 15. CSRF em POSTs destrutivos — **aberto**
 
-- **cenário de falha:** `esqueci_senha()` só dispara o envio de e-mail (SMTP síncrono, timeout=15s) quando o e-mail existe no tenant, retornando a mesma mensagem genérica em ambos os casos — mas quando o e-mail existe a rota demora até 15s (conexão SMTP) e quando não existe retorna quase instantaneamente. Um atacante medindo a latência de `POST /esqueci_senha` consegue enumerar e-mails cadastrados apesar do texto de resposta ser idêntico. O mesmo padrão existe em `parceiro_esqueci_senha`.
-- **sugestão de correção:** igualar o tempo de resposta nos dois ramos (ex.: sempre executar um envio/"descarte" equivalente, ou aplicar um delay constante) para não vazar a existência do e-mail por timing.
+Sem Flask-WTF. `admin_excluir_unidade` e troca de senha da unidade são form POST. Atenuado por `SameSite=Lax` padrão, sem defesa própria da app.
 
-#### 15. ausência de proteção CSRF em ações destrutivas do admin
-`app/blueprints/admin.py` — *categoria: csrf*
+#### 16. corrida aprovar/rejeitar mudança **[CORRIGIDO]**
 
-- **cenário de falha:** não há proteção CSRF em nenhum lugar do projeto (sem Flask-WTF, sem token nos forms) nem `SESSION_COOKIE_SAMESITE`/`SECURE` configurados. `admin_excluir_unidade` apaga permanentemente o cadastro de uma unidade e todos os vínculos de morador; `admin_unidade_alterar_senha` troca a senha de acesso de uma unidade para qualquer valor enviado no form. Ambas são `<form method=post>` sem token anti-CSRF: uma página maliciosa que force um POST enquanto o admin está autenticado consegue excluir uma unidade ou sequestrar o acesso de um morador. O impacto hoje é apenas atenuado pelo comportamento padrão `SameSite=Lax` dos navegadores modernos, já que a aplicação não define nenhuma defesa própria.
-- **sugestão de correção:** adotar Flask-WTF/CSRFProtect (token CSRF em todos os forms POST) e configurar `SESSION_COOKIE_SAMESITE="Lax"`/`"Strict"` e `SESSION_COOKIE_SECURE=True`.
+`UPDATE ... WHERE status = esperado` + `rowcount` no síndico e na administração.
 
-#### 16. corrida na aprovação/rejeição de mudança (síndico e administração) **[CORRIGIDO]**
-`app/blueprints/sindico.py` / `app/blueprints/admin.py` — *categoria: race-condition*
+#### 17. SQLite `database is locked` — **aberto**
 
-- **cenário de falha (histórico):** duplo POST quase simultâneo em aprovar/rejeitar o mesmo agendamento; ambas as requisições passavam na guarda de status e o último commit ganhava, com dois flashes/auditorias “válidas”.
-- **Resolução:** transição via `UPDATE ... WHERE status = <status_esperado>` com verificação de `rowcount` — a segunda requisição concorrente é rejeitada.
+Sem WAL explícito no factory, sem retry em commit, sem `errorhandler` de `OperationalError`. O `timeout=15` citado em versões antigas desta documentação **não** está em `create_app()` hoje.
 
-#### 17. `timeout=15` no SQLite só adia "database is locked", sem WAL nem tratamento
-`app/__init__.py` — *categoria: sqlite-lock-contention* (severidade avaliada: média)
+#### 18. duas entradas abertas do mesmo visitante **[CORRIGIDO]** (estratégia atualizada)
 
-- **cenário de falha:** com vários workers gravando ao mesmo tempo (portaria registrando entradas, morador criando reservas, migrações concorrentes segurando locks durante o boot), uma transação que espera mais de 15s pelo lock exclusivo do arquivo SQLite recebe `sqlite3.OperationalError: database is locked`; como não há `app.errorhandler` para `OperationalError` nem retry ao redor de `db.session.commit()`, essa exceção sobe como 500 não tratado para o usuário no meio de uma ação.
-- **sugestão de correção:** habilitar `PRAGMA journal_mode=WAL` (reduz contenção de escrita) e capturar `OperationalError` ao redor de commits críticos com retry/backoff limitado, além de um `errorhandler` dedicado.
+Índice parcial `ux_registro_acesso_aberto` **removido**. `_entrada_aberta_visitante` usa `with_for_update()` no `Visitante`.
 
-#### 18. `RegistroAcesso` sem constraint contra duas entradas abertas do mesmo visitante **[CORRIGIDO]**
-`app/models.py` / `app/__init__.py` / `app/blueprints/portaria.py` — *categoria: missing-unique-constraint* (severidade avaliada: média)
+#### 19. seed Super Admin/PRP em corrida — **aberto**
 
-- **cenário de falha (histórico):** dois check-ins concorrentes do mesmo visitante criavam duas entradas com `data_saida IS NULL`.
-- **Resolução:** índice único parcial `ux_registro_acesso_aberto` em `(visitante_id) WHERE data_saida IS NULL`, com tratamento de `IntegrityError` nos fluxos de entrada da portaria.
-
-#### 19. seed de superadmin/condomínio legado sem lock — corrida derruba boot com IntegrityError
-`app/__init__.py` — *categoria: seed-race-condition* (severidade avaliada: média)
-
-- **cenário de falha:** `_seed_superadmin` e `_seed_condominio_transicao` fazem check-then-insert (query por existente, senão cria) sem lock. Dois workers sobem ao mesmo tempo contra um banco sem usuário superadmin ainda: ambos veem `None` na query e ambos tentam `add`+`commit`; o segundo commit viola a `UniqueConstraint` de `username`, lança `IntegrityError` não capturada e aborta `create_app()` no meio da sequência de migração daquele worker — pulando inclusive as `_garantir_colunas_*` que viriam depois na mesma chamada, deixando o processo com inicialização parcial.
-- **sugestão de correção:** envolver o check-then-insert do seed em `try/except IntegrityError` (com rollback e continuação do boot), ou mover o seed para um comando de inicialização único executado antes de subir os workers do gunicorn.
+Check-then-insert sem lock; segundo worker pode levar `IntegrityError` no boot.
 
 ### baixo
 
-#### 20. `Reserva` sem `UniqueConstraint(espaco_id, data_reserva)` **[CORRIGIDO]**
-`app/models.py` / migração em `app/__init__.py` — *categoria: missing-unique-constraint*
+#### 20. constraint única de reserva — coberto pelo item 6 (aplicação, não índice parcial).
 
-- **cenário de falha (histórico):** mesmo defeito de fundo do achado #6, visto pelo ângulo do schema.
-- **Resolução:** índice único parcial `ux_reserva_espaco_data_ativa` (ver item #6), criado no model e garantido na migração leve de boot.
+#### 21. f-string com nome de tabela nas migrações — **aberto** (hoje só tuplas fixas; allowlist evitaria regressão).
 
-#### 21. interpolação de nome de tabela via f-string em DDL/DML
-`app/__init__.py` — *categoria: sql-string-interpolation-pattern*
+#### 22. imports mortos em `routes.py` — **aberto**
 
-- **cenário de falha:** `_garantir_colunas_multi_tenant` e `_seed_condominio_transicao` constroem DDL/DML via f-string interpolando o nome da tabela dentro de `text(...)`, em vez de validar o identificador contra uma allowlist. Hoje não é explorável porque `tabela` só vem de tuplas fixas hardcoded no código — mas qualquer refator futuro que derive esse nome de configuração dinâmica ou de parâmetro de rota reintroduziria SQL injection imediatamente, já que nomes de tabela/coluna não podem ser bind parameters em `text()`.
-- **sugestão de correção:** extrair uma função utilitária que valide o nome de tabela contra uma allowlist explícita (ou `Enum`) antes de qualquer interpolação em `text()`, mesmo enquanto os valores só vêm de tuplas hardcoded.
+`from html import escape`, `HTMLParser` e `import re` restam após a extração do sanitizador para `utils.py`. `re` não é usado no arquivo.
 
-#### 22. import morto (`escape`, `HTMLParser`, `re`) remanescente da extração para `utils.py`
-`app/routes.py` — *categoria: dead-import*
+#### 23. `from datetime import date` em `admin.py`
 
-- **cenário de falha:** sem impacto funcional — `_SanitizadorHtmlRico`/`_html_rico_form`, que usavam esses imports, foram extraídos para `app/utils.py` durante o refactor, mas os imports órfãos permaneceram em `routes.py` (confirmado por `pyflakes`). Risco é apenas de manutenção: confusão futura sobre onde a sanitização de HTML realmente vive.
-- **sugestão de correção:** remover os imports não utilizados (`escape`, `HTMLParser`, `re`) de `app/routes.py`.
+O módulo usa `func.date` (SQLAlchemy) e `.date()` de `datetime`. O símbolo `date` importado provavelmente é morto (confirmar com linter).
 
-#### 23. import morto (`date`) em `admin.py`
-`app/blueprints/admin.py` — *categoria: dead-import*
+#### 24. `AgendamentoMudanca` importado em `portaria.py`
 
-- **cenário de falha:** sem impacto funcional — `date` foi copiado junto com o bloco de import original durante a extração das views para o blueprint, mas nenhuma função do módulo o referencia (só `datetime`/`timedelta` são usados).
-- **sugestão de correção:** remover o import não utilizado de `date` em `app/blueprints/admin.py`.
+A view usa `_agendamento_do_tenant` + `StatusAgendamentoMudanca`; o model importado no topo não é referenciado nas views.
 
-#### 24. import morto (`AgendamentoMudanca`) em `portaria.py`
-`app/blueprints/portaria.py` — *categoria: dead-import*
+---
 
-- **cenário de falha:** sem impacto funcional — a única view que trabalha com agendamentos (`portaria_mudanca_chegar`) carrega o registro via `_agendamento_do_tenant` (importado tardiamente de `app.routes`); só `StatusAgendamentoMudanca` é de fato usado no arquivo.
-- **sugestão de correção:** remover o import não utilizado de `AgendamentoMudanca` em `app/blueprints/portaria.py`, mantendo apenas `StatusAgendamentoMudanca`.
+## como usar este documento
+
+- Regras operacionais para o Cursor/agente: `.cursorrules` (mais curto, normativo).
+- Este arquivo: contexto de produto, o “porquê” das decisões, o que a sprint já fechou e o que ainda é dívida.
+- Ao mudar schema: model + `_garantir_*` + forms + isolamento por tenant.
+- Ao mudar rota: preservar o nome do endpoint ou atualizar todos os `url_for`/templates.
+- Ao falar de fluxo de mudança “Simples”: só está persistido; o código de aprovação ainda é duplo.
+- Ao falar de documentos no Drive: colunas prontas, upload desconectado.
