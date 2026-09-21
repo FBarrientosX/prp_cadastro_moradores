@@ -68,16 +68,15 @@
                         </select>
                     </div>
 
-                    {% if exige_senha %}
-                    <div class="mb-3">
+                    <div class="mb-3" id="campo-senha-unidade" {% if not exige_senha %}hidden{% endif %}>
                         <label for="senha" class="form-label">Senha da unidade</label>
-                        <input type="password" class="form-control" id="senha" name="senha" required
-                               minlength="6" autocomplete="current-password">
+                        <input type="password" class="form-control" id="senha" name="senha"
+                               minlength="6" autocomplete="current-password"
+                               {% if exige_senha %}required{% else %}disabled{% endif %}>
                         <div class="form-text">Esta unidade já possui cadastro. Informe a senha para continuar.</div>
                     </div>
-                    {% endif %}
 
-                    <button type="submit" class="btn btn-primary w-100">
+                    <button type="submit" class="btn btn-primary w-100" id="btn-continuar-unidade">
                         {% if exige_senha %}Entrar{% else %}Continuar{% endif %}
                     </button>
                 </form>
@@ -123,10 +122,15 @@
 {% if not pendente %}
 <script>
     const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const STATUS_UNIDADE_URL = {{ url_for('status_unidade', slug=slug) | tojson }};
     const blocoSelect = document.getElementById("bloco");
     const apartamentoSelect = document.getElementById("apartamento");
+    const campoSenha = document.getElementById("campo-senha-unidade");
+    const senhaInput = document.getElementById("senha");
+    const btnContinuar = document.getElementById("btn-continuar-unidade");
     const blocoInicial = {{ bloco | tojson }};
     const apartamentoInicial = {{ apartamento | tojson }};
+    let statusUnidadeController = null;
 
     function popularBlocos() {
         if (!blocoSelect) return;
@@ -164,6 +168,63 @@
         });
     }
 
+    function aplicarEstadoSenha(exigeSenha) {
+        if (!campoSenha || !senhaInput || !btnContinuar) return;
+        if (exigeSenha) {
+            campoSenha.hidden = false;
+            senhaInput.disabled = false;
+            senhaInput.required = true;
+            btnContinuar.textContent = "Entrar";
+        } else {
+            campoSenha.hidden = true;
+            senhaInput.required = false;
+            senhaInput.disabled = true;
+            senhaInput.value = "";
+            btnContinuar.textContent = "Continuar";
+        }
+    }
+
+    function verificarStatusUnidade() {
+        const bloco = blocoSelect ? blocoSelect.value : "";
+        const apartamento = apartamentoSelect ? apartamentoSelect.value : "";
+        if (!bloco || !apartamento) {
+            aplicarEstadoSenha(false);
+            return;
+        }
+
+        if (statusUnidadeController) {
+            statusUnidadeController.abort();
+        }
+        statusUnidadeController = new AbortController();
+
+        const url = new URL(STATUS_UNIDADE_URL, window.location.origin);
+        url.searchParams.set("bloco", bloco);
+        url.searchParams.set("apartamento", apartamento);
+
+        fetch(url.toString(), {
+            headers: { Accept: "application/json" },
+            signal: statusUnidadeController.signal,
+        })
+            .then((resp) => {
+                if (!resp.ok) {
+                    throw new Error("status-unidade");
+                }
+                return resp.json();
+            })
+            .then((data) => {
+                aplicarEstadoSenha(Boolean(data && data.exige_senha));
+            })
+            .catch((err) => {
+                if (err.name === "AbortError") return;
+                aplicarEstadoSenha(false);
+            });
+    }
+
+    function aoTrocarUnidade() {
+        aplicarEstadoSenha(false);
+        verificarStatusUnidade();
+    }
+
     if (blocoSelect && apartamentoSelect) {
         popularBlocos();
         if (blocoInicial) {
@@ -171,7 +232,9 @@
         }
         blocoSelect.addEventListener("change", (event) => {
             popularApartamentos(event.target.value);
+            aoTrocarUnidade();
         });
+        apartamentoSelect.addEventListener("change", aoTrocarUnidade);
     }
 </script>
 {% endif %}

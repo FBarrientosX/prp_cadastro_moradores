@@ -159,6 +159,19 @@ def _buscar_unidade(bloco, apartamento, condominio_id=None):
     ).first()
 
 
+def _unidade_exige_senha(unidade):
+    """Unidade cadastrada (exceto reprovada) pede senha no login do morador."""
+    if not unidade:
+        return False
+    if unidade.status == StatusUnidade.REPROVADA:
+        return False
+    return unidade.status in (
+        StatusUnidade.PENDENTE,
+        StatusUnidade.APROVADA,
+        StatusUnidade.REGISTRADA,
+    )
+
+
 def _unidade_do_tenant(unidade_id, condominio_id):
     """Carrega unidade garantindo isolamento multi-tenant (anti-IDOR)."""
     return Unidade.query.filter_by(
@@ -840,6 +853,9 @@ def verificar_unidade(slug):
         return bloqueio
     session["tenant_slug"] = condominio.slug
 
+    if request.method == "GET":
+        return redirect(url_for("tenant_login", slug=condominio.slug))
+
     bloco, apartamento = normalizar_bloco_apartamento(
         request.form.get("bloco", ""),
         request.form.get("apartamento", ""),
@@ -873,11 +889,7 @@ def verificar_unidade(slug):
         return redirect(url_for("cadastro_inicial", slug=condominio.slug))
 
     senha = request.form.get("senha", "").strip()
-    exige_senha = unidade.status in (
-        StatusUnidade.PENDENTE,
-        StatusUnidade.APROVADA,
-        StatusUnidade.REGISTRADA,
-    )
+    exige_senha = _unidade_exige_senha(unidade)
 
     if exige_senha:
         if not senha:
@@ -910,6 +922,37 @@ def verificar_unidade(slug):
 
     login_unidade(unidade)
     return redirect(url_for("atualizar_dados"))
+
+
+def status_unidade(slug):
+    """JSON para o login do morador revalidar cadastro ao trocar bloco/apto."""
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    bloco, apartamento = normalizar_bloco_apartamento(
+        request.args.get("bloco", ""),
+        request.args.get("apartamento", ""),
+    )
+    if not validar_unidade(bloco, apartamento):
+        resposta = jsonify({"ok": False, "cadastrada": False, "exige_senha": False})
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
+    exige_senha = _unidade_exige_senha(unidade)
+    resposta = jsonify(
+        {
+            "ok": True,
+            "cadastrada": exige_senha,
+            "exige_senha": exige_senha,
+        }
+    )
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
 
 
 def esqueci_senha():
@@ -1313,6 +1356,7 @@ def reservas():
         espacos_disponiveis = (
             EspacoComum.query.filter(
                 EspacoComum.condominio_id == condominio_id,
+                EspacoComum.ativo.is_(True),
                 or_(
                     EspacoComum.apenas_moradores_bloco.is_(False),
                     EspacoComum.bloco_vinculado == unidade.bloco,
@@ -1355,6 +1399,10 @@ def solicitar_reserva(unidade):
         data_reserva = datetime.strptime(data_reserva_str, "%Y-%m-%d").date()
     except ValueError:
         flash("Data de reserva inválida.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not espaco.ativo:
+        flash("Este espaço está temporariamente indisponível para reservas.", "warning")
         return redirect(url_for("reservas"))
 
     if espaco.apenas_moradores_bloco and espaco.bloco_vinculado != unidade.bloco:
@@ -1423,6 +1471,13 @@ def criar_reserva_gestao():
 
     if not _usuario_pode_gerenciar_espaco(usuario, espaco):
         flash("Você não tem permissão para criar reserva neste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not espaco.ativo:
+        flash(
+            "Este espaço está desativado. Ative-o antes de criar uma nova reserva.",
+            "warning",
+        )
         return redirect(url_for("reservas"))
 
     if _existe_reserva_ativa(espaco.id, data_reserva):
@@ -1683,6 +1738,7 @@ def salvar_espaco_reserva():
         espaco = EspacoComum(
             tipo="SALAO_FESTAS",
             condominio_id=condominio_id_obrigatorio(usuario),
+            ativo=True,
         )
         db.session.add(espaco)
 
@@ -1706,6 +1762,60 @@ def salvar_espaco_reserva():
 
     db.session.commit()
     flash("Espaço salvo com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
+def alternar_status_espaco(espaco_id):
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    espaco = _espaco_do_tenant(espaco_id, condominio_id)
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para alterar o status deste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    espaco.ativo = not espaco.ativo
+    estado = "ativado" if espaco.ativo else "desativado"
+    _registrar_auditoria(
+        usuario,
+        f"Espaço comum '{espaco.nome}' {estado}.",
+    )
+    db.session.commit()
+    if espaco.ativo:
+        flash("Espaço ativado e disponível para reservas.", "success")
+    else:
+        flash(
+            "Espaço desativado. Moradores não poderão solicitar novas reservas.",
+            "info",
+        )
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
+def excluir_espaco(espaco_id):
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    espaco = _espaco_do_tenant(espaco_id, condominio_id)
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para excluir este espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    tem_historico = Reserva.query.filter_by(espaco_id=espaco.id).first() is not None
+    if tem_historico:
+        flash(
+            "Não é possível excluir um espaço que já possui histórico de reservas. "
+            "Por favor, utilize a opção de desativar o espaço.",
+            "warning",
+        )
+        return redirect(url_for("reservas"))
+
+    nome_espaco = espaco.nome
+    db.session.delete(espaco)
+    _registrar_auditoria(usuario, f"Espaço comum '{nome_espaco}' excluído.")
+    db.session.commit()
+    flash("Espaço excluído com sucesso.", "success")
     return redirect(url_for("reservas"))
 
 
@@ -2267,6 +2377,12 @@ def init_app(app):
         methods=["GET", "POST"],
     )
     app.add_url_rule(
+        "/c/<slug>/status-unidade",
+        "status_unidade",
+        status_unidade,
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/c/<slug>/cadastro-inicial",
         "cadastro_inicial",
         cadastro_inicial,
@@ -2350,6 +2466,18 @@ def init_app(app):
         "/reservas/espacos/salvar",
         "salvar_espaco_reserva",
         salvar_espaco_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/espacos/<int:espaco_id>/alternar_status",
+        "alternar_status_espaco",
+        alternar_status_espaco,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/espacos/<int:espaco_id>/excluir",
+        "excluir_espaco",
+        excluir_espaco,
         methods=["POST"],
     )
     app.add_url_rule("/sair", "sair", sair, methods=["GET"])

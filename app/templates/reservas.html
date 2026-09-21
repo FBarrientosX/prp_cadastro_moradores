@@ -250,41 +250,79 @@
         </div>
 
         {% if espacos %}
-        <div class="row g-3">
-            {% for espaco in espacos %}
-            {% set dias_lista = espaco.dias_funcionamento.split(',') if espaco.dias_funcionamento else [] %}
-            <div class="col-12 col-md-6 col-xl-4">
-                <div class="card h-100 shadow-sm">
-                    <div class="card-body d-flex flex-column">
-                        <h2 class="h6 mb-2">{{ espaco.nome }}</h2>
-                        <p class="text-muted small mb-2">Tipo: {{ espaco.tipo }}</p>
-                        <p class="mb-2">
-                            <strong>Valor:</strong>
-                            R$ {{ '%.2f'|format(espaco.valor_reserva) }}
-                        </p>
-                        <p class="mb-2">
-                            <strong>Dias:</strong>
-                            {{ dias_lista|join(', ')|upper }}
-                        </p>
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Espaço</th>
+                        <th>Valor</th>
+                        <th>Dias</th>
                         {% if current_user.role == 'sindico' %}
-                        <p class="mb-3">
-                            <strong>Somente bloco:</strong>
-                            {{ 'Sim' if espaco.apenas_moradores_bloco else 'Não' }}
-                        </p>
+                        <th>Somente bloco</th>
                         {% endif %}
-                        <button type="button" class="btn btn-outline-primary btn-sm mt-auto btn-editar-espaco"
-                                data-bs-toggle="modal" data-bs-target="#modal-espaco"
-                                data-espaco-id="{{ espaco.id }}"
-                                data-nome="{{ espaco.nome }}"
-                                data-valor="{{ '%.2f'|format(espaco.valor_reserva) }}"
-                                data-dias="{{ espaco.dias_funcionamento }}"
-                                data-apenas-bloco="{{ 'true' if espaco.apenas_moradores_bloco else 'false' }}">
-                            Editar
-                        </button>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for espaco in espacos %}
+                    {% set dias_lista = espaco.dias_funcionamento.split(',') if espaco.dias_funcionamento else [] %}
+                    <tr class="{% if not espaco.ativo %}table-light text-muted{% endif %}">
+                        <td>
+                            <div class="fw-semibold">{{ espaco.nome }}</div>
+                            <div class="small text-muted">Tipo: {{ espaco.tipo }}</div>
+                        </td>
+                        <td>R$ {{ '%.2f'|format(espaco.valor_reserva) }}</td>
+                        <td>{{ dias_lista|join(', ')|upper }}</td>
+                        {% if current_user.role == 'sindico' %}
+                        <td>{{ 'Sim' if espaco.apenas_moradores_bloco else 'Não' }}</td>
+                        {% endif %}
+                        <td>
+                            {% if espaco.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-warning">Inativo/Em Reforma</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <div class="d-flex flex-wrap gap-1 justify-content-end">
+                                <button type="button"
+                                        class="btn btn-outline-primary btn-sm btn-editar-espaco"
+                                        data-bs-toggle="modal" data-bs-target="#modal-espaco"
+                                        data-espaco-id="{{ espaco.id }}"
+                                        data-nome="{{ espaco.nome }}"
+                                        data-valor="{{ '%.2f'|format(espaco.valor_reserva) }}"
+                                        data-dias="{{ espaco.dias_funcionamento }}"
+                                        data-apenas-bloco="{{ 'true' if espaco.apenas_moradores_bloco else 'false' }}">
+                                    Editar
+                                </button>
+                                <form method="post"
+                                      action="{{ url_for('alternar_status_espaco', espaco_id=espaco.id) }}"
+                                      class="d-inline">
+                                    {% if espaco.ativo %}
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        Desativar
+                                    </button>
+                                    {% else %}
+                                    <button type="submit" class="btn btn-sm btn-outline-success">
+                                        Ativar
+                                    </button>
+                                    {% endif %}
+                                </form>
+                                <form method="post"
+                                      action="{{ url_for('excluir_espaco', espaco_id=espaco.id) }}"
+                                      class="d-inline form-confirmar"
+                                      data-confirm-mensagem="Tem certeza que deseja excluir este espaço? Esta ação não pode ser desfeita.">
+                                    <button type="submit" class="btn btn-sm btn-danger">
+                                        Excluir
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
         {% else %}
         <div class="alert alert-info">Nenhum espaço cadastrado ainda.</div>
@@ -395,7 +433,7 @@
                         <label class="form-label" for="gestao_espaco_id">Espaço Comum</label>
                         <select class="form-select" id="gestao_espaco_id" name="espaco_id" required>
                             <option value="">Selecione um espaço</option>
-                            {% for espaco in espacos %}
+                            {% for espaco in espacos if espaco.ativo %}
                             <option value="{{ espaco.id }}">{{ espaco.nome }}</option>
                             {% endfor %}
                         </select>
@@ -687,6 +725,15 @@
             });
         });
     }
+
+    document.querySelectorAll("form.form-confirmar").forEach(function (form) {
+        form.addEventListener("submit", function (event) {
+            const mensagem = form.dataset.confirmMensagem || "Confirmar?";
+            if (!window.confirm(mensagem)) {
+                event.preventDefault();
+            }
+        });
+    });
 </script>
 {% endif %}
 {% endblock %}

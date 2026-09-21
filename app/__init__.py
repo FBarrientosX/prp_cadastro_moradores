@@ -227,6 +227,24 @@ def _garantir_coluna_condominio_espacos_comuns():
     db.session.commit()
 
 
+def _garantir_coluna_ativo_espacos_comuns():
+    """Soft disable: garante coluna ativo em espacos_comuns (bancos já existentes)."""
+    inspetor = inspect(db.engine)
+    if "espacos_comuns" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("espacos_comuns")}
+    if "ativo" in colunas:
+        return
+
+    db.session.execute(
+        text(
+            "ALTER TABLE espacos_comuns ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT 1"
+        )
+    )
+    db.session.commit()
+
+
 def _garantir_tabelas_parceiros(app):
     with app.app_context():
         db.create_all()
@@ -808,6 +826,7 @@ def create_app(config=None):
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
         _garantir_coluna_condominio_espacos_comuns()
+        _garantir_coluna_ativo_espacos_comuns()
         _garantir_colunas_parceiros()
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
