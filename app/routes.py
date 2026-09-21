@@ -1313,6 +1313,7 @@ def reservas():
         espacos_disponiveis = (
             EspacoComum.query.filter(
                 EspacoComum.condominio_id == condominio_id,
+                EspacoComum.ativo.is_(True),
                 or_(
                     EspacoComum.apenas_moradores_bloco.is_(False),
                     EspacoComum.bloco_vinculado == unidade.bloco,
@@ -1355,6 +1356,10 @@ def solicitar_reserva(unidade):
         data_reserva = datetime.strptime(data_reserva_str, "%Y-%m-%d").date()
     except ValueError:
         flash("Data de reserva inválida.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not espaco.ativo:
+        flash("Este espaço está temporariamente indisponível para reservas.", "warning")
         return redirect(url_for("reservas"))
 
     if espaco.apenas_moradores_bloco and espaco.bloco_vinculado != unidade.bloco:
@@ -1423,6 +1428,13 @@ def criar_reserva_gestao():
 
     if not _usuario_pode_gerenciar_espaco(usuario, espaco):
         flash("Você não tem permissão para criar reserva neste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    if not espaco.ativo:
+        flash(
+            "Este espaço está desativado. Ative-o antes de criar uma nova reserva.",
+            "warning",
+        )
         return redirect(url_for("reservas"))
 
     if _existe_reserva_ativa(espaco.id, data_reserva):
@@ -1683,6 +1695,7 @@ def salvar_espaco_reserva():
         espaco = EspacoComum(
             tipo="SALAO_FESTAS",
             condominio_id=condominio_id_obrigatorio(usuario),
+            ativo=True,
         )
         db.session.add(espaco)
 
@@ -1706,6 +1719,60 @@ def salvar_espaco_reserva():
 
     db.session.commit()
     flash("Espaço salvo com sucesso.", "success")
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
+def alternar_status_espaco(espaco_id):
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    espaco = _espaco_do_tenant(espaco_id, condominio_id)
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para alterar o status deste espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    espaco.ativo = not espaco.ativo
+    estado = "ativado" if espaco.ativo else "desativado"
+    _registrar_auditoria(
+        usuario,
+        f"Espaço comum '{espaco.nome}' {estado}.",
+    )
+    db.session.commit()
+    if espaco.ativo:
+        flash("Espaço ativado e disponível para reservas.", "success")
+    else:
+        flash(
+            "Espaço desativado. Moradores não poderão solicitar novas reservas.",
+            "info",
+        )
+    return redirect(url_for("reservas"))
+
+
+@gestao_espacos_required
+def excluir_espaco(espaco_id):
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    espaco = _espaco_do_tenant(espaco_id, condominio_id)
+
+    if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+        flash("Você não tem permissão para excluir este espaço.", "danger")
+        return redirect(url_for("reservas"))
+
+    tem_historico = Reserva.query.filter_by(espaco_id=espaco.id).first() is not None
+    if tem_historico:
+        flash(
+            "Não é possível excluir um espaço que já possui histórico de reservas. "
+            "Por favor, utilize a opção de desativar o espaço.",
+            "warning",
+        )
+        return redirect(url_for("reservas"))
+
+    nome_espaco = espaco.nome
+    db.session.delete(espaco)
+    _registrar_auditoria(usuario, f"Espaço comum '{nome_espaco}' excluído.")
+    db.session.commit()
+    flash("Espaço excluído com sucesso.", "success")
     return redirect(url_for("reservas"))
 
 
@@ -2350,6 +2417,18 @@ def init_app(app):
         "/reservas/espacos/salvar",
         "salvar_espaco_reserva",
         salvar_espaco_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/espacos/<int:espaco_id>/alternar_status",
+        "alternar_status_espaco",
+        alternar_status_espaco,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/espacos/<int:espaco_id>/excluir",
+        "excluir_espaco",
+        excluir_espaco,
         methods=["POST"],
     )
     app.add_url_rule("/sair", "sair", sair, methods=["GET"])

@@ -337,6 +337,8 @@ class EspacoComum(db.Model):
         default="seg,ter,qua,qui,sex,sab,dom",
     )
     valor_reserva = db.Column(db.Float, nullable=False, default=0.0)
+    # Soft disable (reforma/manutenção): some da vitrine do morador sem apagar histórico.
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("espacos_comuns", lazy=True)
