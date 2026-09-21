@@ -155,6 +155,12 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['morador_ocorrencias', 'morador_ocorrencias_nova'] %}active{% endif %}" href="{{ url_for('morador_ocorrencias') }}">
                     <i class="bi bi-clipboard2-pulse me-2"></i>Ocorrências
                 </a>
+                <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'morador_encomendas' %}active{% endif %}" href="{{ url_for('morador_encomendas') }}">
+                    <span class="d-flex align-items-center"><i class="bi bi-box2 me-2"></i>Encomendas</span>
+                    {% if encomendas_pendentes_count > 0 %}
+                    <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
+                    {% endif %}
+                </a>
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
                     <i class="bi bi-gift me-2"></i>Clube de Vantagens
                 </a>
@@ -273,6 +279,12 @@
                     </a>
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['morador_ocorrencias', 'morador_ocorrencias_nova'] %}active{% endif %}" href="{{ url_for('morador_ocorrencias') }}">
                         <i class="bi bi-clipboard2-pulse me-2"></i>Ocorrências
+                    </a>
+                    <a class="nav-link text-white d-flex justify-content-between align-items-center {% if request.endpoint == 'morador_encomendas' %}active{% endif %}" href="{{ url_for('morador_encomendas') }}">
+                        <span class="d-flex align-items-center"><i class="bi bi-box2 me-2"></i>Encomendas</span>
+                        {% if encomendas_pendentes_count > 0 %}
+                        <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
+                        {% endif %}
                     </a>
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
                         <i class="bi bi-gift me-2"></i>Clube de Vantagens

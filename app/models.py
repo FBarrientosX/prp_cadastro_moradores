@@ -663,6 +663,7 @@ class Encomenda(db.Model):
     transportadora = db.Column(db.String(100), nullable=True)
     codigo_rastreio = db.Column(db.String(100), nullable=True)
     foto_pacote = db.Column(db.String(255), nullable=True)
+    foto_entrega = db.Column(db.String(255), nullable=True)
     status = db.Column(
         db.String(20), nullable=False, default=StatusEncomenda.PENDENTE, index=True
     )
@@ -670,6 +671,8 @@ class Encomenda(db.Model):
         db.DateTime, nullable=False, default=datetime.utcnow, index=True
     )
     data_entrega = db.Column(db.DateTime, nullable=True)
+    entregue_para = db.Column(db.String(200), nullable=True)
+    tentativas_contato = db.Column(db.Integer, nullable=False, default=1)
     porteiro_recebimento_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
     )

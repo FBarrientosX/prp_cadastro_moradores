@@ -49,6 +49,7 @@ from app.models import (
     CategoriaOcorrencia,
     Condominio,
     Cupom,
+    Encomenda,
     EspacoComum,
     LogAuditoria,
     Notificacao,
@@ -62,6 +63,7 @@ from app.models import (
     StatusAgendamentoMudanca,
     StatusAutorizacaoAcesso,
     StatusDocumento,
+    StatusEncomenda,
     StatusOcorrencia,
     StatusUnidade,
     TipoVisitante,
@@ -2306,6 +2308,46 @@ def morador_ocorrencias_nova(unidade):
     return redirect(url_for("morador_ocorrencias"))
 
 
+@unidade_required
+def morador_encomendas(unidade):
+    """Lista encomendas da unidade: pendentes e histórico recente."""
+    from sqlalchemy.orm import joinedload
+
+    if not unidade.condominio_id:
+        flash("Unidade sem condomínio vinculado. Contate a administração.", "danger")
+        return redirect(url_for("atualizar_dados"))
+
+    base_filter = {
+        "unidade_id": unidade.id,
+        "condominio_id": unidade.condominio_id,
+    }
+
+    encomendas_pendentes = (
+        Encomenda.query.filter_by(
+            **base_filter,
+            status=StatusEncomenda.PENDENTE,
+        )
+        .order_by(Encomenda.data_recebimento.desc())
+        .all()
+    )
+    encomendas_historico = (
+        Encomenda.query.options(joinedload(Encomenda.porteiro_entrega))
+        .filter_by(
+            **base_filter,
+            status=StatusEncomenda.ENTREGUE,
+        )
+        .order_by(Encomenda.data_entrega.desc())
+        .limit(50)
+        .all()
+    )
+    return render_template(
+        "morador/encomendas.html",
+        unidade=unidade,
+        encomendas_pendentes=encomendas_pendentes,
+        encomendas_historico=encomendas_historico,
+    )
+
+
 def _layout_notificacoes(perfil):
     usuario = get_current_user()
     if perfil == PerfilDestinoNotificacao.PORTARIA and usuario and usuario.is_porteiro:
@@ -2524,6 +2566,12 @@ def init_app(app):
         "morador_ocorrencias_nova",
         morador_ocorrencias_nova,
         methods=["POST"],
+    )
+    app.add_url_rule(
+        "/morador/encomendas",
+        "morador_encomendas",
+        morador_encomendas,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/notificacoes",

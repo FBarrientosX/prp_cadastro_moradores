@@ -397,7 +397,7 @@ def _garantir_tabela_agendamentos_mudanca():
 
 
 def _garantir_colunas_encomendas():
-    """Garante codigo_rastreio e foto_pacote em encomendas (SQLite legado)."""
+    """Garante colunas extras em encomendas (bancos já existentes)."""
     inspetor = inspect(db.engine)
     if "encomendas" not in inspetor.get_table_names():
         return
@@ -412,6 +412,23 @@ def _garantir_colunas_encomendas():
     if "foto_pacote" not in colunas:
         alteracoes.append(
             "ALTER TABLE encomendas ADD COLUMN foto_pacote VARCHAR(255)"
+        )
+    if "foto_entrega" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN foto_entrega VARCHAR(255)"
+        )
+    if "data_entrega" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN data_entrega DATETIME"
+        )
+    if "entregue_para" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN entregue_para VARCHAR(200)"
+        )
+    if "tentativas_contato" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN tentativas_contato "
+            "INTEGER NOT NULL DEFAULT 1"
         )
 
     for alteracao in alteracoes:
@@ -751,21 +768,28 @@ def create_app(config=None):
 
     db.init_app(app)
 
+    from app.utils import tempo_relativo
+
+    app.add_template_filter(tempo_relativo, "tempo_relativo")
+
     @app.context_processor
     def inject_nav_context():
         from app.auth import get_current_user, get_unidade_logada
         from app.models import (
             Condominio,
+            Encomenda,
             EspacoComum,
             Notificacao,
             PerfilDestinoNotificacao,
             Reserva,
             Role,
+            StatusEncomenda,
         )
 
         usuario = get_current_user()
         unidade = get_unidade_logada()
         reservas_pendentes_count = 0
+        encomendas_pendentes_count = 0
         condominio_ctx = None
         notificacoes_nao_lidas = 0
         notificacoes_habilitadas = False
@@ -808,6 +832,11 @@ def create_app(config=None):
                 perfil_destino=PerfilDestinoNotificacao.MORADOR,
                 lida=False,
             ).count()
+            encomendas_pendentes_count = Encomenda.query.filter_by(
+                unidade_id=unidade.id,
+                condominio_id=unidade.condominio_id,
+                status=StatusEncomenda.PENDENTE,
+            ).count()
 
         # Fallback: slug do tenant na sessão (portas públicas).
         if condominio_ctx is None:
@@ -829,6 +858,7 @@ def create_app(config=None):
             "sidebar_user": usuario,
             "sidebar_unidade": unidade,
             "reservas_pendentes_count": reservas_pendentes_count,
+            "encomendas_pendentes_count": encomendas_pendentes_count,
             "condominio": condominio_ctx,
             "cor_primaria_rgb": _hex_para_rgb(cor_primaria),
             "notificacoes_nao_lidas": notificacoes_nao_lidas,

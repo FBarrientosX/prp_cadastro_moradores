@@ -16,6 +16,7 @@ from datetime import datetime
 
 from flask import current_app, flash, redirect, render_template, request, url_for
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 try:
     from zoneinfo import ZoneInfo
@@ -29,6 +30,7 @@ from app.models import (
     AutorizacaoAcesso,
     Encomenda,
     PerfilDestinoNotificacao,
+    Pessoa,
     RegistroAcesso,
     Role,
     StatusAgendamentoMudanca,
@@ -169,6 +171,29 @@ def _agora_sao_paulo():
 def _hoje_sao_paulo():
     """Data civil de hoje no fuso America/Sao_Paulo (não a do servidor em UTC)."""
     return _agora_sao_paulo().date()
+
+
+def _parse_data_hora_entrega(data_str, hora_str):
+    """Combina data (YYYY-MM-DD) e hora (HH:MM) em datetime naive (SP)."""
+    data_str = (data_str or "").strip()
+    hora_str = (hora_str or "").strip()
+    if data_str and hora_str:
+        try:
+            return datetime.strptime(f"{data_str} {hora_str}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+    return _agora_sao_paulo()
+
+
+def _ids_encomendas_form():
+    """Extrai IDs de encomenda do form (lista ou string CSV)."""
+    ids = []
+    for raw in request.form.getlist("encomenda_ids"):
+        for part in str(raw or "").split(","):
+            part = part.strip()
+            if part.isdigit():
+                ids.append(int(part))
+    return list(dict.fromkeys(ids))
 
 
 def portaria_logout():
@@ -554,7 +579,10 @@ def portaria_encomendas():
         return redirect(url_for("portaria_dashboard"))
 
     pendentes = (
-        Encomenda.query.join(Unidade)
+        Encomenda.query.options(
+            joinedload(Encomenda.unidade),
+            joinedload(Encomenda.porteiro_recebimento),
+        )
         .filter(
             Encomenda.condominio_id == condominio_id,
             Encomenda.status == StatusEncomenda.PENDENTE,
@@ -562,6 +590,17 @@ def portaria_encomendas():
         .order_by(Encomenda.data_recebimento.asc())
         .all()
     )
+    # Unidade.pessoas é lazy="dynamic" (não aceita joinedload); pré-carrega em lote.
+    pessoas_por_unidade = {}
+    unidade_ids = {item.unidade_id for item in pendentes if item.unidade_id}
+    if unidade_ids:
+        for pessoa in (
+            Pessoa.query.filter(Pessoa.unidade_id.in_(unidade_ids))
+            .order_by(Pessoa.nome_completo.asc())
+            .all()
+        ):
+            pessoas_por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa)
+
     historico = (
         Encomenda.query.join(Unidade)
         .filter(
@@ -582,6 +621,8 @@ def portaria_encomendas():
         pendentes=pendentes,
         historico=historico,
         unidades=unidades,
+        pessoas_por_unidade=pessoas_por_unidade,
+        agora_entrega=_agora_sao_paulo(),
     )
 
 
@@ -635,6 +676,7 @@ def portaria_encomendas_receber():
         status=StatusEncomenda.PENDENTE,
         data_recebimento=agora,
         data_entrega=None,
+        tentativas_contato=1,
         porteiro_recebimento_id=usuario.id,
         porteiro_entrega_id=None,
     )
@@ -689,19 +731,114 @@ def portaria_encomendas_entregar(encomenda_id):
         )
         return redirect(url_for("portaria_encomendas"))
 
+    entregue_para = (request.form.get("entregue_para") or "").strip()
+    if not entregue_para:
+        flash("Informe quem retirou a encomenda.", "danger")
+        return redirect(url_for("portaria_encomendas"))
+
+    data_entrega = _parse_data_hora_entrega(
+        request.form.get("data_entrega"),
+        request.form.get("hora_entrega"),
+    )
+
+    foto_entrega, erro_foto = _salvar_foto_encomenda(
+        request.files.get("foto_entrega"),
+        prefixo=f"ent{encomenda.id}",
+    )
+    if erro_foto:
+        flash(erro_foto, "danger")
+        return redirect(url_for("portaria_encomendas"))
+
     encomenda.status = StatusEncomenda.ENTREGUE
-    encomenda.data_entrega = _agora_sao_paulo()
+    encomenda.data_entrega = data_entrega
+    encomenda.entregue_para = entregue_para[:200]
+    encomenda.foto_entrega = foto_entrega
     encomenda.porteiro_entrega_id = usuario.id
     _registrar_auditoria(
         usuario,
         f"Portaria '{usuario.username}' entregou encomenda #{encomenda.id} "
         f"da unidade {encomenda.unidade.identificador} "
-        f"às {encomenda.data_entrega.strftime('%H:%M')}.",
+        f"para '{entregue_para}' "
+        f"às {encomenda.data_entrega.strftime('%d/%m/%Y %H:%M')}.",
     )
     db.session.commit()
     flash(
         f"Entrega registrada para {encomenda.unidade.identificador} "
+        f"(retirado por {entregue_para}) "
         f"às {encomenda.data_entrega.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_encomendas"))
+
+
+@portaria_required
+def portaria_encomendas_entregar_lote():
+    """Baixa em lote: entrega várias encomendas pendentes do mesmo tenant."""
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_encomendas"))
+
+    ids = _ids_encomendas_form()
+    if not ids:
+        flash("Selecione ao menos uma encomenda para entregar.", "warning")
+        return redirect(url_for("portaria_encomendas"))
+
+    entregue_para = (request.form.get("entregue_para") or "").strip()
+    if not entregue_para:
+        flash("Informe quem retirou as encomendas.", "danger")
+        return redirect(url_for("portaria_encomendas"))
+
+    data_entrega = _parse_data_hora_entrega(
+        request.form.get("data_entrega"),
+        request.form.get("hora_entrega"),
+    )
+
+    foto_entrega, erro_foto = _salvar_foto_encomenda(
+        request.files.get("foto_entrega"),
+        prefixo="entlote",
+    )
+    if erro_foto:
+        flash(erro_foto, "danger")
+        return redirect(url_for("portaria_encomendas"))
+
+    encomendas = (
+        Encomenda.query.filter(
+            Encomenda.id.in_(ids),
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+        )
+        .all()
+    )
+    if not encomendas:
+        flash("Nenhuma encomenda pendente válida foi encontrada para entrega.", "warning")
+        return redirect(url_for("portaria_encomendas"))
+
+    entregue_para = entregue_para[:200]
+    for encomenda in encomendas:
+        encomenda.status = StatusEncomenda.ENTREGUE
+        encomenda.data_entrega = data_entrega
+        encomenda.entregue_para = entregue_para
+        encomenda.foto_entrega = foto_entrega
+        encomenda.porteiro_entrega_id = usuario.id
+
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' entregou {len(encomendas)} encomenda(s) "
+        f"em lote para '{entregue_para}' "
+        f"às {data_entrega.strftime('%d/%m/%Y %H:%M')} "
+        f"(ids: {', '.join(str(e.id) for e in encomendas)}).",
+    )
+    db.session.commit()
+    flash(
+        f"{len(encomendas)} encomenda(s) entregue(s) com sucesso "
+        f"(retirado por {entregue_para}).",
         "success",
     )
     return redirect(url_for("portaria_encomendas"))
@@ -735,6 +872,9 @@ def portaria_encomendas_notificar(id):
         return redirect(url_for("portaria_encomendas"))
 
     remetente = encomenda.transportadora or "não informado"
+    if encomenda.tentativas_contato is None:
+        encomenda.tentativas_contato = 1
+    encomenda.tentativas_contato += 1
     _criar_notificacao(
         condominio_id=condominio_id,
         perfil_destino=PerfilDestinoNotificacao.MORADOR,
@@ -748,10 +888,15 @@ def portaria_encomendas_notificar(id):
     _registrar_auditoria(
         usuario,
         f"Portaria '{usuario.username}' reenviou notificação da encomenda "
-        f"#{encomenda.id} para {encomenda.unidade.identificador}.",
+        f"#{encomenda.id} para {encomenda.unidade.identificador} "
+        f"(tentativa {encomenda.tentativas_contato}).",
     )
     db.session.commit()
-    flash("Notificação reenviada ao morador com sucesso.", "success")
+    flash(
+        f"Morador notificado novamente "
+        f"(tentativa {encomenda.tentativas_contato}).",
+        "success",
+    )
     return redirect(url_for("portaria_encomendas"))
 
 
@@ -864,8 +1009,20 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/portaria/encomendas/entregar_lote",
+        "portaria_encomendas_entregar_lote",
+        portaria_encomendas_entregar_lote,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/portaria/encomendas/notificar/<int:id>",
         "portaria_encomendas_notificar",
+        portaria_encomendas_notificar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/<int:id>/reenviar_notificacao",
+        "portaria_encomendas_reenviar_notificacao",
         portaria_encomendas_notificar,
         methods=["POST"],
     )
