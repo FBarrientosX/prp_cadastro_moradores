@@ -83,6 +83,10 @@
                href="{{ url_for('portaria_encomendas') }}">
                 <i class="bi bi-box-seam me-2"></i>Encomendas
             </a>
+            <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['portaria_livro', 'portaria_plantao_abrir', 'portaria_plantao_fechar', 'portaria_plantao_ocorrencia', 'portaria_plantao_evento'] %}active{% endif %}"
+               href="{{ url_for('portaria_livro') }}">
+                <i class="bi bi-journal-text me-2"></i>Livro de Serviço
+            </a>
         </nav>
         <div class="mt-auto pt-3">
             <a class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center"
@@ -112,6 +116,10 @@
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_encomendas' %}active{% endif %}"
                    href="{{ url_for('portaria_encomendas') }}">
                     <i class="bi bi-box-seam me-2"></i>Encomendas
+                </a>
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['portaria_livro', 'portaria_plantao_abrir', 'portaria_plantao_fechar', 'portaria_plantao_ocorrencia', 'portaria_plantao_evento'] %}active{% endif %}"
+                   href="{{ url_for('portaria_livro') }}">
+                    <i class="bi bi-journal-text me-2"></i>Livro de Serviço
                 </a>
             </nav>
             <div class="mt-auto pt-3">

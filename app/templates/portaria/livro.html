@@ -1,0 +1,358 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Livro de Serviço — Portaria{% endblock %}
+
+{% block head %}
+<style>
+    .checklist-toggle .btn-check:checked + .btn-outline-success {
+        background-color: #198754;
+        color: #fff;
+        border-color: #198754;
+    }
+    .checklist-toggle .btn-check:checked + .btn-outline-danger {
+        background-color: #dc3545;
+        color: #fff;
+        border-color: #dc3545;
+    }
+    .checklist-toggle .btn-check:checked + .btn-outline-warning {
+        background-color: #ffc107;
+        color: #212529;
+        border-color: #ffc107;
+    }
+    .checklist-toggle .btn-group > .btn {
+        flex: 1 1 0;
+        font-size: 0.85rem;
+        white-space: nowrap;
+    }
+    .plantao-aberto-painel {
+        border-left: 5px solid #198754;
+        background: linear-gradient(135deg, #f0fff4 0%, #ffffff 60%);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Livro de Serviço e Ocorrências</h1>
+    <p class="text-muted mb-0">Registro de plantão, checklist de equipamentos e ocorrências da guarita.</p>
+</div>
+
+{% if not guaritas %}
+<div class="alert alert-warning mb-0">
+    Nenhuma guarita ativa neste condomínio. Contate a administração.
+</div>
+{% else %}
+
+<ul class="nav nav-pills flex-wrap gap-2 mb-4" role="tablist">
+    {% for g in guaritas %}
+    <li class="nav-item" role="presentation">
+        <a class="nav-link {% if guarita and g.id == guarita.id %}active{% endif %}"
+           href="{{ url_for('portaria_livro', guarita_id=g.id) }}">
+            {{ g.nome }}
+        </a>
+    </li>
+    {% endfor %}
+</ul>
+
+{% if guarita %}
+<div class="mb-4">
+    <h2 class="h5 text-muted text-uppercase mb-3">{{ guarita.nome }}</h2>
+
+    {% if not plantao_aberto %}
+    <div class="card border-0 shadow-sm">
+        <div class="card-body text-center py-5">
+            <p class="text-muted mb-4">Nenhum plantão aberto nesta guarita.</p>
+            <button type="button" class="btn btn-success btn-lg px-5"
+                    data-bs-toggle="modal" data-bs-target="#modalAbrirPlantao">
+                <i class="bi bi-door-open me-2"></i>Abrir Plantão
+            </button>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalAbrirPlantao" tabindex="-1"
+         aria-labelledby="modalAbrirPlantaoLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <form method="post" action="{{ url_for('portaria_plantao_abrir') }}">
+                    <input type="hidden" name="guarita_id" value="{{ guarita.id }}">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="modalAbrirPlantaoLabel">
+                            Abrir Plantão — {{ guarita.nome }}
+                        </h2>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">
+                            Confirme o estado dos equipamentos na abertura do turno.
+                        </p>
+                        {% if itens_checklist %}
+                        {% for item in itens_checklist %}
+                        <div class="mb-3 checklist-toggle">
+                            <div class="fw-semibold mb-2">{{ item.nome_item }}</div>
+                            {% if item.tipo_resposta == 'booleano' %}
+                            <div class="btn-group w-100" role="group" aria-label="{{ item.nome_item }}">
+                                <input type="radio" class="btn-check" name="check_{{ item.id }}"
+                                       id="check_{{ item.id }}_ok" value="OK" required autocomplete="off">
+                                <label class="btn btn-outline-success" for="check_{{ item.id }}_ok">OK</label>
+                                <input type="radio" class="btn-check" name="check_{{ item.id }}"
+                                       id="check_{{ item.id }}_defeito" value="Defeito" autocomplete="off">
+                                <label class="btn btn-outline-danger" for="check_{{ item.id }}_defeito">Defeito</label>
+                                <input type="radio" class="btn-check" name="check_{{ item.id }}"
+                                       id="check_{{ item.id }}_ausente" value="Não Se Encontra" autocomplete="off">
+                                <label class="btn btn-outline-warning" for="check_{{ item.id }}_ausente">Não Se Encontra</label>
+                            </div>
+                            {% else %}
+                            <input type="text" class="form-control" name="check_{{ item.id }}"
+                                   id="check_{{ item.id }}_texto" maxlength="200"
+                                   placeholder="Descreva o estado de {{ item.nome_item }}">
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <p class="text-muted small">Nenhum item de checklist ativo. A abertura segue sem conferência de equipamentos.</p>
+                        {% endif %}
+
+                        <div class="mt-4 pt-3 border-top">
+                            <div class="fw-semibold mb-2">Itens Adicionais (Opcional)</div>
+                            <p class="text-muted small mb-2">
+                                Inclua materiais ou equipamentos avulsos desta abertura.
+                            </p>
+                            <div id="container-itens-avulsos" class="mb-2"></div>
+                            <button type="button" id="btn-adicionar-item-avulso"
+                                    class="btn btn-outline-secondary btn-sm">
+                                + Adicionar Item Avulso
+                            </button>
+                        </div>
+
+                        {% if condominio and condominio.permitir_apoio %}
+                        <div class="mb-3 mt-4">
+                            <label class="form-label" for="apoio_id">Apoio</label>
+                            <select class="form-select" id="apoio_id" name="apoio_id">
+                                <option value="">Nenhum</option>
+                                {% for porteiro in porteiros %}
+                                <option value="{{ porteiro.id }}">{{ porteiro.username }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
+
+                        {% if condominio and condominio.permitir_ronda %}
+                        <div class="mb-0 {% if not condominio.permitir_apoio %}mt-4{% endif %}">
+                            <label class="form-label" for="ronda_id">Ronda</label>
+                            <select class="form-select" id="ronda_id" name="ronda_id">
+                                <option value="">Nenhum</option>
+                                {% for porteiro in porteiros %}
+                                <option value="{{ porteiro.id }}">{{ porteiro.username }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-success">
+                            Confirmar Abertura
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% else %}
+    <div class="card border-0 shadow-sm plantao-aberto-painel mb-3">
+        <div class="card-body">
+            <span class="badge text-bg-success mb-2">Plantão em Andamento</span>
+            <h3 class="h5 mb-1">Equipa em serviço</h3>
+            <ul class="list-unstyled small mb-2">
+                <li><strong>Titular:</strong> {{ plantao_aberto.porteiro.username if plantao_aberto.porteiro else '—' }}</li>
+                {% if condominio and condominio.permitir_apoio and plantao_aberto.apoio %}
+                <li><strong>Apoio:</strong> {{ plantao_aberto.apoio.username }}</li>
+                {% endif %}
+                {% if condominio and condominio.permitir_ronda and plantao_aberto.ronda %}
+                <li><strong>Ronda:</strong> {{ plantao_aberto.ronda.username }}</li>
+                {% endif %}
+            </ul>
+            <p class="text-muted small mb-0">
+                Aberto em
+                {{ plantao_aberto.data_abertura.strftime('%d/%m/%Y %H:%M') if plantao_aberto.data_abertura else '—' }}
+            </p>
+            {% if plantao_aberto.checklist_itens %}
+            <div class="mt-3 d-flex flex-wrap gap-2">
+                {% for item in plantao_aberto.checklist_itens %}
+                <span class="badge {% if item.valor == 'OK' %}text-bg-success{% elif item.valor in ['Defeito', 'Falta'] %}text-bg-danger{% elif item.valor == 'Não Se Encontra' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
+                    {{ item.label }}: {{ item.valor }}
+                </span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post" action="{{ url_for('portaria_plantao_evento') }}" class="mt-4">
+                <input type="hidden" name="plantao_id" value="{{ plantao_aberto.id }}">
+                <label class="form-label" for="evento_plantao">Registrar ocorrência</label>
+                <textarea id="evento_plantao" name="evento" class="form-control mb-2" rows="3"
+                          required maxlength="2000"
+                          placeholder="Descreva a ocorrência em detalhes..."></textarea>
+                <div class="d-flex justify-content-end">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-pencil-square me-1"></i>Registrar Ocorrência
+                    </button>
+                </div>
+            </form>
+
+            <div class="mt-4">
+                <div class="small text-uppercase text-muted mb-2">Ocorrências do turno</div>
+                {% if plantao_aberto.ocorrencias %}
+                <div class="p-3 bg-light border rounded"
+                     style="max-height: 300px; overflow-y: auto; white-space: pre-wrap;">{{ plantao_aberto.ocorrencias }}</div>
+                {% else %}
+                <div class="p-3 bg-light border rounded text-muted">
+                    Nenhuma ocorrência registrada neste plantão.
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="mt-4 text-end">
+                <button type="button" class="btn btn-danger"
+                        data-bs-toggle="modal" data-bs-target="#modalFecharPlantao">
+                    <i class="bi bi-door-closed me-1"></i>Passar o Serviço / Fechar Plantão
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalFecharPlantao" tabindex="-1"
+         aria-labelledby="modalFecharPlantaoLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{{ url_for('portaria_plantao_fechar') }}">
+                    <input type="hidden" name="plantao_id" value="{{ plantao_aberto.id }}">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="modalFecharPlantaoLabel">
+                            Passar o Serviço / Fechar Plantão
+                        </h2>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small">
+                            Revise ou complete as ocorrências gerais do turno antes de fechar.
+                        </p>
+                        <label class="form-label" for="ocorrencias_fechamento">Ocorrências do turno</label>
+                        <textarea class="form-control" id="ocorrencias_fechamento" name="ocorrencias"
+                                  rows="6"
+                                  placeholder="Sem anormalidades / resumo do plantão...">{{ plantao_aberto.ocorrencias or '' }}</textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-danger"
+                                onclick="return confirm('Confirmar fechamento deste plantão?');">
+                            Fechar Plantão
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<section class="mt-5">
+    <h2 class="h5 mb-3">Histórico de Plantões</h2>
+    {% if historico %}
+    <div class="table-responsive card border-0 shadow-sm">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Abertura</th>
+                    <th>Fechamento</th>
+                    <th>Porteiro</th>
+                    <th>Checklist</th>
+                    <th>Ocorrências</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for plantao in historico %}
+                <tr>
+                    <td class="text-nowrap small">
+                        {{ plantao.data_abertura.strftime('%d/%m/%Y %H:%M') if plantao.data_abertura else '—' }}
+                    </td>
+                    <td class="text-nowrap small">
+                        {{ plantao.data_fechamento.strftime('%d/%m/%Y %H:%M') if plantao.data_fechamento else '—' }}
+                    </td>
+                    <td>{{ plantao.porteiro.username if plantao.porteiro else '—' }}</td>
+                    <td>
+                        {% if plantao.checklist_itens %}
+                        <div class="d-flex flex-wrap gap-1">
+                            {% for item in plantao.checklist_itens %}
+                            <span class="badge {% if item.valor == 'OK' %}text-bg-success{% elif item.valor in ['Defeito', 'Falta'] %}text-bg-danger{% elif item.valor == 'Não Se Encontra' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
+                                {{ item.label }}: {{ item.valor }}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="small" style="max-width: 280px; white-space: pre-wrap;">
+                        {{ plantao.ocorrencias or '—' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">Nenhum plantão fechado nesta guarita ainda.</p>
+    {% endif %}
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const container = document.getElementById("container-itens-avulsos");
+    const botao = document.getElementById("btn-adicionar-item-avulso");
+    if (!container || !botao) {
+        return;
+    }
+
+    botao.addEventListener("click", function () {
+        const linha = document.createElement("div");
+        linha.className = "row g-2 align-items-center mb-2 item-avulso-linha";
+        linha.innerHTML =
+            '<div class="col">' +
+            '<input type="text" class="form-control form-control-sm" name="custom_nome[]" ' +
+            'placeholder="Nome do item" required maxlength="120">' +
+            "</div>" +
+            '<div class="col-auto">' +
+            '<input type="number" class="form-control form-control-sm" name="custom_qtd[]" ' +
+            'placeholder="Qtd" min="1" step="1" required style="width: 70px;">' +
+            "</div>" +
+            '<div class="col-auto flex-grow-1" style="min-width: 110px;">' +
+            '<input type="text" class="form-control form-control-sm" name="custom_estado[]" ' +
+            'placeholder="Estado (ex: OK)" required maxlength="80">' +
+            "</div>" +
+            '<div class="col-auto">' +
+            '<button type="button" class="btn btn-outline-danger btn-sm btn-remover-item-avulso" ' +
+            'title="Remover item" aria-label="Remover item">' +
+            '<i class="bi bi-trash"></i>' +
+            "</button>" +
+            "</div>";
+        container.appendChild(linha);
+    });
+
+    container.addEventListener("click", function (event) {
+        const botaoRemover = event.target.closest(".btn-remover-item-avulso");
+        if (!botaoRemover) {
+            return;
+        }
+        const linha = botaoRemover.closest(".item-avulso-linha");
+        if (linha) {
+            linha.remove();
+        }
+    });
+})();
+</script>
+{% endblock %}

@@ -607,6 +607,73 @@ def _garantir_coluna_ativo_condominio():
     db.session.commit()
 
 
+def _garantir_colunas_livro_servico():
+    """Colunas novas do livro de serviço em bancos já existentes."""
+    inspetor = inspect(db.engine)
+    tabelas = set(inspetor.get_table_names())
+    alteracoes = []
+
+    if "condominio" in tabelas:
+        colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+        if "permitir_apoio" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE condominio ADD COLUMN permitir_apoio "
+                "BOOLEAN NOT NULL DEFAULT 0"
+            )
+        if "permitir_ronda" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE condominio ADD COLUMN permitir_ronda "
+                "BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+    if "plantoes" in tabelas:
+        colunas = {coluna["name"] for coluna in inspetor.get_columns("plantoes")}
+        if "apoio_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE plantoes ADD COLUMN apoio_id INTEGER"
+            )
+        if "ronda_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE plantoes ADD COLUMN ronda_id INTEGER"
+            )
+
+    if "itens_checklist" in tabelas:
+        colunas = {
+            coluna["name"] for coluna in inspetor.get_columns("itens_checklist")
+        }
+        if "guarita_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE itens_checklist ADD COLUMN guarita_id INTEGER"
+            )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
+def _seed_guaritas_padrao():
+    """Garante ao menos uma guarita ativa por condomínio (Portaria Principal)."""
+    from app.models import Condominio, Guarita
+
+    inspetor = inspect(db.engine)
+    if "guaritas" not in inspetor.get_table_names():
+        return
+
+    for condominio in Condominio.query.filter_by(ativo=True).all():
+        existe = Guarita.query.filter_by(condominio_id=condominio.id).first()
+        if existe:
+            continue
+        db.session.add(
+            Guarita(
+                nome="Portaria Principal",
+                condominio_id=condominio.id,
+                ativa=True,
+            )
+        )
+    db.session.commit()
+
+
 def _seed_condominio_transicao():
     """
     Seed de transição multi-tenant:
@@ -900,6 +967,7 @@ def create_app(config=None):
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
+        _garantir_colunas_livro_servico()
         _seed_condominio_transicao()
         _migrar_sindico_agrupamentos()
         _garantir_colunas_unidades()
@@ -913,6 +981,7 @@ def create_app(config=None):
         _garantir_colunas_registros_acesso()
         _garantir_colunas_autorizacoes_acesso()
         _garantir_colunas_encomendas()
+        _seed_guaritas_padrao()
 
     _garantir_tabelas_parceiros(app)
 

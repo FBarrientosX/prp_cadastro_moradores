@@ -11,6 +11,7 @@ em app/routes.py por serem compartilhadas com outros módulos (notificações,
 morador, admin, síndico) — são só importadas aqui, dentro de cada view.
 """
 
+import json
 import os
 from datetime import datetime
 
@@ -28,16 +29,23 @@ from app.auth import condominio_id_obrigatorio, get_current_user, logout_usuario
 from app.models import (
     AgendamentoMudanca,
     AutorizacaoAcesso,
+    Condominio,
     Encomenda,
+    Guarita,
+    ItemChecklist,
     PerfilDestinoNotificacao,
     Pessoa,
+    Plantao,
     RegistroAcesso,
     Role,
     StatusAgendamentoMudanca,
     StatusAutorizacaoAcesso,
     StatusEncomenda,
+    StatusPlantao,
+    TipoRespostaChecklist,
     TipoVisitante,
     Unidade,
+    Usuario,
     Visitante,
 )
 
@@ -946,6 +954,442 @@ def portaria_mudancas():
     return redirect(url_for("portaria_dashboard"))
 
 
+def _guarita_do_tenant(guarita_id, condominio_id):
+    """Carrega guarita ativa do mesmo condomínio (anti-IDOR)."""
+    return Guarita.query.filter_by(
+        id=guarita_id, condominio_id=condominio_id, ativa=True
+    ).first_or_404()
+
+
+def _plantao_do_tenant(plantao_id, condominio_id):
+    """Carrega plantão cuja guarita pertence ao condomínio (anti-IDOR)."""
+    return (
+        Plantao.query.join(Guarita)
+        .filter(Plantao.id == plantao_id, Guarita.condominio_id == condominio_id)
+        .first_or_404()
+    )
+
+
+def _garantir_guarita_padrao(condominio_id):
+    """Cria Portaria Principal se o condomínio ainda não tiver guaritas."""
+    if not condominio_id:
+        return
+    if Guarita.query.filter_by(condominio_id=condominio_id).first():
+        return
+    db.session.add(
+        Guarita(
+            nome="Portaria Principal",
+            condominio_id=condominio_id,
+            ativa=True,
+        )
+    )
+    db.session.commit()
+
+
+def _porteiros_do_condominio(condominio_id):
+    """Porteiros (e segurança, se existir) do tenant para apoio e ronda."""
+    return (
+        Usuario.query.filter(
+            Usuario.condominio_id == condominio_id,
+            Usuario.role.in_((Role.PORTEIRO, "seguranca")),
+        )
+        .order_by(Usuario.username.asc(), Usuario.id.asc())
+        .all()
+    )
+
+
+def _itens_checklist_ativos(guarita_id):
+    return (
+        ItemChecklist.query.filter_by(guarita_id=guarita_id, ativo=True)
+        .order_by(ItemChecklist.nome_item.asc(), ItemChecklist.id.asc())
+        .all()
+    )
+
+
+def _montar_checklist_abertura(form, itens):
+    """Monta o JSON do checklist a partir dos campos `check_<id>` e itens avulsos."""
+    por_id = {item.id: item for item in itens}
+    respostas = {}
+    for chave in form:
+        if not str(chave).startswith("check_"):
+            continue
+        sufixo = str(chave).split("_", 1)[1]
+        if not sufixo.isdigit():
+            continue
+        item = por_id.get(int(sufixo))
+        if item is None:
+            continue
+        valor = (form.get(chave) or "").strip()
+        if item.tipo_resposta == TipoRespostaChecklist.BOOLEANO and valor not in (
+            "OK",
+            "Defeito",
+            "Não Se Encontra",
+        ):
+            raise ValueError(
+                f"Informe OK, Defeito ou Não Se Encontra para «{item.nome_item}»."
+            )
+        respostas[f"check_{item.id}"] = valor
+
+    for item in itens:
+        campo = f"check_{item.id}"
+        if campo in respostas:
+            continue
+        if item.tipo_resposta == TipoRespostaChecklist.BOOLEANO:
+            raise ValueError(f"Informe o status de «{item.nome_item}».")
+        respostas[campo] = ""
+
+    nomes = form.getlist("custom_nome[]")
+    quantidades = form.getlist("custom_qtd[]")
+    estados = form.getlist("custom_estado[]")
+    for nome, qtd, estado in zip(nomes, quantidades, estados):
+        nome_limpo = (nome or "").strip()
+        qtd_limpo = (qtd or "").strip()
+        estado_limpo = (estado or "").strip()
+        if not (nome_limpo or qtd_limpo or estado_limpo):
+            continue
+        if not nome_limpo or not qtd_limpo or not estado_limpo:
+            raise ValueError(
+                "Preencha nome, quantidade e estado de todos os itens avulsos."
+            )
+        chave = f"{nome_limpo} (Qtd: {qtd_limpo})"
+        respostas[chave] = estado_limpo
+
+    return json.dumps(respostas, ensure_ascii=False)
+
+
+def _parse_checklist_json(raw, itens_por_id=None):
+    """Normaliza checklist legado (lista) ou dinâmico (dict check_<id>) para exibição."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+
+    itens_por_id = itens_por_id or {}
+    if isinstance(data, list):
+        return [
+            {
+                "label": item.get("label") or item.get("chave") or "Item",
+                "valor": item.get("valor") or "—",
+            }
+            for item in data
+            if isinstance(item, dict)
+        ]
+    if isinstance(data, dict):
+        exibicao = []
+        for chave, valor in data.items():
+            item = None
+            texto_chave = str(chave)
+            if texto_chave.startswith("check_"):
+                sufixo = texto_chave.split("_", 1)[1]
+                if sufixo.isdigit():
+                    item = itens_por_id.get(int(sufixo))
+            label = item.nome_item if item is not None else texto_chave
+            exibicao.append({"label": label, "valor": valor if valor else "—"})
+        return exibicao
+    return []
+
+
+def _resolver_apoio_ronda(form, condominio, porteiros):
+    """Devolve (apoio_id, ronda_id) válidos no tenant, ou None se o campo estiver desligado."""
+    ids_validos = {porteiro.id for porteiro in porteiros}
+
+    def _id_opcional(campo, habilitado):
+        if not habilitado:
+            return None
+        bruto = (form.get(campo) or "").strip()
+        if not bruto:
+            return None
+        if not bruto.isdigit():
+            raise ValueError("Selecione um porteiro válido.")
+        usuario_id = int(bruto)
+        if usuario_id not in ids_validos:
+            raise ValueError("O porteiro selecionado não pertence a este condomínio.")
+        return usuario_id
+
+    return (
+        _id_opcional("apoio_id", bool(condominio and condominio.permitir_apoio)),
+        _id_opcional("ronda_id", bool(condominio and condominio.permitir_ronda)),
+    )
+
+
+@portaria_required
+def portaria_livro():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    _garantir_guarita_padrao(condominio_id)
+    condominio = Condominio.query.filter_by(id=condominio_id).first()
+    porteiros = _porteiros_do_condominio(condominio_id)
+    itens_por_id = {
+        item.id: item
+        for item in ItemChecklist.query.filter_by(condominio_id=condominio_id).all()
+    }
+
+    guaritas = (
+        Guarita.query.filter_by(condominio_id=condominio_id, ativa=True)
+        .order_by(Guarita.nome.asc(), Guarita.id.asc())
+        .all()
+    )
+    contexto_base = dict(
+        current_user=usuario,
+        condominio=condominio,
+        permitir_apoio=bool(condominio and condominio.permitir_apoio),
+        permitir_ronda=bool(condominio and condominio.permitir_ronda),
+        itens_checklist=[],
+        porteiros=porteiros,
+        guaritas=guaritas,
+        guarita=None,
+        plantao_aberto=None,
+        historico=[],
+    )
+    if not guaritas:
+        flash("Nenhuma guarita cadastrada para este condomínio.", "warning")
+        return render_template("portaria/livro.html", **contexto_base)
+
+    guarita_id_param = request.args.get("guarita_id", type=int)
+    guarita = None
+    if guarita_id_param:
+        guarita = next((g for g in guaritas if g.id == guarita_id_param), None)
+    if guarita is None:
+        guarita = guaritas[0]
+
+    itens_checklist = _itens_checklist_ativos(guarita.id)
+
+    plantao_aberto = (
+        Plantao.query.options(
+            joinedload(Plantao.porteiro),
+            joinedload(Plantao.apoio),
+            joinedload(Plantao.ronda),
+        )
+        .filter_by(guarita_id=guarita.id, status=StatusPlantao.ABERTO)
+        .order_by(Plantao.data_abertura.desc())
+        .first()
+    )
+
+    historico = (
+        Plantao.query.options(
+            joinedload(Plantao.porteiro),
+            joinedload(Plantao.apoio),
+            joinedload(Plantao.ronda),
+        )
+        .filter_by(guarita_id=guarita.id, status=StatusPlantao.FECHADO)
+        .order_by(Plantao.data_fechamento.desc(), Plantao.id.desc())
+        .limit(20)
+        .all()
+    )
+    for plantao in historico:
+        plantao.checklist_itens = _parse_checklist_json(
+            plantao.checklist_json, itens_por_id
+        )
+    if plantao_aberto:
+        plantao_aberto.checklist_itens = _parse_checklist_json(
+            plantao_aberto.checklist_json, itens_por_id
+        )
+
+    contexto_base.update(
+        guarita=guarita,
+        itens_checklist=itens_checklist,
+        plantao_aberto=plantao_aberto,
+        historico=historico,
+    )
+    return render_template("portaria/livro.html", **contexto_base)
+
+
+@portaria_required
+def portaria_plantao_abrir():
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    guarita_id = request.form.get("guarita_id", type=int)
+    if not guarita_id:
+        flash("Selecione a guarita para abrir o plantão.", "danger")
+        return redirect(url_for("portaria_livro"))
+
+    guarita = _guarita_do_tenant(guarita_id, condominio_id)
+
+    aberto = Plantao.query.filter_by(
+        guarita_id=guarita.id, status=StatusPlantao.ABERTO
+    ).first()
+    if aberto:
+        flash(
+            f"Já existe plantão aberto na {guarita.nome}. Feche-o antes de abrir outro.",
+            "warning",
+        )
+        return redirect(url_for("portaria_livro", guarita_id=guarita.id))
+
+    condominio = Condominio.query.filter_by(id=condominio_id).first()
+    itens = _itens_checklist_ativos(guarita.id)
+    porteiros = _porteiros_do_condominio(condominio_id)
+    try:
+        checklist_json = _montar_checklist_abertura(request.form, itens)
+        apoio_id, ronda_id = _resolver_apoio_ronda(
+            request.form, condominio, porteiros
+        )
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("portaria_livro", guarita_id=guarita.id))
+
+    plantao = Plantao(
+        guarita_id=guarita.id,
+        porteiro_id=usuario.id,
+        apoio_id=apoio_id,
+        ronda_id=ronda_id,
+        data_abertura=_agora_sao_paulo(),
+        status=StatusPlantao.ABERTO,
+        checklist_json=checklist_json,
+        ocorrencias=None,
+    )
+    db.session.add(plantao)
+    _registrar_auditoria(
+        usuario,
+        f"Plantão aberto na {guarita.nome} (ID {guarita.id}).",
+    )
+    db.session.commit()
+    flash(f"Plantão aberto na {guarita.nome}.", "success")
+    return redirect(url_for("portaria_livro", guarita_id=guarita.id))
+
+
+@portaria_required
+def portaria_plantao_fechar():
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    plantao_id = request.form.get("plantao_id", type=int)
+    if not plantao_id:
+        flash("Plantão inválido.", "danger")
+        return redirect(url_for("portaria_livro"))
+
+    plantao = _plantao_do_tenant(plantao_id, condominio_id)
+    if plantao.status != StatusPlantao.ABERTO:
+        flash("Este plantão já está fechado.", "warning")
+        return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+    ocorrencias = (request.form.get("ocorrencias") or "").strip()
+    plantao.ocorrencias = ocorrencias or plantao.ocorrencias
+    plantao.status = StatusPlantao.FECHADO
+    plantao.data_fechamento = _agora_sao_paulo()
+
+    guarita_nome = plantao.guarita.nome if plantao.guarita else "guarita"
+    _registrar_auditoria(
+        usuario,
+        f"Plantão fechado na {guarita_nome} (plantão #{plantao.id}).",
+    )
+    db.session.commit()
+    flash("Plantão fechado. Serviço passado com sucesso.", "success")
+    return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+
+@portaria_required
+def portaria_plantao_ocorrencia():
+    """Registra ocorrência avulsa no plantão aberto (append no texto)."""
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    plantao_id = request.form.get("plantao_id", type=int)
+    texto = (request.form.get("ocorrencia") or "").strip()
+    if not plantao_id:
+        flash("Plantão inválido.", "danger")
+        return redirect(url_for("portaria_livro"))
+    if not texto:
+        flash("Informe o texto da ocorrência.", "danger")
+        return redirect(url_for("portaria_livro"))
+
+    plantao = _plantao_do_tenant(plantao_id, condominio_id)
+    if plantao.status != StatusPlantao.ABERTO:
+        flash("Só é possível registrar ocorrência em plantão aberto.", "warning")
+        return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+    agora = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
+    linha = f"[{agora}] {texto}"
+    if plantao.ocorrencias:
+        plantao.ocorrencias = f"{plantao.ocorrencias.rstrip()}\n{linha}"
+    else:
+        plantao.ocorrencias = linha
+
+    _registrar_auditoria(
+        usuario,
+        f"Ocorrência avulsa no plantão #{plantao.id} ({plantao.guarita.nome}).",
+    )
+    db.session.commit()
+    flash("Ocorrência registrada no plantão.", "success")
+    return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+
+@portaria_required
+def portaria_plantao_evento():
+    """Acrescenta um evento com hora ao texto de ocorrências do plantão aberto."""
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    plantao_id = request.form.get("plantao_id", type=int)
+    texto = (request.form.get("evento") or request.form.get("texto") or "").strip()
+    if not plantao_id:
+        flash("Plantão inválido.", "danger")
+        return redirect(url_for("portaria_livro"))
+    if not texto:
+        flash("Informe o texto do evento.", "danger")
+        return redirect(url_for("portaria_livro"))
+
+    plantao = _plantao_do_tenant(plantao_id, condominio_id)
+    if plantao.status != StatusPlantao.ABERTO:
+        flash("Só é possível registrar evento em plantão aberto.", "warning")
+        return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+    hora_atual = _agora_sao_paulo().strftime("%H:%M")
+    linha = f"[{hora_atual}] - {texto}\n"
+    plantao.ocorrencias = f"{plantao.ocorrencias or ''}{linha}"
+
+    _registrar_auditoria(
+        usuario,
+        f"Evento registrado no plantão #{plantao.id} ({plantao.guarita.nome}).",
+    )
+    db.session.commit()
+    flash("Evento registrado no plantão.", "success")
+    return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+
 def register(app):
     """Registra as rotas da portaria preservando os endpoints legados."""
     app.add_url_rule(
@@ -1037,4 +1481,34 @@ def register(app):
         "portaria_mudancas",
         portaria_mudancas,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/livro",
+        "portaria_livro",
+        portaria_livro,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/plantao/abrir",
+        "portaria_plantao_abrir",
+        portaria_plantao_abrir,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/plantao/fechar",
+        "portaria_plantao_fechar",
+        portaria_plantao_fechar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/plantao/ocorrencia",
+        "portaria_plantao_ocorrencia",
+        portaria_plantao_ocorrencia,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/plantao/evento",
+        "portaria_plantao_evento",
+        portaria_plantao_evento,
+        methods=["POST"],
     )

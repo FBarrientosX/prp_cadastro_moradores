@@ -37,8 +37,11 @@ from app.auth import (
 )
 from app.models import (
     AgendamentoMudanca,
+    Condominio,
     Cupom,
     Encomenda,
+    Guarita,
+    ItemChecklist,
     Ocorrencia,
     Parceiro,
     Pessoa,
@@ -50,6 +53,7 @@ from app.models import (
     StatusEncomenda,
     StatusOcorrencia,
     StatusUnidade,
+    TipoRespostaChecklist,
     Unidade,
     Usuario,
     VinculoPessoa,
@@ -683,6 +687,193 @@ def _redirect_equipe_acessos():
     return redirect(url_for("admin_index", tab="equipe"))
 
 
+def _guarita_do_tenant(guarita_id, condominio_id):
+    return Guarita.query.filter_by(
+        id=guarita_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+def _item_checklist_do_tenant(item_id, condominio_id):
+    return ItemChecklist.query.filter_by(
+        id=item_id, condominio_id=condominio_id
+    ).first_or_404()
+
+
+@admin_required
+def admin_portaria_configuracoes():
+    condominio_id = condominio_id_obrigatorio()
+    condominio = Condominio.query.filter_by(id=condominio_id).first_or_404()
+    guaritas = (
+        Guarita.query.filter_by(condominio_id=condominio_id)
+        .order_by(Guarita.nome.asc(), Guarita.id.asc())
+        .all()
+    )
+    itens_checklist = (
+        ItemChecklist.query.filter_by(condominio_id=condominio_id)
+        .order_by(
+            ItemChecklist.guarita_id.asc(),
+            ItemChecklist.nome_item.asc(),
+            ItemChecklist.id.asc(),
+        )
+        .all()
+    )
+    guaritas_ativas = [g for g in guaritas if g.ativa]
+    return render_template(
+        "admin/config_portaria.html",
+        condominio=condominio,
+        guaritas=guaritas,
+        guaritas_ativas=guaritas_ativas,
+        itens_checklist=itens_checklist,
+    )
+
+
+@admin_required
+def admin_portaria_configuracoes_gerais():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    condominio = Condominio.query.filter_by(id=condominio_id).first_or_404()
+    condominio.permitir_apoio = request.form.get("permitir_apoio") == "1"
+    condominio.permitir_ronda = request.form.get("permitir_ronda") == "1"
+    usuario = get_current_user()
+    if usuario:
+        _registrar_auditoria(
+            usuario,
+            "Configurações gerais do livro de serviço atualizadas "
+            f"(apoio={'sim' if condominio.permitir_apoio else 'não'}, "
+            f"ronda={'sim' if condominio.permitir_ronda else 'não'}).",
+        )
+    db.session.commit()
+    flash("Configurações gerais da portaria salvas.", "success")
+    return redirect(url_for("admin_portaria_configuracoes"))
+
+
+@admin_required
+def admin_portaria_guarita_salvar():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    nome = (request.form.get("nome") or "").strip()
+    if not nome or len(nome) > 100:
+        flash("Informe um nome de guarita com até 100 caracteres.", "danger")
+        return redirect(url_for("admin_portaria_configuracoes"))
+
+    guarita_id = request.form.get("guarita_id", type=int)
+    usuario = get_current_user()
+    if guarita_id:
+        guarita = _guarita_do_tenant(guarita_id, condominio_id)
+        guarita.nome = nome
+        mensagem = f"Guarita atualizada: {nome} (ID {guarita.id})."
+        flash("Guarita atualizada.", "success")
+    else:
+        guarita = Guarita(nome=nome, condominio_id=condominio_id, ativa=True)
+        db.session.add(guarita)
+        db.session.flush()
+        mensagem = f"Guarita criada: {nome} (ID {guarita.id})."
+        flash("Guarita criada.", "success")
+
+    if usuario:
+        _registrar_auditoria(usuario, mensagem)
+    db.session.commit()
+    return redirect(url_for("admin_portaria_configuracoes"))
+
+
+@admin_required
+def admin_portaria_guarita_toggle(guarita_id):
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    guarita = _guarita_do_tenant(guarita_id, condominio_id)
+    guarita.ativa = not bool(guarita.ativa)
+    usuario = get_current_user()
+    if usuario:
+        estado = "ativada" if guarita.ativa else "desativada"
+        _registrar_auditoria(
+            usuario, f"Guarita {estado}: {guarita.nome} (ID {guarita.id})."
+        )
+    db.session.commit()
+    flash(
+        f"Guarita «{guarita.nome}» {'ativada' if guarita.ativa else 'desativada'}.",
+        "success",
+    )
+    return redirect(url_for("admin_portaria_configuracoes"))
+
+
+@admin_required
+def admin_portaria_checklist_salvar():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    nome_item = (request.form.get("nome_item") or "").strip()
+    tipo_resposta = (request.form.get("tipo_resposta") or "").strip()
+    guarita_id = request.form.get("guarita_id", type=int)
+    if not nome_item or len(nome_item) > 120:
+        flash("Informe o nome do item com até 120 caracteres.", "danger")
+        return redirect(url_for("admin_portaria_configuracoes"))
+    if tipo_resposta not in TipoRespostaChecklist.CHOICES:
+        flash("Tipo de resposta inválido.", "danger")
+        return redirect(url_for("admin_portaria_configuracoes"))
+    if not guarita_id:
+        flash("Selecione a guarita do item de checklist.", "danger")
+        return redirect(url_for("admin_portaria_configuracoes"))
+
+    guarita = _guarita_do_tenant(guarita_id, condominio_id)
+
+    item_id = request.form.get("item_id", type=int)
+    usuario = get_current_user()
+    if item_id:
+        item = _item_checklist_do_tenant(item_id, condominio_id)
+        item.nome_item = nome_item
+        item.tipo_resposta = tipo_resposta
+        item.guarita_id = guarita.id
+        mensagem = (
+            f"Item de checklist atualizado: {nome_item} "
+            f"(guarita {guarita.nome}, ID {item.id})."
+        )
+        flash("Item de checklist atualizado.", "success")
+    else:
+        item = ItemChecklist(
+            nome_item=nome_item,
+            tipo_resposta=tipo_resposta,
+            condominio_id=condominio_id,
+            guarita_id=guarita.id,
+            ativo=True,
+        )
+        db.session.add(item)
+        db.session.flush()
+        mensagem = (
+            f"Item de checklist criado: {nome_item} "
+            f"(guarita {guarita.nome}, ID {item.id})."
+        )
+        flash("Item de checklist criado.", "success")
+
+    if usuario:
+        _registrar_auditoria(usuario, mensagem)
+    db.session.commit()
+    return redirect(url_for("admin_portaria_configuracoes"))
+
+
+@admin_required
+def admin_portaria_checklist_toggle(item_id):
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    item = _item_checklist_do_tenant(item_id, condominio_id)
+    item.ativo = not bool(item.ativo)
+    usuario = get_current_user()
+    if usuario:
+        estado = "ativado" if item.ativo else "desativado"
+        _registrar_auditoria(
+            usuario, f"Item de checklist {estado}: {item.nome_item} (ID {item.id})."
+        )
+    db.session.commit()
+    flash(
+        f"Item «{item.nome_item}» {'ativado' if item.ativo else 'desativado'}.",
+        "success",
+    )
+    return redirect(url_for("admin_portaria_configuracoes"))
+
+
 @admin_required
 def admin_alterar_senha_usuario(usuario_id):
     from app.routes import _registrar_auditoria, _usuario_do_tenant
@@ -1201,4 +1392,40 @@ def register(app):
         "admin_mudancas",
         admin_mudancas,
         methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/configuracoes",
+        "admin_portaria_configuracoes",
+        admin_portaria_configuracoes,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/configuracoes/gerais",
+        "admin_portaria_configuracoes_gerais",
+        admin_portaria_configuracoes_gerais,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/guarita/salvar",
+        "admin_portaria_guarita_salvar",
+        admin_portaria_guarita_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/guarita/<int:guarita_id>/toggle",
+        "admin_portaria_guarita_toggle",
+        admin_portaria_guarita_toggle,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/checklist/salvar",
+        "admin_portaria_checklist_salvar",
+        admin_portaria_checklist_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/portaria/checklist/<int:item_id>/toggle",
+        "admin_portaria_checklist_toggle",
+        admin_portaria_checklist_toggle,
+        methods=["POST"],
     )
