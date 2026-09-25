@@ -827,7 +827,10 @@ class Guarita(db.Model):
         "Condominio", backref=db.backref("guaritas", lazy="dynamic")
     )
     itens_checklist = db.relationship(
-        "ItemChecklist", backref="guarita", lazy=True
+        "ItemChecklist",
+        backref="guarita",
+        lazy=True,
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self):

@@ -93,7 +93,7 @@
 <section class="card border-0 shadow-sm mb-4">
     <div class="card-body">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-            <h2 class="h5 mb-0">Gestão do Checklist Padrão</h2>
+            <h2 class="h5 mb-0">Gestão de Checklists por Guarita</h2>
             <button type="button" class="btn btn-outline-primary btn-sm"
                     data-bs-toggle="modal" data-bs-target="#modalChecklistNovo">
                 <i class="bi bi-plus-lg me-1"></i>Novo item
@@ -115,7 +115,7 @@
                     {% for item in itens_checklist %}
                     <tr>
                         <td>{{ item.nome_item }}</td>
-                        <td>{{ item.guarita.nome if item.guarita else '—' }}</td>
+                        <td>{{ item.guarita.nome if item.guarita else 'Geral' }}</td>
                         <td>
                             {% if item.tipo_resposta == 'texto' %}
                             Texto livre
@@ -211,10 +211,12 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label" for="checklist_guarita_nova">Guarita</label>
-                        <select class="form-select" id="checklist_guarita_nova" name="guarita_id" required>
-                            <option value="">Selecione...</option>
-                            {% for g in guaritas_ativas %}
-                            <option value="{{ g.id }}">{{ g.nome }}</option>
+                        <select class="form-select mb-2" id="checklist_guarita_nova" name="guarita_id" required>
+                            <option value="">Selecione a Guarita...</option>
+                            {% for g in guaritas %}
+                            <option value="{{ g.id }}">
+                                {{ g.nome }}{% if not g.ativa %} (inativa){% endif %}
+                            </option>
                             {% endfor %}
                         </select>
                     </div>
