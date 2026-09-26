@@ -3,6 +3,19 @@
 {% block title %}Encomendas{% endblock %}
 
 {% block content %}
+<style>
+    #tabelaPendentes .chk-selecao {
+        width: 1.35rem;
+        height: 1.35rem;
+        margin: 0;
+        border: 2px solid #495057;
+        cursor: pointer;
+        vertical-align: middle;
+    }
+    #tabelaPendentes tr.encomenda-row {
+        cursor: pointer;
+    }
+</style>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
     <div>
         <h1 class="h3 mb-1">Encomendas</h1>
@@ -97,27 +110,55 @@
 <div class="tab-content pt-3">
     <div class="tab-pane fade show active" id="pendentes" role="tabpanel">
         {% if pendentes %}
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <p class="text-muted small mb-0">
+                Selecione várias encomendas para baixar de uma vez em horários de pico.
+            </p>
+            <button type="button" id="btnEntregarLote" class="btn btn-secondary" disabled>
+                <i class="bi bi-box-seam me-1"></i>Entregar Selecionadas
+                <span id="badgeLoteCount" class="badge text-bg-light text-dark ms-1">0</span>
+            </button>
+        </div>
         <div class="table-responsive card shadow-sm">
             <table class="table table-hover align-middle mb-0" id="tabelaPendentes">
                 <thead class="table-light">
                     <tr>
+                        <th class="text-center" style="width: 3.25rem;">
+                            <input type="checkbox" class="form-check-input chk-selecao" id="chkSelecionarTodos"
+                                   title="Selecionar todos" aria-label="Selecionar todos">
+                        </th>
                         <th>Unidade</th>
                         <th>Destinatário</th>
                         <th>Transportadora</th>
                         <th>Data/hora de recebimento</th>
-                        <th>Recebido por</th>
+                        <th>Código de Rastreio</th>
                         <th class="text-end">Ação</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in pendentes %}
-                    <tr data-unidade="{{ item.unidade.identificador|e }}"
+                    <tr class="encomenda-row" data-unidade="{{ item.unidade.identificador|e }}"
                         data-destinatario="{{ (item.destinatario or '')|e }}">
+                        <td class="text-center">
+                            <input type="checkbox" class="form-check-input chk-selecao chk-encomenda"
+                                   value="{{ item.id }}"
+                                   aria-label="Selecionar encomenda {{ item.id }}">
+                        </td>
                         <td class="fw-semibold">{{ item.unidade.identificador }}</td>
                         <td>{{ item.destinatario or '—' }}</td>
                         <td>{{ item.transportadora or '—' }}</td>
-                        <td>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</td>
-                        <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
+                        <td>
+                            <div>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</div>
+                            {% set segundos_espera = (agora_entrega - item.data_recebimento).total_seconds() %}
+                            <small class="{% if segundos_espera > 259200 %}text-danger{% else %}text-muted{% endif %}">
+                                {{ item.data_recebimento | tempo_relativo }}
+                            </small>
+                            <div class="small text-muted mt-1">
+                                <i class="bi bi-bell"></i>
+                                Tentativas de contato: {{ item.tentativas_contato if item.tentativas_contato is not none else 1 }}
+                            </div>
+                        </td>
+                        <td>{{ item.codigo_rastreio or '—' }}</td>
                         <td class="text-end">
                             <div class="d-inline-flex flex-wrap gap-1 justify-content-end">
                                 <button type="button" class="btn btn-sm btn-primary"
@@ -126,13 +167,18 @@
                                     <i class="bi bi-info-circle me-1"></i>Detalhes
                                 </button>
                                 <form method="post"
-                                      action="{{ url_for('portaria_encomendas_entregar', encomenda_id=item.id) }}"
-                                      class="d-inline"
-                                      onsubmit="return confirm('Confirmar entrega desta encomenda ao morador?');">
-                                    <button type="submit" class="btn btn-sm btn-success">
-                                        <i class="bi bi-box-seam me-1"></i>Registrar entrega
+                                      action="{{ url_for('portaria_encomendas_reenviar_notificacao', id=item.id) }}"
+                                      class="d-inline">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                            title="Reenviar Notificação">
+                                        <i class="bi bi-bell me-1"></i>Reenviar Notificação
                                     </button>
                                 </form>
+                                <button type="button" class="btn btn-sm btn-success"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalEntrega{{ item.id }}">
+                                    <i class="bi bi-box-seam me-1"></i>Registrar entrega
+                                </button>
                             </div>
                         </td>
                     </tr>
@@ -157,6 +203,7 @@
                         <th>Data/hora de recebimento</th>
                         <th>Recebido por</th>
                         <th>Data/hora de entrega</th>
+                        <th>Retirado por</th>
                         <th>Entregue por</th>
                     </tr>
                 </thead>
@@ -176,6 +223,7 @@
                             —
                             {% endif %}
                         </td>
+                        <td>{{ item.entregue_para or '—' }}</td>
                         <td>{{ item.porteiro_entrega.username if item.porteiro_entrega else '—' }}</td>
                     </tr>
                     {% endfor %}
@@ -250,7 +298,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
                 <form method="post"
-                      action="{{ url_for('portaria_encomendas_notificar', id=item.id) }}"
+                      action="{{ url_for('portaria_encomendas_reenviar_notificacao', id=item.id) }}"
                       class="d-inline">
                     <button type="submit" class="btn btn-success">
                         <i class="bi bi-envelope me-1"></i>Reenviar Notificação
@@ -260,7 +308,151 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="modalEntrega{{ item.id }}" tabindex="-1"
+     aria-labelledby="modalEntregaLabel{{ item.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" enctype="multipart/form-data"
+                  action="{{ url_for('portaria_encomendas_entregar', encomenda_id=item.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEntregaLabel{{ item.id }}">
+                        Confirmar entrega — {{ item.unidade.identificador }}
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="inputEntreguePara{{ item.id }}">Entregue para</label>
+                        <input type="text" class="form-control"
+                               id="inputEntreguePara{{ item.id }}"
+                               name="entregue_para" maxlength="200" required
+                               placeholder="Nome de quem retirou o pacote"
+                               autocomplete="off">
+                    </div>
+                    {% set moradores_unidade = pessoas_por_unidade.get(item.unidade_id, []) %}
+                    {% if moradores_unidade %}
+                    <div class="mb-3">
+                        <span class="form-label d-block">Quem retirou (Atalhos)</span>
+                        <div class="d-flex flex-wrap gap-1">
+                            {% for pessoa in moradores_unidade %}
+                            <button type="button"
+                                    class="badge bg-secondary border-0"
+                                    style="cursor: pointer;"
+                                    onclick="document.getElementById('inputEntreguePara{{ item.id }}').value = this.textContent.trim();">
+                                {{ pessoa.nome_completo }}
+                            </button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-6">
+                            <label class="form-label" for="dataEntrega{{ item.id }}">Data da entrega</label>
+                            <input type="date" class="form-control"
+                                   id="dataEntrega{{ item.id }}"
+                                   name="data_entrega"
+                                   value="{{ agora_entrega.strftime('%Y-%m-%d') }}"
+                                   required>
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label" for="horaEntrega{{ item.id }}">Hora da entrega</label>
+                            <input type="time" class="form-control"
+                                   id="horaEntrega{{ item.id }}"
+                                   name="hora_entrega"
+                                   value="{{ agora_entrega.strftime('%H:%M') }}"
+                                   required>
+                        </div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="fotoEntrega{{ item.id }}">
+                            Foto da retirada (opcional)
+                        </label>
+                        <input type="file" class="form-control"
+                               id="fotoEntrega{{ item.id }}"
+                               name="foto_entrega"
+                               accept="image/png, image/jpeg, image/webp"
+                               capture="environment">
+                        <div class="form-text">PNG, JPG ou WEBP · máx. 2 MB · câmera traseira em tablets.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Cancelar
+                    </button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-check2-circle me-1"></i>Confirmar Entrega
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 {% endfor %}
+
+{% if pendentes %}
+<div class="modal fade" id="modalEntregaLote" tabindex="-1"
+     aria-labelledby="modalEntregaLoteLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" enctype="multipart/form-data" id="formEntregaLote"
+                  action="{{ url_for('portaria_encomendas_entregar_lote') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEntregaLoteLabel">
+                        Entregar selecionadas
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">
+                        <span id="textoQtdLote">0</span> encomenda(s) serão marcadas como entregues.
+                    </p>
+                    <div id="containerIdsLote"></div>
+                    <div class="mb-3">
+                        <label class="form-label" for="entregueParaLote">Entregue para</label>
+                        <input type="text" class="form-control" id="entregueParaLote"
+                               name="entregue_para" maxlength="200" required
+                               placeholder="Nome de quem retirou os pacotes"
+                               autocomplete="off">
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-6">
+                            <label class="form-label" for="dataEntregaLote">Data da entrega</label>
+                            <input type="date" class="form-control" id="dataEntregaLote"
+                                   name="data_entrega"
+                                   value="{{ agora_entrega.strftime('%Y-%m-%d') }}"
+                                   required>
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label" for="horaEntregaLote">Hora da entrega</label>
+                            <input type="time" class="form-control" id="horaEntregaLote"
+                                   name="hora_entrega"
+                                   value="{{ agora_entrega.strftime('%H:%M') }}"
+                                   required>
+                        </div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="fotoEntregaLote">Foto da retirada (opcional)</label>
+                        <input type="file" class="form-control" id="fotoEntregaLote"
+                               name="foto_entrega"
+                               accept="image/png, image/jpeg, image/webp"
+                               capture="environment">
+                        <div class="form-text">A mesma evidência será vinculada a todos os pacotes do lote.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Cancelar
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check2-circle me-1"></i>Confirmar Entrega em Lote
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
     <div id="toastRastreioLido" class="toast align-items-center text-bg-success border-0" role="alert"
@@ -276,6 +468,106 @@
 
 {% block scripts %}
 <script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+(function () {
+    var btnLote = document.getElementById("btnEntregarLote");
+    var chkTodos = document.getElementById("chkSelecionarTodos");
+    var badgeCount = document.getElementById("badgeLoteCount");
+    var containerIds = document.getElementById("containerIdsLote");
+    var textoQtd = document.getElementById("textoQtdLote");
+    var modalEl = document.getElementById("modalEntregaLote");
+
+    function checkboxes() {
+        return Array.prototype.slice.call(
+            document.querySelectorAll("#tabelaPendentes .chk-encomenda")
+        );
+    }
+
+    function selecionados() {
+        return checkboxes().filter(function (chk) { return chk.checked; });
+    }
+
+    function atualizarBotaoLote() {
+        var qtd = selecionados().length;
+        if (btnLote) {
+            btnLote.disabled = qtd === 0;
+            btnLote.classList.toggle("btn-primary", qtd > 0);
+            btnLote.classList.toggle("btn-secondary", qtd === 0);
+        }
+        if (badgeCount) {
+            badgeCount.textContent = String(qtd);
+        }
+        checkboxes().forEach(function (chk) {
+            var linha = chk.closest("tr");
+            if (linha) {
+                linha.classList.toggle("table-primary", chk.checked);
+            }
+        });
+        if (chkTodos) {
+            var todos = checkboxes();
+            chkTodos.checked = todos.length > 0 && selecionados().length === todos.length;
+            chkTodos.indeterminate = qtd > 0 && qtd < todos.length;
+        }
+    }
+
+    if (chkTodos) {
+        chkTodos.addEventListener("change", function () {
+            checkboxes().forEach(function (chk) {
+                chk.checked = chkTodos.checked;
+            });
+            atualizarBotaoLote();
+        });
+    }
+
+    var tabela = document.getElementById("tabelaPendentes");
+    if (tabela) {
+        tabela.addEventListener("change", function (event) {
+            if (event.target && event.target.classList.contains("chk-encomenda")) {
+                atualizarBotaoLote();
+            }
+        });
+        tabela.addEventListener("click", function (event) {
+            var alvo = event.target;
+            if (!alvo || alvo.closest("button, a, form, input, label")) {
+                return;
+            }
+            var linha = alvo.closest("tr.encomenda-row");
+            if (!linha) {
+                return;
+            }
+            var chk = linha.querySelector(".chk-encomenda");
+            if (!chk) {
+                return;
+            }
+            chk.checked = !chk.checked;
+            atualizarBotaoLote();
+        });
+    }
+
+    if (btnLote && modalEl && containerIds) {
+        btnLote.addEventListener("click", function () {
+            var ids = selecionados().map(function (chk) { return chk.value; });
+            if (!ids.length) {
+                return;
+            }
+            containerIds.innerHTML = "";
+            ids.forEach(function (id) {
+                var input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "encomenda_ids";
+                input.value = id;
+                containerIds.appendChild(input);
+            });
+            if (textoQtd) {
+                textoQtd.textContent = String(ids.length);
+            }
+            bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        });
+    }
+
+    atualizarBotaoLote();
+})();
+</script>
 <script>
 (function () {
     var campo = document.getElementById("filtroEncomendas");

@@ -4,6 +4,7 @@ import os
 import random
 import re
 import string
+from datetime import datetime
 from html import escape
 from html.parser import HTMLParser
 
@@ -220,3 +221,44 @@ def html_rico_form(nome_campo):
     if not texto:
         return ""
     return limpo
+
+
+TZ_SAO_PAULO = "America/Sao_Paulo"
+
+
+def _agora_sao_paulo_naive():
+    """Datetime local America/Sao_Paulo sem tzinfo (padrão de persistência)."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo(TZ_SAO_PAULO)).replace(tzinfo=None)
+    except Exception:
+        return datetime.utcnow()
+
+
+def tempo_relativo(valor):
+    """Filtro Jinja: rótulo humanizado desde data_recebimento (fuso São Paulo)."""
+    if valor is None:
+        return ""
+
+    dt = valor
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.replace(tzinfo=None)
+
+    agora = _agora_sao_paulo_naive()
+    delta = agora - dt
+    segundos = delta.total_seconds()
+    if segundos < 0:
+        segundos = 0
+
+    if segundos < 3600:
+        return "Chegou há poucos minutos"
+
+    if segundos < 86400:
+        horas = max(1, int(segundos // 3600))
+        rotulo = "hora" if horas == 1 else "horas"
+        return f"Chegou há {horas} {rotulo}"
+
+    dias = max(1, int(segundos // 86400))
+    rotulo = "dia" if dias == 1 else "dias"
+    return f"Aguardando há {dias} {rotulo}"

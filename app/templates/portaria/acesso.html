@@ -21,6 +21,12 @@
     {% endif %}
 {% endmacro %}
 
+{% macro badge_placa(placa) %}
+    {% if placa %}
+    <span class="badge bg-secondary"><i class="bi bi-car-front"></i> {{ placa }}</span>
+    {% endif %}
+{% endmacro %}
+
 {% macro badge_status_autorizacao(item) %}
     {% if item.status == 'Concluída' %}
     <span class="badge text-bg-success">Compareceu</span>
@@ -88,15 +94,25 @@
                             {% for item in autorizacoes_hoje %}
                             <tr>
                                 <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>{{ item.nome_visitante }}</td>
+                                <td>
+                                    <div>{{ item.nome_visitante }}</div>
+                                    {{ badge_placa(item.placa_veiculo) }}
+                                </td>
                                 <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
                                 <td>{{ item.documento or '—' }}</td>
                                 <td class="text-end">
                                     {% if item.status == 'Pendente' %}
                                     <form method="post"
                                           action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}"
-                                          class="d-inline form-confirmar"
+                                          class="d-inline-flex flex-wrap align-items-center justify-content-end gap-2 form-confirmar"
                                           data-confirm-mensagem="Confirmar chegada de {{ item.nome_visitante }} na unidade {{ item.unidade.identificador }}?">
+                                        <input type="text" class="form-control form-control-sm"
+                                               name="placa_veiculo" maxlength="10"
+                                               value="{{ item.placa_veiculo or '' }}"
+                                               placeholder="Placa (opcional)"
+                                               aria-label="Placa do veículo"
+                                               style="width: 8rem; text-transform: uppercase;"
+                                               autocomplete="off">
                                         <button type="submit" class="btn btn-sm btn-success">
                                             <i class="bi bi-check2-circle me-1"></i>Confirmar Chegada
                                         </button>
@@ -142,7 +158,10 @@
                                     </span>
                                 </td>
                                 <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>{{ item.nome_visitante }}</td>
+                                <td>
+                                    <div>{{ item.nome_visitante }}</div>
+                                    {{ badge_placa(item.placa_veiculo) }}
+                                </td>
                                 <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
                                 <td>{{ item.documento or '—' }}</td>
                                 <td class="text-end">
@@ -181,7 +200,10 @@
                             <tr>
                                 <td class="text-nowrap">{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
                                 <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>{{ item.nome_visitante }}</td>
+                                <td>
+                                    <div>{{ item.nome_visitante }}</div>
+                                    {{ badge_placa(item.placa_veiculo) }}
+                                </td>
                                 <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
                                 <td>{{ item.documento or '—' }}</td>
                                 <td class="text-end">{{ badge_status_autorizacao(item) }}</td>
@@ -239,7 +261,13 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-8 d-flex align-items-end">
+            <div class="col-md-3">
+                <label class="form-label" for="placa_veiculo">Placa do Veículo (Opcional)</label>
+                <input type="text" class="form-control" id="placa_veiculo" name="placa_veiculo"
+                       maxlength="10" placeholder="ABC1D23" autocomplete="off"
+                       style="text-transform: uppercase;">
+            </div>
+            <div class="col-md-5 d-flex align-items-end">
                 <button type="submit" class="btn btn-primary">
                     <i class="bi bi-check2-circle me-1"></i>Registrar entrada
                 </button>
@@ -289,6 +317,7 @@
                             {% if registro.visitante.empresa %}
                             <div class="small text-muted">{{ registro.visitante.empresa }}</div>
                             {% endif %}
+                            {{ badge_placa(registro.placa_veiculo) }}
                         </td>
                         <td>
                             {% if registro.visitante.tipo == 'Prestador' %}
@@ -344,6 +373,7 @@
                             {% if registro.visitante.empresa %}
                             <div class="small text-muted">{{ registro.visitante.empresa }}</div>
                             {% endif %}
+                            {{ badge_placa(registro.placa_veiculo) }}
                         </td>
                         <td>
                             {% if registro.visitante.tipo == 'Prestador' %}

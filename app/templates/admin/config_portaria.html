@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+
+{% block title %}Configuração da Portaria{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Livro de Serviço — Configuração</h1>
+    <p class="text-muted mb-0">
+        Guaritas, checklist de abertura e campos opcionais do plantão de {{ condominio.nome }}.
+    </p>
+</div>
+
+<section class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">Configurações Gerais</h2>
+        <form method="post" action="{{ url_for('admin_portaria_configuracoes_gerais') }}">
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       id="permitir_apoio" name="permitir_apoio" value="1"
+                       {% if condominio.permitir_apoio %}checked{% endif %}>
+                <label class="form-check-label" for="permitir_apoio">
+                    Habilitar campo de Apoio
+                </label>
+                <div class="form-text">O porteiro pode indicar um colega de apoio na abertura do plantão.</div>
+            </div>
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       id="permitir_ronda" name="permitir_ronda" value="1"
+                       {% if condominio.permitir_ronda %}checked{% endif %}>
+                <label class="form-check-label" for="permitir_ronda">
+                    Habilitar campo de Ronda
+                </label>
+                <div class="form-text">O porteiro pode indicar o responsável pela ronda na abertura do plantão.</div>
+            </div>
+            <button type="submit" class="btn btn-primary">Salvar configurações</button>
+        </form>
+    </div>
+</section>
+
+<section class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">Gestão de Guaritas</h2>
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#modalGuaritaNova">
+                <i class="bi bi-plus-lg me-1"></i>Nova guarita
+            </button>
+        </div>
+        {% if guaritas %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for guarita in guaritas %}
+                    <tr>
+                        <td>{{ guarita.nome }}</td>
+                        <td>
+                            {% if guarita.ativa %}
+                            <span class="badge text-bg-success">Ativa</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativa</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modalGuarita{{ guarita.id }}">
+                                Editar
+                            </button>
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('admin_portaria_guarita_toggle', guarita_id=guarita.id) }}">
+                                <button type="submit" class="btn btn-sm {% if guarita.ativa %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
+                                    {{ 'Desativar' if guarita.ativa else 'Ativar' }}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhuma guarita cadastrada.</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">Gestão de Checklists por Guarita</h2>
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#modalChecklistNovo">
+                <i class="bi bi-plus-lg me-1"></i>Novo item
+            </button>
+        </div>
+        {% if itens_checklist %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Item</th>
+                        <th>Guarita</th>
+                        <th>Tipo de resposta</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in itens_checklist %}
+                    <tr>
+                        <td>{{ item.nome_item }}</td>
+                        <td>{{ item.guarita.nome if item.guarita else 'Geral' }}</td>
+                        <td>
+                            {% if item.tipo_resposta == 'texto' %}
+                            Texto livre
+                            {% else %}
+                            OK / Defeito
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#modalChecklist{{ item.id }}">
+                                Editar
+                            </button>
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('admin_portaria_checklist_toggle', item_id=item.id) }}">
+                                <button type="submit" class="btn btn-sm {% if item.ativo %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
+                                    {{ 'Desativar' if item.ativo else 'Ativar' }}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhum item de checklist cadastrado.</p>
+        {% endif %}
+    </div>
+</section>
+
+<div class="modal fade" id="modalGuaritaNova" tabindex="-1" aria-labelledby="modalGuaritaNovaLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_portaria_guarita_salvar') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalGuaritaNovaLabel">Nova guarita</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label" for="guarita_nome_nova">Nome</label>
+                    <input type="text" class="form-control" id="guarita_nome_nova" name="nome"
+                           maxlength="100" required placeholder="Ex.: Portaria Principal">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% for guarita in guaritas %}
+<div class="modal fade" id="modalGuarita{{ guarita.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_portaria_guarita_salvar') }}">
+                <input type="hidden" name="guarita_id" value="{{ guarita.id }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5">Editar guarita</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label" for="guarita_nome_{{ guarita.id }}">Nome</label>
+                    <input type="text" class="form-control" id="guarita_nome_{{ guarita.id }}"
+                           name="nome" maxlength="100" required value="{{ guarita.nome }}">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<div class="modal fade" id="modalChecklistNovo" tabindex="-1" aria-labelledby="modalChecklistNovoLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_portaria_checklist_salvar') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalChecklistNovoLabel">Novo item de checklist</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="checklist_guarita_nova">Guarita</label>
+                        <select class="form-select mb-2" id="checklist_guarita_nova" name="guarita_id" required>
+                            <option value="">Selecione a Guarita...</option>
+                            {% for g in guaritas %}
+                            <option value="{{ g.id }}">
+                                {{ g.nome }}{% if not g.ativa %} (inativa){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="checklist_nome_novo">Nome do item</label>
+                        <input type="text" class="form-control" id="checklist_nome_novo" name="nome_item"
+                               maxlength="120" required placeholder="Ex.: Rádio Comunicador">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="checklist_tipo_novo">Tipo de resposta</label>
+                        <select class="form-select" id="checklist_tipo_novo" name="tipo_resposta" required>
+                            <option value="booleano">OK / Defeito</option>
+                            <option value="texto">Texto livre</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% for item in itens_checklist %}
+<div class="modal fade" id="modalChecklist{{ item.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_portaria_checklist_salvar') }}">
+                <input type="hidden" name="item_id" value="{{ item.id }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5">Editar item de checklist</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="checklist_guarita_{{ item.id }}">Guarita</label>
+                        <select class="form-select" id="checklist_guarita_{{ item.id }}" name="guarita_id" required>
+                            {% for g in guaritas %}
+                            <option value="{{ g.id }}"
+                                    {% if item.guarita_id == g.id %}selected{% endif %}>
+                                {{ g.nome }}{% if not g.ativa %} (inativa){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="checklist_nome_{{ item.id }}">Nome do item</label>
+                        <input type="text" class="form-control" id="checklist_nome_{{ item.id }}"
+                               name="nome_item" maxlength="120" required value="{{ item.nome_item }}">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="checklist_tipo_{{ item.id }}">Tipo de resposta</label>
+                        <select class="form-select" id="checklist_tipo_{{ item.id }}" name="tipo_resposta" required>
+                            <option value="booleano" {% if item.tipo_resposta != 'texto' %}selected{% endif %}>OK / Defeito</option>
+                            <option value="texto" {% if item.tipo_resposta == 'texto' %}selected{% endif %}>Texto livre</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

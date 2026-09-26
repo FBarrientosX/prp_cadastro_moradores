@@ -72,10 +72,10 @@
                     {% for unidade in aguardando_registro %}
                     {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
                     {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
-                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado', 'Rejeitado'] %}
                     {% set contrato_pendente = contrato_aplicavel and unidade.contrato_locacao_status in ['Pendente', 'Nao Enviado'] %}
                     {% set doc_pendente = documento_base_pendente or contrato_pendente %}
-                    {% set doc_ok = unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
+                    {% set doc_ok = unidade.documento_status in ['Entregue', 'Aprovado'] and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
                     <tr>
                         <td>Bloco {{ unidade.bloco }}</td>
                         <td>{{ unidade.apartamento }}</td>
@@ -133,10 +133,10 @@
                     {% for unidade in finalizados %}
                     {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
                     {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
-                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado'] %}
+                    {% set documento_base_pendente = unidade.documento_status in ['Pendente', 'Nao Enviado', 'Rejeitado'] %}
                     {% set contrato_pendente = contrato_aplicavel and unidade.contrato_locacao_status in ['Pendente', 'Nao Enviado'] %}
                     {% set doc_pendente = documento_base_pendente or contrato_pendente %}
-                    {% set doc_ok = unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
+                    {% set doc_ok = unidade.documento_status in ['Entregue', 'Aprovado'] and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
                     <tr>
                         <td>Bloco {{ unidade.bloco }}</td>
                         <td>{{ unidade.apartamento }}</td>
@@ -485,13 +485,76 @@
 
                 <section>
                     <h3 class="h6 text-uppercase text-muted">Validação Documental</h3>
+                    <div class="mb-3 small">
+                        <p class="mb-1">
+                            Status:
+                            {% if unidade.documento_status in ['Aprovado', 'Entregue'] %}
+                            <span class="badge text-bg-success">{{ unidade.documento_status }}</span>
+                            {% elif unidade.documento_status == 'Rejeitado' %}
+                            <span class="badge text-bg-danger">{{ unidade.documento_status }}</span>
+                            {% elif unidade.documento_status == 'Pendente' %}
+                            <span class="badge text-bg-warning">{{ unidade.documento_status }}</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">{{ unidade.documento_status }}</span>
+                            {% endif %}
+                        </p>
+                        {% if unidade.documento_url %}
+                        <p class="mb-1">
+                            Comprovante:
+                            <a href="{{ unidade.documento_url }}" target="_blank" rel="noopener noreferrer">
+                                visualizar no Drive
+                            </a>
+                        </p>
+                        {% else %}
+                        <p class="mb-1 text-muted">Comprovante: não enviado</p>
+                        {% endif %}
+                        {% if unidade.documento2_url %}
+                        <p class="mb-1">
+                            Anexo adicional:
+                            <a href="{{ unidade.documento2_url }}" target="_blank" rel="noopener noreferrer">
+                                visualizar no Drive
+                            </a>
+                        </p>
+                        {% endif %}
+                        {% if unidade.contrato_locacao_status != 'Nao Aplicavel' %}
+                            {% if unidade.contrato_locacao_url %}
+                            <p class="mb-0">
+                                Contrato de locação:
+                                <a href="{{ unidade.contrato_locacao_url }}" target="_blank" rel="noopener noreferrer">
+                                    visualizar no Drive
+                                </a>
+                            </p>
+                            {% else %}
+                            <p class="mb-0 text-muted">Contrato de locação: não enviado</p>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <form method="post" action="{{ url_for('admin_validar_documentacao', unidade_id=unidade.id) }}">
+                            <input type="hidden" name="acao" value="aprovar">
+                            <button type="submit" class="btn btn-success btn-sm"
+                                    {% if not unidade.documento_url and not unidade.documento2_url %}disabled{% endif %}>
+                                Validar Documentação
+                            </button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin_validar_documentacao', unidade_id=unidade.id) }}"
+                              onsubmit="return confirm('Invalidar documentação? Os ficheiros serão removidos do Drive e o morador precisará enviar novamente.');">
+                            <input type="hidden" name="acao" value="rejeitar">
+                            <button type="submit" class="btn btn-danger btn-sm"
+                                    {% if not (unidade.documento_url or unidade.documento2_url or unidade.documento_status in ['Pendente', 'Aprovado', 'Entregue']) %}disabled{% endif %}>
+                                Invalidar Documentação
+                            </button>
+                        </form>
+                    </div>
                     <form method="post" action="{{ url_for('admin_atualizar_status_documentos', unidade_id=unidade.id) }}">
                         <div class="row g-3">
                             <div class="col-12 col-md-6">
                                 <label class="form-label">Comprovante de Propriedade</label>
                                 <select class="form-select" name="documento_status">
                                     <option value="Pendente" {% if unidade.documento_status == 'Pendente' %}selected{% endif %}>Pendente</option>
+                                    <option value="Aprovado" {% if unidade.documento_status == 'Aprovado' %}selected{% endif %}>Aprovado</option>
                                     <option value="Entregue" {% if unidade.documento_status == 'Entregue' %}selected{% endif %}>Entregue</option>
+                                    <option value="Rejeitado" {% if unidade.documento_status == 'Rejeitado' %}selected{% endif %}>Rejeitado</option>
                                 </select>
                             </div>
                             {% if unidade.contrato_locacao_status != 'Nao Aplicavel' %}

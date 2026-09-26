@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Minhas Encomendas{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h4 mb-1">Encomendas</h1>
+    <p class="text-muted mb-0">Acompanhe pacotes recebidos na portaria e o histórico de retiradas.</p>
+</div>
+
+<ul class="nav nav-tabs mb-3" id="encomendasTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-pendentes" data-bs-toggle="tab"
+                data-bs-target="#painel-pendentes" type="button" role="tab"
+                aria-controls="painel-pendentes" aria-selected="true">
+            Aguardando Retirada
+            <span class="badge text-bg-danger ms-1">{{ encomendas_pendentes|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-historico" data-bs-toggle="tab"
+                data-bs-target="#painel-historico" type="button" role="tab"
+                aria-controls="painel-historico" aria-selected="false">
+            Histórico de Recebidas
+            <span class="badge text-bg-secondary ms-1">{{ encomendas_historico|length }}</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content" id="encomendasTabsContent">
+    <div class="tab-pane fade show active" id="painel-pendentes" role="tabpanel"
+         aria-labelledby="tab-pendentes">
+        {% if encomendas_pendentes %}
+        <div class="row g-3">
+            {% for item in encomendas_pendentes %}
+            <div class="col-md-6 col-xl-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                            <h2 class="h6 mb-0">
+                                {{ item.transportadora or 'Encomenda' }}
+                            </h2>
+                            <span class="badge text-bg-warning">Pendente</span>
+                        </div>
+                        <p class="small text-muted mb-2">
+                            <i class="bi bi-calendar3 me-1"></i>
+                            Recebida em {{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}
+                        </p>
+                        {% if item.destinatario %}
+                        <p class="small mb-1">
+                            <strong>Destinatário:</strong> {{ item.destinatario }}
+                        </p>
+                        {% endif %}
+                        <p class="small mb-1">
+                            <strong>Transportadora:</strong> {{ item.transportadora or '—' }}
+                        </p>
+                        <p class="small mb-0">
+                            <strong>Rastreio:</strong> {{ item.codigo_rastreio or '—' }}
+                        </p>
+                    </div>
+                    {% if item.foto_pacote %}
+                    <div class="px-3 pb-3">
+                        <a href="#" data-bs-toggle="modal" data-bs-target="#modalFotoEncomenda{{ item.id }}">
+                            <img src="{{ url_for('static', filename='uploads/encomendas/' ~ item.foto_pacote) }}"
+                                 alt="Foto do pacote"
+                                 class="img-thumbnail"
+                                 style="width: 88px; height: 88px; object-fit: cover;">
+                        </a>
+                    </div>
+                    <div class="modal fade" id="modalFotoEncomenda{{ item.id }}" tabindex="-1" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered modal-lg">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h2 class="modal-title h6">Foto do pacote</h2>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                                </div>
+                                <div class="modal-body text-center">
+                                    <img src="{{ url_for('static', filename='uploads/encomendas/' ~ item.foto_pacote) }}"
+                                         alt="Foto do pacote"
+                                         class="img-fluid rounded">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card shadow-sm">
+            <div class="card-body text-center py-5">
+                <i class="bi bi-box2 fs-1 text-muted"></i>
+                <p class="text-muted mb-0 mt-2">
+                    Você não possui encomendas aguardando retirada no momento.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="painel-historico" role="tabpanel"
+         aria-labelledby="tab-historico">
+        {% if encomendas_historico %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Recebimento</th>
+                        <th>Transportadora</th>
+                        <th>Rastreio</th>
+                        <th>Entrega</th>
+                        <th>Retirado por</th>
+                        <th>Porteiro</th>
+                        <th class="text-end">Anexos</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in encomendas_historico %}
+                    <tr>
+                        <td class="text-nowrap">
+                            {{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}
+                        </td>
+                        <td>{{ item.transportadora or '—' }}</td>
+                        <td>{{ item.codigo_rastreio or '—' }}</td>
+                        <td class="text-nowrap">
+                            {% if item.data_entrega %}
+                            {{ item.data_entrega.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div>{{ item.entregue_para or '—' }}</div>
+                            {% if item.foto_entrega %}
+                            <a href="{{ url_for('static', filename='uploads/encomendas/' ~ item.foto_entrega) }}"
+                               class="btn btn-sm btn-outline-secondary mt-1"
+                               target="_blank" rel="noopener noreferrer">
+                                <i class="bi bi-camera"></i> Evidência
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ item.porteiro_entrega.username if item.porteiro_entrega else '—' }}
+                        </td>
+                        <td class="text-end">
+                            {% if item.foto_pacote %}
+                            <a href="#" class="btn btn-sm btn-outline-secondary"
+                               data-bs-toggle="modal"
+                               data-bs-target="#modalFotoHist{{ item.id }}">
+                                <i class="bi bi-image"></i>
+                            </a>
+                            <div class="modal fade" id="modalFotoHist{{ item.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered modal-lg">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h2 class="modal-title h6">Foto do pacote</h2>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                                        </div>
+                                        <div class="modal-body text-center">
+                                            <img src="{{ url_for('static', filename='uploads/encomendas/' ~ item.foto_pacote) }}"
+                                                 alt="Foto do pacote"
+                                                 class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if encomendas_historico|length >= 50 %}
+        <p class="text-muted small mb-0 mt-2">Exibindo as 50 encomendas entregues mais recentes.</p>
+        {% endif %}
+        {% else %}
+        <div class="card shadow-sm">
+            <div class="card-body text-center py-5">
+                <i class="bi bi-inbox fs-1 text-muted"></i>
+                <p class="text-muted mb-0 mt-2">
+                    Nenhuma encomenda entregue no histórico recente.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

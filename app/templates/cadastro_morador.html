@@ -312,21 +312,79 @@
 
             <section class="cadastro-section mb-4">
                 <p class="cadastro-section-title">Documentação</p>
-                <h2 class="h5 mb-2">Comprovante de Propriedade</h2>
-                <div class="alert alert-warning mb-0">
-                    <strong>Aviso:</strong> É obrigatória a apresentação do documento de propriedade
-                    (RGI, Contrato de Compra e Venda ou equivalente) diretamente à administração para
-                    a regularização e aprovação final da unidade.
+                <h2 class="h5 mb-2">Comprovante de Residência / Propriedade</h2>
+                <p class="text-muted small mb-3">
+                    Envie RGI, Contrato de Compra e Venda ou documento equivalente
+                    (PDF, PNG, JPG ou JPEG).
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="documento">Comprovante de Residência/Propriedade</label>
+                    <input type="file" class="form-control" id="documento" name="documento"
+                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
                 </div>
+                <div class="mb-3">
+                    <label class="form-label" for="documento2">Anexo Adicional (Opcional)</label>
+                    <input type="file" class="form-control" id="documento2" name="documento2"
+                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                </div>
+                {% if modo == 'atualizacao' and unidade and (unidade.documento_url or unidade.documento2_url or unidade.documento_status) %}
+                <div class="small mb-0">
+                    {% if unidade.documento_status %}
+                    <p class="mb-1">
+                        Status da documentação:
+                        {% if unidade.documento_status == 'Aprovado' or unidade.documento_status == 'Entregue' %}
+                        <span class="badge text-bg-success">{{ unidade.documento_status }}</span>
+                        {% elif unidade.documento_status == 'Rejeitado' %}
+                        <span class="badge text-bg-danger">{{ unidade.documento_status }}</span>
+                        {% elif unidade.documento_status == 'Pendente' %}
+                        <span class="badge text-bg-warning">{{ unidade.documento_status }}</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary">{{ unidade.documento_status }}</span>
+                        {% endif %}
+                    </p>
+                    {% endif %}
+                    {% if unidade.documento_url %}
+                    <p class="mb-1">
+                        Documento atual:
+                        <a href="{{ unidade.documento_url }}" target="_blank" rel="noopener noreferrer">
+                            visualizar no Drive
+                        </a>
+                    </p>
+                    {% endif %}
+                    {% if unidade.documento2_url %}
+                    <p class="mb-0">
+                        Anexo adicional:
+                        <a href="{{ unidade.documento2_url }}" target="_blank" rel="noopener noreferrer">
+                            visualizar no Drive
+                        </a>
+                    </p>
+                    {% endif %}
+                </div>
+                {% endif %}
             </section>
 
             <section id="contrato-locacao-section" class="cadastro-section mb-4"
                      {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
                 <h2 class="h5 mb-2">Contrato de Locação</h2>
-                <div class="alert alert-warning mb-0">
-                    <strong>Aviso:</strong> É obrigatória a apresentação do Contrato de Locação
-                    diretamente à administração para a regularização e aprovação final da unidade.
+                <p class="text-muted small mb-3">
+                    Obrigatório quando o responsável é locatário (PDF, PNG, JPG ou JPEG).
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="contrato_locacao">Contrato de Locação</label>
+                    <input type="file" class="form-control" id="contrato_locacao" name="contrato_locacao"
+                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
                 </div>
+                {% if modo == 'atualizacao' and unidade and unidade.contrato_locacao_url %}
+                <p class="small mb-0">
+                    Contrato atual:
+                    <a href="{{ unidade.contrato_locacao_url }}" target="_blank" rel="noopener noreferrer">
+                        visualizar no Drive
+                    </a>
+                    {% if unidade.contrato_locacao_status %}
+                    <span class="badge text-bg-secondary ms-1">{{ unidade.contrato_locacao_status }}</span>
+                    {% endif %}
+                </p>
+                {% endif %}
             </section>
 
             <section id="proprietario-section" class="cadastro-section mb-4"
@@ -418,6 +476,12 @@
         contratoSection.style.display = visivel ? "" : "none";
         if (proprietarioSection) {
             proprietarioSection.style.display = visivel ? "" : "none";
+        }
+        const inputContrato = document.getElementById("contrato_locacao");
+        if (inputContrato) {
+            if (!visivel) {
+                inputContrato.value = "";
+            }
         }
         if (!visivel) {
             proprietarioInputs.forEach((input) => {

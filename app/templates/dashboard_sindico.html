@@ -28,10 +28,10 @@
             {% set status = item.status %}
             {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() if unidade else None %}
             {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
-            {% set documento_base_pendente = unidade and unidade.documento_status in ['Pendente', 'Nao Enviado'] %}
+            {% set documento_base_pendente = unidade and unidade.documento_status in ['Pendente', 'Nao Enviado', 'Rejeitado'] %}
             {% set contrato_pendente = unidade and contrato_aplicavel and unidade.contrato_locacao_status in ['Pendente', 'Nao Enviado'] %}
             {% set doc_pendente = documento_base_pendente or contrato_pendente %}
-            {% set doc_ok = unidade and unidade.documento_status == 'Entregue' and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
+            {% set doc_ok = unidade and unidade.documento_status in ['Entregue', 'Aprovado'] and ((not contrato_aplicavel) or unidade.contrato_locacao_status == 'Entregue') %}
             <tr>
                 <td>{{ item.bloco }}</td>
                 <td>{{ item.apartamento }}</td>
@@ -256,10 +256,22 @@
 
                 <section>
                     <h3 class="h6 text-uppercase text-muted">Documento de Propriedade</h3>
-                    {% if unidade.documento_status == 'Entregue' %}
+                    {% if unidade.documento_status in ['Entregue', 'Aprovado'] %}
                     <span class="badge bg-success">Documento Validado pela Administração</span>
+                    {% elif unidade.documento_status == 'Rejeitado' %}
+                    <span class="badge bg-danger">Documento Rejeitado</span>
                     {% else %}
                     <span class="badge bg-warning text-dark">Documento Pendente</span>
+                    {% endif %}
+                    {% if unidade.documento_url %}
+                    <p class="small mb-0 mt-2">
+                        <a href="{{ unidade.documento_url }}" target="_blank" rel="noopener noreferrer">Ver comprovante</a>
+                    </p>
+                    {% endif %}
+                    {% if unidade.documento2_url %}
+                    <p class="small mb-0 mt-1">
+                        <a href="{{ unidade.documento2_url }}" target="_blank" rel="noopener noreferrer">Ver anexo adicional</a>
+                    </p>
                     {% endif %}
                 </section>
 

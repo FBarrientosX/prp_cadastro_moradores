@@ -70,6 +70,27 @@ def _garantir_colunas_unidades():
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN senha_atualizada_em DATETIME"
         )
+    if "documento_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_drive_id VARCHAR(100)"
+        )
+    if "documento_url" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_url VARCHAR(500)"
+        )
+    if "documento2_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento2_drive_id VARCHAR(100)"
+        )
+    if "documento2_url" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento2_url VARCHAR(500)"
+        )
+    if "documento_status" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN documento_status "
+            "VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -397,7 +418,7 @@ def _garantir_tabela_agendamentos_mudanca():
 
 
 def _garantir_colunas_encomendas():
-    """Garante codigo_rastreio e foto_pacote em encomendas (SQLite legado)."""
+    """Garante colunas extras em encomendas (bancos já existentes)."""
     inspetor = inspect(db.engine)
     if "encomendas" not in inspetor.get_table_names():
         return
@@ -413,6 +434,23 @@ def _garantir_colunas_encomendas():
         alteracoes.append(
             "ALTER TABLE encomendas ADD COLUMN foto_pacote VARCHAR(255)"
         )
+    if "foto_entrega" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN foto_entrega VARCHAR(255)"
+        )
+    if "data_entrega" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN data_entrega DATETIME"
+        )
+    if "entregue_para" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN entregue_para VARCHAR(200)"
+        )
+    if "tentativas_contato" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN tentativas_contato "
+            "INTEGER NOT NULL DEFAULT 1"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -421,7 +459,7 @@ def _garantir_colunas_encomendas():
 
 
 def _garantir_colunas_registros_acesso():
-    """Garante porteiro_saida_id em registros_acesso (SQLite legado)."""
+    """Garante porteiro_saida_id e placa_veiculo em registros_acesso (legado)."""
     inspetor = inspect(db.engine)
     if "registros_acesso" not in inspetor.get_table_names():
         return
@@ -440,12 +478,41 @@ def _garantir_colunas_registros_acesso():
         )
         db.session.commit()
 
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("registros_acesso")}
+    if "placa_veiculo" not in colunas:
+        db.session.execute(
+            text(
+                "ALTER TABLE registros_acesso ADD COLUMN placa_veiculo VARCHAR(10)"
+            )
+        )
+        db.session.commit()
+
     # MySQL não suporta índices parciais (CREATE UNIQUE INDEX ... WHERE).
     # ux_registro_acesso_aberto ficava: UNIQUE (visitante_id) WHERE data_saida IS NULL
     # — válido só no SQLite. A trava de "uma entrada aberta por visitante"
     # é feita na aplicação antes do commit (portaria_acesso_entrada /
     # portaria_acesso_autorizada).
     pass
+
+
+def _garantir_colunas_autorizacoes_acesso():
+    """Garante placa_veiculo em autorizacoes_acesso (bancos já existentes)."""
+    inspetor = inspect(db.engine)
+    if "autorizacoes_acesso" not in inspetor.get_table_names():
+        return
+
+    colunas = {
+        coluna["name"] for coluna in inspetor.get_columns("autorizacoes_acesso")
+    }
+    if "placa_veiculo" in colunas:
+        return
+
+    db.session.execute(
+        text(
+            "ALTER TABLE autorizacoes_acesso ADD COLUMN placa_veiculo VARCHAR(10)"
+        )
+    )
+    db.session.commit()
 
 
 def _garantir_colunas_multi_tenant():
@@ -537,6 +604,73 @@ def _garantir_coluna_ativo_condominio():
     )
     db.session.commit()
     db.session.execute(text("UPDATE condominio SET ativo = 1 WHERE ativo IS NULL"))
+    db.session.commit()
+
+
+def _garantir_colunas_livro_servico():
+    """Colunas novas do livro de serviço em bancos já existentes."""
+    inspetor = inspect(db.engine)
+    tabelas = set(inspetor.get_table_names())
+    alteracoes = []
+
+    if "condominio" in tabelas:
+        colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+        if "permitir_apoio" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE condominio ADD COLUMN permitir_apoio "
+                "BOOLEAN NOT NULL DEFAULT 0"
+            )
+        if "permitir_ronda" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE condominio ADD COLUMN permitir_ronda "
+                "BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+    if "plantoes" in tabelas:
+        colunas = {coluna["name"] for coluna in inspetor.get_columns("plantoes")}
+        if "apoio_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE plantoes ADD COLUMN apoio_id INTEGER"
+            )
+        if "ronda_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE plantoes ADD COLUMN ronda_id INTEGER"
+            )
+
+    if "itens_checklist" in tabelas:
+        colunas = {
+            coluna["name"] for coluna in inspetor.get_columns("itens_checklist")
+        }
+        if "guarita_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE itens_checklist ADD COLUMN guarita_id INTEGER"
+            )
+
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
+def _seed_guaritas_padrao():
+    """Garante ao menos uma guarita ativa por condomínio (Portaria Principal)."""
+    from app.models import Condominio, Guarita
+
+    inspetor = inspect(db.engine)
+    if "guaritas" not in inspetor.get_table_names():
+        return
+
+    for condominio in Condominio.query.filter_by(ativo=True).all():
+        existe = Guarita.query.filter_by(condominio_id=condominio.id).first()
+        if existe:
+            continue
+        db.session.add(
+            Guarita(
+                nome="Portaria Principal",
+                condominio_id=condominio.id,
+                ativa=True,
+            )
+        )
     db.session.commit()
 
 
@@ -709,8 +843,8 @@ def create_app(config=None):
             "SQLALCHEMY_DATABASE_URI", "sqlite:///condominio.db"
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        SQLALCHEMY_ENGINE_OPTIONS={"pool_recycle": 280},
-        MAX_CONTENT_LENGTH=10 * 1024 * 1024,
+        SQLALCHEMY_ENGINE_OPTIONS={"pool_recycle": 280, "pool_pre_ping": True},
+        MAX_CONTENT_LENGTH=10 * 1024 * 1024, 
         UPLOAD_LOGOS_FOLDER=upload_logos,
         UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
         UPLOAD_OCORRENCIAS_FOLDER=upload_ocorrencias,
@@ -722,21 +856,28 @@ def create_app(config=None):
 
     db.init_app(app)
 
+    from app.utils import tempo_relativo
+
+    app.add_template_filter(tempo_relativo, "tempo_relativo")
+
     @app.context_processor
     def inject_nav_context():
         from app.auth import get_current_user, get_unidade_logada
         from app.models import (
             Condominio,
+            Encomenda,
             EspacoComum,
             Notificacao,
             PerfilDestinoNotificacao,
             Reserva,
             Role,
+            StatusEncomenda,
         )
 
         usuario = get_current_user()
         unidade = get_unidade_logada()
         reservas_pendentes_count = 0
+        encomendas_pendentes_count = 0
         condominio_ctx = None
         notificacoes_nao_lidas = 0
         notificacoes_habilitadas = False
@@ -779,6 +920,11 @@ def create_app(config=None):
                 perfil_destino=PerfilDestinoNotificacao.MORADOR,
                 lida=False,
             ).count()
+            encomendas_pendentes_count = Encomenda.query.filter_by(
+                unidade_id=unidade.id,
+                condominio_id=unidade.condominio_id,
+                status=StatusEncomenda.PENDENTE,
+            ).count()
 
         # Fallback: slug do tenant na sessão (portas públicas).
         if condominio_ctx is None:
@@ -800,6 +946,7 @@ def create_app(config=None):
             "sidebar_user": usuario,
             "sidebar_unidade": unidade,
             "reservas_pendentes_count": reservas_pendentes_count,
+            "encomendas_pendentes_count": encomendas_pendentes_count,
             "condominio": condominio_ctx,
             "cor_primaria_rgb": _hex_para_rgb(cor_primaria),
             "notificacoes_nao_lidas": notificacoes_nao_lidas,
@@ -820,6 +967,7 @@ def create_app(config=None):
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
+        _garantir_colunas_livro_servico()
         _seed_condominio_transicao()
         _migrar_sindico_agrupamentos()
         _garantir_colunas_unidades()
@@ -831,7 +979,9 @@ def create_app(config=None):
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
         _garantir_colunas_registros_acesso()
+        _garantir_colunas_autorizacoes_acesso()
         _garantir_colunas_encomendas()
+        _seed_guaritas_padrao()
 
     _garantir_tabelas_parceiros(app)
 

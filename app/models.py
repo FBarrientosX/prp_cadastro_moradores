@@ -34,6 +34,8 @@ class StatusUnidade:
 class StatusDocumento:
     PENDENTE = "Pendente"
     ENTREGUE = "Entregue"
+    APROVADO = "Aprovado"
+    REJEITADO = "Rejeitado"
     NAO_ENVIADO = "Nao Enviado"
     NAO_APLICAVEL = "Nao Aplicavel"
 
@@ -103,6 +105,9 @@ class Condominio(db.Model):
     cnpj = db.Column(db.String(18), nullable=True)
     # Soft delete: cliente inativo permanece no histórico (não hard delete).
     ativo = db.Column(db.Boolean, nullable=False, default=True)
+    # Livro de serviço: campos opcionais de apoio e ronda na abertura do plantão.
+    permitir_apoio = db.Column(db.Boolean, nullable=False, default=False)
+    permitir_ronda = db.Column(db.Boolean, nullable=False, default=False)
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     configuracao = db.relationship(
@@ -248,6 +253,8 @@ class Unidade(db.Model):
     )
     documento_drive_id = db.Column(db.String(100), nullable=True)
     documento_url = db.Column(db.String(500), nullable=True)
+    documento2_drive_id = db.Column(db.String(100), nullable=True)
+    documento2_url = db.Column(db.String(500), nullable=True)
     documento_status = db.Column(
         db.String(20), nullable=False, default=StatusDocumento.NAO_ENVIADO
     )
@@ -633,6 +640,7 @@ class RegistroAcesso(db.Model):
         db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
     )
     observacoes = db.Column(db.Text, nullable=True)
+    placa_veiculo = db.Column(db.String(10), nullable=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("registros_acesso", lazy=True)
@@ -662,6 +670,7 @@ class Encomenda(db.Model):
     transportadora = db.Column(db.String(100), nullable=True)
     codigo_rastreio = db.Column(db.String(100), nullable=True)
     foto_pacote = db.Column(db.String(255), nullable=True)
+    foto_entrega = db.Column(db.String(255), nullable=True)
     status = db.Column(
         db.String(20), nullable=False, default=StatusEncomenda.PENDENTE, index=True
     )
@@ -669,6 +678,8 @@ class Encomenda(db.Model):
         db.DateTime, nullable=False, default=datetime.utcnow, index=True
     )
     data_entrega = db.Column(db.DateTime, nullable=True)
+    entregue_para = db.Column(db.String(200), nullable=True)
+    tentativas_contato = db.Column(db.Integer, nullable=False, default=1)
     porteiro_recebimento_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
     )
@@ -713,6 +724,7 @@ class AutorizacaoAcesso(db.Model):
         default=StatusAutorizacaoAcesso.PENDENTE,
         index=True,
     )
+    placa_veiculo = db.Column(db.String(10), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     condominio = db.relationship(
@@ -790,3 +802,115 @@ class Ocorrencia(db.Model):
 
     def __repr__(self):
         return f"<Ocorrencia {self.id} ({self.status})>"
+
+
+class StatusPlantao:
+    ABERTO = "Aberto"
+    FECHADO = "Fechado"
+
+    CHOICES = (ABERTO, FECHADO)
+
+
+class Guarita(db.Model):
+    """Posto/guarita física de um condomínio (multi-guarita por tenant)."""
+
+    __tablename__ = "guaritas"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), nullable=False)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("guaritas", lazy="dynamic")
+    )
+    itens_checklist = db.relationship(
+        "ItemChecklist",
+        backref="guarita",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self):
+        return f"<Guarita {self.id} ({self.nome})>"
+
+
+class Plantao(db.Model):
+    """Registro de abertura/fechamento de plantão numa guarita."""
+
+    __tablename__ = "plantoes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    guarita_id = db.Column(
+        db.Integer, db.ForeignKey("guaritas.id"), nullable=False, index=True
+    )
+    porteiro_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    data_abertura = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    data_fechamento = db.Column(db.DateTime, nullable=True)
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default=StatusPlantao.ABERTO,
+        index=True,
+    )
+    # JSON serializado: lista de {chave, label, valor} do checklist de abertura.
+    checklist_json = db.Column(db.Text, nullable=True)
+    ocorrencias = db.Column(db.Text, nullable=True)
+    apoio_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+    ronda_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+
+    guarita = db.relationship(
+        "Guarita", backref=db.backref("plantoes", lazy="dynamic")
+    )
+    porteiro = db.relationship(
+        "Usuario",
+        foreign_keys=[porteiro_id],
+        backref=db.backref("plantoes", lazy="dynamic"),
+    )
+    apoio = db.relationship("Usuario", foreign_keys=[apoio_id])
+    ronda = db.relationship("Usuario", foreign_keys=[ronda_id])
+
+    def __repr__(self):
+        return f"<Plantao {self.id} ({self.status})>"
+
+
+class TipoRespostaChecklist:
+    BOOLEANO = "booleano"
+    TEXTO = "texto"
+
+    CHOICES = (BOOLEANO, TEXTO)
+
+
+class ItemChecklist(db.Model):
+    """Item configurável do checklist de abertura de plantão (por condomínio)."""
+
+    __tablename__ = "itens_checklist"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome_item = db.Column(db.String(120), nullable=False)
+    tipo_resposta = db.Column(
+        db.String(20), nullable=False, default=TipoRespostaChecklist.BOOLEANO
+    )
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    # Nullable na transição; conceptualmente o item pertence a uma guarita.
+    guarita_id = db.Column(
+        db.Integer, db.ForeignKey("guaritas.id"), nullable=True, index=True
+    )
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("itens_checklist", lazy="dynamic")
+    )
+
+    def __repr__(self):
+        return f"<ItemChecklist {self.id} ({self.nome_item})>"

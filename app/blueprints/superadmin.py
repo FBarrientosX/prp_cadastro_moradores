@@ -40,7 +40,7 @@ from app.models import (
 )
 from app.utils import html_rico_form, link_rede_social, salvar_logo_parceiro
 
-_LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
+_LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
 def _normalizar_cor_primaria(valor):
@@ -55,24 +55,27 @@ def _normalizar_cor_primaria(valor):
 
 
 def _salvar_logo_condominio(arquivo, slug):
-    """Salva logo em static/uploads/logos e retorna o filename, ou None."""
+    """
+    Salva logo em static/uploads/logos.
+    Retorna (filename, erro). Sem arquivo: (None, None).
+    """
     if not arquivo or not arquivo.filename:
-        return None
+        return None, None
 
     nome_seguro = secure_filename(arquivo.filename)
     if not nome_seguro or "." not in nome_seguro:
-        return None
+        return None, "Formato de imagem não permitido."
 
     extensao = nome_seguro.rsplit(".", 1)[-1].lower()
     if extensao not in _LOGO_EXTENSIONS:
-        return None
+        return None, "Formato de imagem não permitido."
 
     pasta = current_app.config["UPLOAD_LOGOS_FOLDER"]
     os.makedirs(pasta, exist_ok=True)
     token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     nome_final = f"{slug}_{token}.{extensao}"
     arquivo.save(os.path.join(pasta, nome_final))
-    return nome_final
+    return nome_final, None
 
 
 def superadmin_login():
@@ -162,7 +165,10 @@ def superadmin_condominios():
             flash("Fluxo de aprovação de mudança inválido.", "danger")
             return redirect(url_for("superadmin_condominios"))
 
-        logo_filename = _salvar_logo_condominio(request.files.get("logo"), slug)
+        logo_filename, erro_logo = _salvar_logo_condominio(request.files.get("logo"), slug)
+        if erro_logo:
+            flash(erro_logo, "danger")
+            return redirect(url_for("superadmin_condominios"))
 
         condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj, ativo=True)
         db.session.add(condominio)
@@ -258,9 +264,12 @@ def superadmin_condominio_whitelabel(condominio_id):
 
     cfg.cor_primaria = _normalizar_cor_primaria(request.form.get("cor_primaria"))
 
-    novo_logo = _salvar_logo_condominio(
+    novo_logo, erro_logo = _salvar_logo_condominio(
         request.files.get("logo"), condominio.slug or f"condo{condominio.id}"
     )
+    if erro_logo:
+        flash(erro_logo, "danger")
+        return redirect(url_for("superadmin_condominios"))
     if novo_logo:
         cfg.logo_filename = novo_logo
 
