@@ -129,9 +129,28 @@ def sindico_dashboard():
                 }
             )
 
+    unidades = unidades_cadastradas
+    unidades_pendentes = [
+        unidade
+        for unidade in unidades
+        if unidade.status == StatusUnidade.PENDENTE or unidade.atualizacao_pendente
+    ]
+    mapa_pendentes = [
+        item
+        for item in mapa_bloco
+        if item["unidade"] is not None
+        and (
+            item["status"] == StatusUnidade.PENDENTE
+            or item["unidade"].atualizacao_pendente
+        )
+    ]
+
     return render_template(
         "dashboard_sindico.html",
         mapa_bloco=mapa_bloco,
+        mapa_pendentes=mapa_pendentes,
+        unidades=unidades,
+        unidades_pendentes=unidades_pendentes,
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
     )
