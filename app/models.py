@@ -31,6 +31,13 @@ class StatusUnidade:
     REPROVADA = "Reprovada"
 
 
+class StatusPessoa:
+    PENDENTE = "Pendente"
+    APROVADO = "Aprovado"
+
+    CHOICES = (PENDENTE, APROVADO)
+
+
 class StatusDocumento:
     PENDENTE = "Pendente"
     ENTREGUE = "Entregue"
@@ -268,6 +275,8 @@ class Unidade(db.Model):
     proprietario_telefone = db.Column(db.String(20), nullable=True)
     proprietario_email = db.Column(db.String(120), nullable=True)
     notificacao_sindico = db.Column(db.Text, nullable=True)
+    # Soft flag: atualização crítica aguarda síndico sem derrubar o login.
+    atualizacao_pendente = db.Column(db.Boolean, nullable=False, default=False)
     # Marca a última troca de senha; usado para invalidar tokens de
     # redefinição já consumidos (evita reuso do mesmo link).
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
@@ -493,6 +502,9 @@ class Pessoa(db.Model):
     data_nascimento = db.Column(db.Date, nullable=True)
     is_responsavel = db.Column(db.Boolean, nullable=False, default=False)
     autoriza_interfone = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(
+        db.String(20), nullable=False, default=StatusPessoa.PENDENTE
+    )
 
     unidade = db.relationship("Unidade", back_populates="pessoas")
 

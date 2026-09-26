@@ -70,6 +70,11 @@ def _garantir_colunas_unidades():
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN senha_atualizada_em DATETIME"
         )
+    if "atualizacao_pendente" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN atualizacao_pendente "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
     if "documento_drive_id" not in colunas:
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN documento_drive_id VARCHAR(100)"
@@ -110,10 +115,34 @@ def _garantir_colunas_pessoas():
         alteracoes.append(
             "ALTER TABLE pessoas ADD COLUMN autoriza_interfone BOOLEAN NOT NULL DEFAULT 0"
         )
+    adicionou_status = False
+    if "status" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE pessoas ADD COLUMN status "
+            "VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
+        )
+        adicionou_status = True
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
+        db.session.commit()
+
+    if adicionou_status:
+        # Moradores já existentes em unidades aprovadas/registradas
+        # são tratados como aprovados; pendentes de cadastro ficam Pendente.
+        db.session.execute(
+            text(
+                """
+                UPDATE pessoas
+                SET status = 'Aprovado'
+                WHERE unidade_id IN (
+                    SELECT id FROM unidades
+                    WHERE status IN ('Aprovada', 'Registrada')
+                )
+                """
+            )
+        )
         db.session.commit()
 
 

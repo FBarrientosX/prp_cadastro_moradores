@@ -82,6 +82,9 @@
                         <td>{{ responsavel.nome_completo if responsavel else '—' }}</td>
                         <td>{{ unidade.data_alteracao.strftime('%d/%m/%Y %H:%M') }}</td>
                         <td>
+                            {% if unidade.atualizacao_pendente %}
+                            <span class="badge bg-warning text-dark">Atualização Pendente</span>
+                            {% endif %}
                             {% if doc_ok %}
                             <span class="badge bg-success">Doc. OK</span>
                             {% elif doc_pendente %}
@@ -96,9 +99,17 @@
                                     data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
                                 Ver Detalhes
                             </button>
+                            {% if unidade.atualizacao_pendente %}
+                            <form method="post" action="{{ url_for('admin_aprovar_atualizacao', unidade_id=unidade.id) }}" class="d-inline"
+                                  onsubmit="return confirm('Aprovar a atualização cadastral desta unidade?');">
+                                <button type="submit" class="btn btn-warning btn-sm">Aprovar Atualização</button>
+                            </form>
+                            {% endif %}
+                            {% if unidade.status == 'Aprovada' and not unidade.atualizacao_pendente %}
                             <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="d-inline">
                                 <button type="submit" class="btn btn-success btn-sm">Marcar como Registrado</button>
                             </form>
+                            {% endif %}
                             <button type="button" class="btn btn-outline-warning btn-sm"
                                     data-bs-toggle="modal" data-bs-target="#modalNovaSenha{{ unidade.id }}">
                                 Alterar Senha
@@ -363,6 +374,11 @@
                             <span class="badge bg-success">Aprovado</span>
                             {% elif unidade.status == 'Registrada' %}
                             <span class="badge bg-primary">Registrado no Sistema</span>
+                            {% elif unidade.status == 'Pendente' %}
+                            <span class="badge bg-warning text-dark">Aprovação Pendente</span>
+                            {% endif %}
+                            {% if unidade.atualizacao_pendente %}
+                            <span class="badge bg-warning text-dark">Atualização Pendente</span>
                             {% endif %}
                         </dd>
                     </dl>
@@ -384,11 +400,12 @@
                                     <th>Interfone</th>
                                     <th>Nascimento</th>
                                     <th>Responsável</th>
+                                    <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for pessoa in pessoas %}
-                                <tr>
+                                <tr {% if pessoa.status == 'Pendente' %}class="table-warning"{% endif %}>
                                     <td>{{ pessoa.nome_completo }}</td>
                                     <td>{{ pessoa.cpf }}</td>
                                     <td>{{ pessoa.vinculo }}</td>
@@ -411,6 +428,13 @@
                                         {% if pessoa.is_responsavel %}
                                         <span class="badge bg-primary">Sim</span>
                                         {% else %}Não{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if pessoa.status == 'Pendente' %}
+                                        <span class="badge bg-warning text-dark">Pendente</span>
+                                        {% else %}
+                                        <span class="badge bg-success">Aprovado</span>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -581,7 +605,13 @@
                             Validar Todos os Documentos
                         </button>
                     </form>
-                    {% if unidade.status == 'Aprovada' %}
+                    {% if unidade.atualizacao_pendente %}
+                    <form method="post" action="{{ url_for('admin_aprovar_atualizacao', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0"
+                          onsubmit="return confirm('Aprovar a atualização cadastral desta unidade?');">
+                        <button type="submit" class="btn btn-warning w-100">Aprovar Atualização</button>
+                    </form>
+                    {% endif %}
+                    {% if unidade.status == 'Aprovada' and not unidade.atualizacao_pendente %}
                     <form method="post" action="{{ url_for('admin_registrar', unidade_id=unidade.id) }}" class="flex-fill flex-sm-grow-0">
                         <button type="submit" class="btn btn-success w-100">Marcar como Registrado</button>
                     </form>

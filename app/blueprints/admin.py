@@ -52,6 +52,7 @@ from app.models import (
     StatusDocumento,
     StatusEncomenda,
     StatusOcorrencia,
+    StatusPessoa,
     StatusUnidade,
     TipoRespostaChecklist,
     Unidade,
@@ -376,15 +377,21 @@ def admin_index():
     condominio_id = condominio_id_obrigatorio(usuario)
 
     aguardando_registro = (
-        Unidade.query.filter_by(
-            condominio_id=condominio_id, status=StatusUnidade.APROVADA
+        Unidade.query.filter(
+            Unidade.condominio_id == condominio_id,
+            or_(
+                Unidade.status == StatusUnidade.APROVADA,
+                Unidade.atualizacao_pendente.is_(True),
+            ),
         )
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
     )
     finalizados = (
-        Unidade.query.filter_by(
-            condominio_id=condominio_id, status=StatusUnidade.REGISTRADA
+        Unidade.query.filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.status == StatusUnidade.REGISTRADA,
+            Unidade.atualizacao_pendente.is_(False),
         )
         .order_by(Unidade.bloco, Unidade.apartamento)
         .all()
@@ -461,6 +468,37 @@ def admin_registrar(unidade_id):
     unidade.status = StatusUnidade.REGISTRADA
     db.session.commit()
     flash(f"Unidade {unidade.identificador} marcada como registrada.", "success")
+    return redirect(url_for("admin_index"))
+
+
+@admin_or_assistente_required
+def admin_aprovar_atualizacao(unidade_id):
+    """Aprova atualização cadastral sem derrubar o status Aprovada/Registrada."""
+    from app.routes import _registrar_auditoria, _unidade_do_tenant
+
+    condominio_id = condominio_id_obrigatorio()
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
+    usuario = get_current_user()
+
+    if not unidade.atualizacao_pendente:
+        flash("Esta unidade não possui atualização pendente.", "warning")
+        return redirect(url_for("admin_index"))
+
+    for pessoa in unidade.pessoas.all():
+        pessoa.status = StatusPessoa.APROVADO
+    unidade.atualizacao_pendente = False
+    if usuario:
+        _registrar_auditoria(
+            usuario,
+            f"Atualização cadastral aprovada — Bloco {unidade.bloco}, "
+            f"Apto {unidade.apartamento}.",
+        )
+    db.session.commit()
+    flash(
+        f"Atualização da unidade {unidade.identificador} aprovada. "
+        "Moradores marcados como aprovados.",
+        "success",
+    )
     return redirect(url_for("admin_index"))
 
 
@@ -1319,6 +1357,12 @@ def register(app):
         "/admin/registrar/<int:unidade_id>",
         "admin_registrar",
         admin_registrar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/unidade/<int:unidade_id>/aprovar_atualizacao",
+        "admin_aprovar_atualizacao",
+        admin_aprovar_atualizacao,
         methods=["POST"],
     )
     app.add_url_rule(

@@ -66,6 +66,7 @@ from app.models import (
     StatusDocumento,
     StatusEncomenda,
     StatusOcorrencia,
+    StatusPessoa,
     StatusUnidade,
     TipoVisitante,
     Unidade,
@@ -805,8 +806,15 @@ def _reservas_pendentes_por_jurisdicao(usuario):
     return query.order_by(Reserva.data_solicitacao.desc()).all()
 
 
-def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
+def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data, *, modo_atualizacao=False):
     try:
+        status_por_id = {}
+        if modo_atualizacao:
+            for pessoa in unidade.pessoas.all():
+                status_por_id[pessoa.id] = (
+                    pessoa.status or StatusPessoa.APROVADO
+                )
+
         for pessoa in unidade.pessoas.all():
             db.session.delete(pessoa)
         for veiculo in unidade.veiculos.all():
@@ -814,6 +822,11 @@ def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data):
 
         for dados in pessoas_data:
             campos_pessoa = {k: v for k, v in dados.items() if k != "id"}
+            pessoa_id = dados.get("id")
+            if modo_atualizacao and pessoa_id and pessoa_id in status_por_id:
+                campos_pessoa["status"] = status_por_id[pessoa_id]
+            else:
+                campos_pessoa["status"] = StatusPessoa.PENDENTE
             db.session.add(Pessoa(unidade_id=unidade.id, **campos_pessoa))
 
         for dados in veiculos_data:
@@ -1958,7 +1971,12 @@ def salvar_cadastro():
                 unidade, pessoas_data, veiculos_data, dados_proprietario
             )
 
-        _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data)
+        _salvar_pessoas_veiculos(
+            unidade,
+            pessoas_data,
+            veiculos_data,
+            modo_atualizacao=modo_atualizacao,
+        )
 
         avisos_upload = []
         slug_drive = _slug_drive_cadastro(unidade)
@@ -2054,8 +2072,9 @@ def salvar_cadastro():
         if modo_atualizacao:
             unidade.data_alteracao = datetime.utcnow()
             if requer_nova_aprovacao:
-                unidade.status = StatusUnidade.PENDENTE
-
+                # Mantém Aprovada/Registrada para não bloquear o login do titular.
+                unidade.atualizacao_pendente = True
+            # Sem mudança crítica: atualizacao_pendente permanece como estava.
         db.session.commit()
 
         if avisos_upload:
@@ -2069,7 +2088,8 @@ def salvar_cadastro():
         if modo_atualizacao:
             if requer_nova_aprovacao:
                 flash(
-                    "Dados atualizados e cadastro reenviado para nova aprovação do síndico.",
+                    "Dados atualizados e enviados para análise do síndico. "
+                    "O seu acesso ao sistema continua normal.",
                     "success",
                 )
             else:
