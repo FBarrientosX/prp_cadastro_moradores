@@ -844,7 +844,7 @@ def create_app(config=None):
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         SQLALCHEMY_ENGINE_OPTIONS={"pool_recycle": 280, "pool_pre_ping": True},
-        MAX_CONTENT_LENGTH=10 * 1024 * 1024,
+        MAX_CONTENT_LENGTH=10 * 1024 * 1024, 
         UPLOAD_LOGOS_FOLDER=upload_logos,
         UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
         UPLOAD_OCORRENCIAS_FOLDER=upload_ocorrencias,
