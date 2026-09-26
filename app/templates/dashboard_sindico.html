@@ -54,6 +54,9 @@
                     {% else %}
                     <span class="badge bg-dark">{{ status }}</span>
                     {% endif %}
+                    {% if unidade and unidade.atualizacao_pendente %}
+                    <span class="badge bg-warning text-dark">Atualização Pendente</span>
+                    {% endif %}
                     {% if unidade and status != 'Aguardando Morador' %}
                         {% if doc_ok %}
                         <span class="badge bg-success">Doc. OK</span>
@@ -103,7 +106,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
-                {% if unidade.status == 'Pendente' %}
+                {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
                 <form method="post"
                       action="{{ url_for('sindico_validar_unidade', unidade_id=unidade.id) }}"
                       onsubmit="return confirm('Confirmar finalização da validação desta unidade?');">
@@ -128,6 +131,9 @@
                             {% else %}
                             <span class="badge bg-dark">{{ unidade.status }}</span>
                             {% endif %}
+                            {% if unidade.atualizacao_pendente %}
+                            <span class="badge bg-warning text-dark">Atualização Pendente</span>
+                            {% endif %}
                         </dd>
                     </dl>
                 </section>
@@ -148,7 +154,7 @@
                                     <th>Interfone</th>
                                     <th>Nascimento</th>
                                     <th>Responsável</th>
-                                    {% if unidade.status == 'Pendente' %}
+                                    {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
                                     <th class="text-center">Recusar</th>
                                     <th>Motivo</th>
                                     {% endif %}
@@ -156,8 +162,13 @@
                             </thead>
                             <tbody>
                                 {% for pessoa in pessoas %}
-                                <tr>
-                                    <td>{{ pessoa.nome_completo }}</td>
+                                <tr {% if pessoa.status == 'Pendente' %}class="table-warning"{% endif %}>
+                                    <td>
+                                        {{ pessoa.nome_completo }}
+                                        {% if pessoa.status == 'Pendente' %}
+                                        <span class="badge bg-warning text-dark ms-1">Pendente</span>
+                                        {% endif %}
+                                    </td>
                                     <td>{{ pessoa.cpf }}</td>
                                     <td>{{ pessoa.vinculo }}</td>
                                     <td>{{ pessoa.parentesco or '—' }}</td>
@@ -180,7 +191,7 @@
                                         <span class="badge bg-primary">Sim</span>
                                         {% else %}Não{% endif %}
                                     </td>
-                                    {% if unidade.status == 'Pendente' %}
+                                    {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
                                     <td class="text-center">
                                         <input type="checkbox"
                                                class="form-check-input js-recusa-checkbox"
@@ -288,13 +299,13 @@
             </div>
             <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
                 <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
-                {% if unidade.status == 'Pendente' %}
+                {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
                 <button type="submit" class="btn btn-primary w-100 w-sm-auto order-1">
                     Finalizar Validação da Unidade
                 </button>
                 {% endif %}
             </div>
-            {% if unidade.status == 'Pendente' %}
+            {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
             </form>
             {% endif %}
         </div>

@@ -37,6 +37,7 @@ from app.models import (
     Role,
     StatusAgendamentoMudanca,
     StatusDocumento,
+    StatusPessoa,
     StatusUnidade,
     Unidade,
     Usuario,
@@ -270,8 +271,11 @@ def sindico_validar_unidade(unidade_id):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
-    if unidade.status != StatusUnidade.PENDENTE:
-        flash("Apenas cadastros pendentes podem ser validados.", "warning")
+    if unidade.status != StatusUnidade.PENDENTE and not unidade.atualizacao_pendente:
+        flash(
+            "Apenas cadastros pendentes ou com atualização em análise podem ser validados.",
+            "warning",
+        )
         return redirect(url_for("sindico_dashboard"))
 
     motivos_validos = {
@@ -325,24 +329,34 @@ def sindico_validar_unidade(unidade_id):
     )
 
     if moradores_aprovados:
-        unidade.status = StatusUnidade.APROVADA
+        era_atualizacao = bool(unidade.atualizacao_pendente)
+        status_anterior = unidade.status
+        for pessoa in moradores_aprovados:
+            pessoa.status = StatusPessoa.APROVADO
+        unidade.atualizacao_pendente = False
+        if status_anterior == StatusUnidade.PENDENTE:
+            unidade.status = StatusUnidade.APROVADA
+        # Se já era Aprovada/Registrada (atualização), mantém o status.
         _registrar_auditoria(
             usuario,
             f"O síndico {usuario.username} finalizou a validação da unidade "
-            f"'{unidade_identificador}' com {len(moradores_aprovados)} morador(es) aprovado(s).",
+            f"'{unidade_identificador}' com {len(moradores_aprovados)} morador(es) aprovado(s)"
+            + (" (atualização de cadastro)." if era_atualizacao else "."),
         )
-    elif unidade_tinha_documentos_validados:
+    elif unidade_tinha_documentos_validados or unidade.atualizacao_pendente:
         # Não apaga a unidade: documento/contrato já haviam sido validados
-        # pela administração anteriormente (unidade REGISTRADA que voltou a
-        # Pendente por atualização de cadastro). Excluí-la perderia esses
-        # dados sem qualquer aviso ou chance de recuperação.
-        unidade.status = StatusUnidade.PENDENTE
+        # ou tratava-se de atualização de cadastro já ativa.
+        for pessoa in list(unidade.pessoas.all()):
+            db.session.delete(pessoa)
+        unidade.atualizacao_pendente = False
+        if unidade.status == StatusUnidade.PENDENTE:
+            unidade.status = StatusUnidade.PENDENTE
         _registrar_auditoria(
             usuario,
             f"O síndico {usuario.username} reprovou todos os moradores da unidade "
             f"'{unidade_identificador}', mas o cadastro da unidade foi mantido "
-            "(documentos já haviam sido validados pela administração). A unidade "
-            "voltou para Pendente, aguardando novo cadastro de moradores.",
+            "(documentos já validados ou atualização em análise). "
+            "Aguarde novo cadastro de moradores.",
         )
     else:
         db.session.delete(unidade)
