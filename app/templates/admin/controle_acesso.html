@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Controle de Acesso — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Controle de Acesso</h1>
+        <p class="text-muted mb-0">Tags, biometria, controles e cartões dos moradores.</p>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaCredencial">
+        <i class="bi bi-plus-lg me-1"></i>Nova Credencial
+    </button>
+</div>
+
+<div class="table-responsive card shadow-sm">
+    <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Morador / Unidade</th>
+                <th>Tipo de Credencial</th>
+                <th>Código/ID</th>
+                <th>Status</th>
+                <th class="text-end">Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for credencial in credenciais %}
+            <tr>
+                <td>
+                    <div class="fw-semibold">{{ credencial.morador.nome_completo }}</div>
+                    <div class="small text-muted">
+                        {{ credencial.morador.unidade.bloco }} / {{ credencial.morador.unidade.apartamento }}
+                    </div>
+                </td>
+                <td>{{ credencial.tipo }}</td>
+                <td class="font-monospace">{{ credencial.codigo_identificador }}</td>
+                <td>
+                    {% if credencial.ativa %}
+                    <span class="badge text-bg-success">Ativo</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Revogado</span>
+                    {% endif %}
+                </td>
+                <td class="text-end">
+                    {% if credencial.ativa %}
+                    <form method="post"
+                          action="{{ url_for('admin_controle_acesso_revogar', credencial_id=credencial.id) }}"
+                          class="d-inline"
+                          onsubmit="return confirm('Revogar esta credencial? Ela deixa de abrir o acesso, mas o registro permanece.');">
+                        <button type="submit" class="btn btn-sm btn-danger">Revogar</button>
+                    </form>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Inativa</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-muted">Nenhuma credencial cadastrada.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="modalNovaCredencial" tabindex="-1" aria-labelledby="modalNovaCredencialLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="{{ url_for('admin_controle_acesso_salvar') }}" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalNovaCredencialLabel">Nova Credencial</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="morador_id">Morador</label>
+                    <select class="form-select" id="morador_id" name="morador_id" required>
+                        <option value="">Selecione</option>
+                        {% for grupo in moradores_por_unidade %}
+                        <optgroup label="{{ grupo.unidade.bloco }} / {{ grupo.unidade.apartamento }}">
+                            {% for morador in grupo.moradores %}
+                            <option value="{{ morador.id }}">{{ morador.nome_completo }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="tipo">Tipo</label>
+                    <select class="form-select" id="tipo" name="tipo" required>
+                        <option value="">Selecione</option>
+                        {% for tipo in tipos_credencial %}
+                        <option value="{{ tipo }}">{{ tipo }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label" for="codigo_identificador">Código/ID</label>
+                    <input type="text" class="form-control" id="codigo_identificador"
+                           name="codigo_identificador" required maxlength="120"
+                           placeholder="Número da tag ou código lido pelo equipamento">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

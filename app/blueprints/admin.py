@@ -38,6 +38,7 @@ from app.auth import (
 from app.models import (
     AgendamentoMudanca,
     Condominio,
+    CredencialAcesso,
     Cupom,
     Encomenda,
     Guarita,
@@ -1319,6 +1320,121 @@ def admin_mudancas():
     )
 
 
+@admin_required
+def admin_controle_acesso():
+    """Credenciais de acesso (RFID, biometria, controle, cartão) do condomínio."""
+    condominio_id = condominio_id_obrigatorio()
+    credenciais = (
+        CredencialAcesso.query.join(Pessoa, CredencialAcesso.morador_id == Pessoa.id)
+        .join(Unidade, Pessoa.unidade_id == Unidade.id)
+        .filter(CredencialAcesso.condominio_id == condominio_id)
+        .order_by(CredencialAcesso.ativa.desc(), Pessoa.nome_completo)
+        .all()
+    )
+    moradores = (
+        Pessoa.query.join(Unidade, Pessoa.unidade_id == Unidade.id)
+        .filter(
+            Unidade.condominio_id == condominio_id,
+            Pessoa.status == StatusPessoa.APROVADO,
+            Unidade.status.in_((StatusUnidade.APROVADA, StatusUnidade.REGISTRADA)),
+        )
+        .order_by(Unidade.bloco, Unidade.apartamento, Pessoa.nome_completo)
+        .all()
+    )
+    grupos = []
+    indice = {}
+    for morador in moradores:
+        grupo = indice.get(morador.unidade_id)
+        if grupo is None:
+            grupo = {"unidade": morador.unidade, "moradores": []}
+            indice[morador.unidade_id] = grupo
+            grupos.append(grupo)
+        grupo["moradores"].append(morador)
+    return render_template(
+        "admin/controle_acesso.html",
+        credenciais=credenciais,
+        moradores_por_unidade=grupos,
+        tipos_credencial=CredencialAcesso.TIPOS,
+    )
+
+
+@admin_required
+def admin_controle_acesso_salvar():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    morador_id = request.form.get("morador_id", type=int)
+    tipo = (request.form.get("tipo") or "").strip()
+    codigo = (request.form.get("codigo_identificador") or "").strip()
+    if not morador_id or tipo not in CredencialAcesso.TIPOS or not codigo:
+        flash("Informe o morador, o tipo e o código da credencial.", "danger")
+        return redirect(url_for("admin_controle_acesso"))
+
+    morador = (
+        Pessoa.query.join(Unidade, Pessoa.unidade_id == Unidade.id)
+        .filter(
+            Pessoa.id == morador_id,
+            Unidade.condominio_id == condominio_id,
+            Pessoa.status == StatusPessoa.APROVADO,
+        )
+        .first()
+    )
+    if morador is None:
+        flash("Morador não encontrado neste condomínio.", "danger")
+        return redirect(url_for("admin_controle_acesso"))
+
+    duplicada = CredencialAcesso.query.filter_by(
+        condominio_id=condominio_id,
+        codigo_identificador=codigo,
+        ativa=True,
+    ).first()
+    if duplicada is not None:
+        flash("Já existe uma credencial ativa com este código neste condomínio.", "warning")
+        return redirect(url_for("admin_controle_acesso"))
+
+    credencial = CredencialAcesso(
+        tipo=tipo,
+        codigo_identificador=codigo,
+        morador_id=morador.id,
+        condominio_id=condominio_id,
+        ativa=True,
+    )
+    db.session.add(credencial)
+    _registrar_auditoria(
+        get_current_user(),
+        f"Credencial emitida: {tipo} {codigo} para {morador.nome_completo} "
+        f"({morador.unidade.bloco}/{morador.unidade.apartamento}).",
+    )
+    db.session.commit()
+    flash("Credencial cadastrada.", "success")
+    return redirect(url_for("admin_controle_acesso"))
+
+
+@admin_required
+def admin_controle_acesso_revogar(credencial_id):
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    credencial = CredencialAcesso.query.filter_by(
+        id=credencial_id,
+        condominio_id=condominio_id,
+    ).first_or_404()
+    if not credencial.ativa:
+        flash("Esta credencial já está revogada.", "info")
+        return redirect(url_for("admin_controle_acesso"))
+
+    credencial.ativa = False
+    morador = credencial.morador
+    _registrar_auditoria(
+        get_current_user(),
+        f"Credencial revogada: {credencial.tipo} {credencial.codigo_identificador} "
+        f"de {morador.nome_completo}.",
+    )
+    db.session.commit()
+    flash("Credencial revogada. O registro permanece para auditoria.", "success")
+    return redirect(url_for("admin_controle_acesso"))
+
+
 def register(app):
     """Registra as rotas do admin preservando os endpoints legados."""
     app.add_url_rule(
@@ -1471,5 +1587,23 @@ def register(app):
         "/admin/portaria/checklist/<int:item_id>/toggle",
         "admin_portaria_checklist_toggle",
         admin_portaria_checklist_toggle,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso",
+        "admin_controle_acesso",
+        admin_controle_acesso,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/salvar",
+        "admin_controle_acesso_salvar",
+        admin_controle_acesso_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/<int:credencial_id>/revogar",
+        "admin_controle_acesso_revogar",
+        admin_controle_acesso_revogar,
         methods=["POST"],
     )

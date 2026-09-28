@@ -210,6 +210,9 @@
                 <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
                     <i class="bi bi-shield-check me-2"></i>Portaria
                 </a>
+                <a class="nav-link text-white d-flex align-items-center{% if request.endpoint in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar'] %} active{% endif %}" href="{{ url_for('admin_controle_acesso') }}">
+                    <i class="bi bi-key me-2"></i>Controle de Acesso
+                </a>
                 <a class="nav-link text-white d-flex align-items-center{% if request.endpoint in ['admin_portaria_configuracoes', 'admin_portaria_configuracoes_gerais', 'admin_portaria_guarita_salvar', 'admin_portaria_guarita_toggle', 'admin_portaria_checklist_salvar', 'admin_portaria_checklist_toggle'] %} active{% endif %}" href="{{ url_for('admin_portaria_configuracoes') }}">
                     <i class="bi bi-journal-check me-2"></i>Config. Portaria
                 </a>
@@ -336,6 +339,9 @@
                     </a>
                     <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
                         <i class="bi bi-shield-check me-2"></i>Portaria
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center{% if request.endpoint in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar'] %} active{% endif %}" href="{{ url_for('admin_controle_acesso') }}">
+                        <i class="bi bi-key me-2"></i>Controle de Acesso
                     </a>
                     <a class="nav-link text-white d-flex align-items-center{% if request.endpoint in ['admin_portaria_configuracoes', 'admin_portaria_configuracoes_gerais', 'admin_portaria_guarita_salvar', 'admin_portaria_guarita_toggle', 'admin_portaria_checklist_salvar', 'admin_portaria_checklist_toggle'] %} active{% endif %}" href="{{ url_for('admin_portaria_configuracoes') }}">
                         <i class="bi bi-journal-check me-2"></i>Config. Portaria

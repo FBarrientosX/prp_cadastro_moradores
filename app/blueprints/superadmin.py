@@ -40,7 +40,7 @@ from app.models import (
     Unidade,
     Usuario,
 )
-from app.utils import html_rico_form, link_rede_social, salvar_logo_parceiro
+from app.utils import gerar_api_key, html_rico_form, link_rede_social, salvar_logo_parceiro
 
 _LOGO_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
@@ -172,7 +172,13 @@ def superadmin_condominios():
             flash(erro_logo, "danger")
             return redirect(url_for("superadmin_condominios"))
 
-        condominio = Condominio(nome=nome, slug=slug, cnpj=cnpj, ativo=True)
+        condominio = Condominio(
+            nome=nome,
+            slug=slug,
+            cnpj=cnpj,
+            ativo=True,
+            api_key=gerar_api_key(),
+        )
         db.session.add(condominio)
         db.session.flush()
         db.session.add(
@@ -679,6 +685,25 @@ def superadmin_clube_parceiro_salvar():
     return redirect(url_for("superadmin_clube_vantagens"))
 
 
+@superadmin_required
+def superadmin_condominio_api_key(condominio_id):
+    """Gera ou troca a chave M2M dos equipamentos deste condomínio."""
+    from app.models import LogAuditoria
+
+    condominio = Condominio.query.get_or_404(condominio_id)
+    condominio.api_key = gerar_api_key()
+    db.session.add(
+        LogAuditoria(
+            usuario_id=get_current_user().id,
+            condominio_id=condominio.id,
+            mensagem=f"API Key do condomínio {condominio.nome} gerada novamente.",
+        )
+    )
+    db.session.commit()
+    flash("Chave de API do condomínio atualizada. Copie o valor no cadastro.", "success")
+    return redirect(url_for("superadmin_condominios"))
+
+
 def register(app):
     """Registra as rotas do Super Admin preservando os endpoints legados."""
     app.add_url_rule(
@@ -787,5 +812,11 @@ def register(app):
         "/superadmin/clube-vantagens/parceiro/salvar",
         "superadmin_clube_parceiro_salvar",
         superadmin_clube_parceiro_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/condominios/<int:condominio_id>/api-key",
+        "superadmin_condominio_api_key",
+        superadmin_condominio_api_key,
         methods=["POST"],
     )

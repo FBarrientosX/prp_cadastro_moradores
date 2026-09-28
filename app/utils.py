@@ -3,6 +3,7 @@
 import os
 import random
 import re
+import secrets
 import string
 from datetime import datetime
 from html import escape
@@ -17,6 +18,12 @@ SALT_RECUPERACAO_PARCEIRO = "recuperacao-parceiro"
 
 PARCEIRO_LOGO_EXTENSOES = {"png", "jpg", "jpeg", "webp"}
 PARCEIRO_LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+def gerar_api_key():
+    """Chave aleatória de 64 caracteres hexadecimais para a API do condomínio."""
+    return secrets.token_hex(32)
+
 
 BLOCOS_ANDARES = {
     "1": 7,

@@ -650,6 +650,30 @@ def _garantir_coluna_ativo_condominio():
     db.session.commit()
 
 
+def _garantir_coluna_api_key_condominio():
+    """Chave de API dos equipamentos, única por condomínio."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    if "api_key" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE condominio ADD COLUMN api_key VARCHAR(64)")
+        )
+        db.session.commit()
+        inspetor.clear_cache()
+
+    indices = {indice["name"] for indice in inspetor.get_indexes("condominio")}
+    if "uq_condominio_api_key" not in indices:
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_condominio_api_key ON condominio (api_key)"
+            )
+        )
+        db.session.commit()
+
+
 def _garantir_colunas_livro_servico():
     """Colunas novas do livro de serviço em bancos já existentes."""
     inspetor = inspect(db.engine)
@@ -723,10 +747,15 @@ def _seed_condominio_transicao():
     cria o Cliente Nº 1 se ainda não existir e faz backfill de condominio_id.
     """
     from app.models import Condominio, ConfiguracaoCondominio
+    from app.utils import gerar_api_key
 
     condominio = Condominio.query.order_by(Condominio.id).first()
     if condominio is None:
-        condominio = Condominio(nome="PRP Condomínio", slug="prp")
+        condominio = Condominio(
+            nome="PRP Condomínio",
+            slug="prp",
+            api_key=gerar_api_key(),
+        )
         db.session.add(condominio)
         db.session.flush()
         db.session.add(ConfiguracaoCondominio(condominio_id=condominio.id))
@@ -1010,6 +1039,7 @@ def create_app(config=None):
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
+        _garantir_coluna_api_key_condominio()
         _garantir_colunas_livro_servico()
         _seed_condominio_transicao()
         _migrar_sindico_agrupamentos()
