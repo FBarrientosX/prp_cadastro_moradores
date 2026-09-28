@@ -12,6 +12,7 @@ outros módulos (sindico, admin, portaria) — aqui é só importada.
 
 import os
 import random
+import secrets
 import string
 
 from flask import current_app, flash, redirect, render_template, request, url_for
@@ -29,6 +30,7 @@ from app.auth import (
     validar_slug,
 )
 from app.models import (
+    CategoriaParceiro,
     Condominio,
     ConfiguracaoCondominio,
     Cupom,
@@ -535,6 +537,148 @@ def superadmin_parceiro_ativar(parceiro_id):
     return redirect(url_for("superadmin_parceiros"))
 
 
+@superadmin_required
+def superadmin_clube_vantagens():
+    """Catálogo global do Clube: categorias, parceiros e condomínios atendidos."""
+    categorias = CategoriaParceiro.query.order_by(CategoriaParceiro.nome).all()
+    parceiros = Parceiro.query.order_by(Parceiro.nome_empresa).all()
+    todos_condominios = (
+        Condominio.query.filter_by(ativo=True).order_by(Condominio.nome).all()
+    )
+    return render_template(
+        "superadmin/clube_vantagens.html",
+        categorias=categorias,
+        parceiros=parceiros,
+        todos_condominios=todos_condominios,
+        aba=request.args.get("aba") or "parceiros",
+    )
+
+
+@superadmin_required
+def superadmin_clube_categoria_salvar():
+    nome = (request.form.get("nome") or "").strip()
+    categoria_id = request.form.get("categoria_id", type=int)
+    if not nome:
+        flash("Informe o nome da categoria.", "danger")
+        return redirect(url_for("superadmin_clube_vantagens", aba="categorias"))
+
+    existente = CategoriaParceiro.query.filter(
+        func.lower(CategoriaParceiro.nome) == nome.lower()
+    ).first()
+
+    if categoria_id:
+        categoria = CategoriaParceiro.query.get_or_404(categoria_id)
+        if existente and existente.id != categoria.id:
+            flash("Já existe uma categoria com este nome.", "warning")
+            return redirect(url_for("superadmin_clube_vantagens", aba="categorias"))
+        categoria.nome = nome
+        db.session.commit()
+        flash("Categoria atualizada.", "success")
+    else:
+        if existente:
+            flash("Já existe uma categoria com este nome.", "warning")
+            return redirect(url_for("superadmin_clube_vantagens", aba="categorias"))
+        db.session.add(CategoriaParceiro(nome=nome, ativa=True))
+        db.session.commit()
+        flash("Categoria criada.", "success")
+    return redirect(url_for("superadmin_clube_vantagens", aba="categorias"))
+
+
+@superadmin_required
+def superadmin_clube_categoria_alternar(categoria_id):
+    categoria = CategoriaParceiro.query.get_or_404(categoria_id)
+    categoria.ativa = not bool(categoria.ativa)
+    db.session.commit()
+    estado = "ativada" if categoria.ativa else "desativada"
+    flash(f"Categoria {estado}.", "success")
+    return redirect(url_for("superadmin_clube_vantagens", aba="categorias"))
+
+
+def _condominios_selecionados():
+    ids = []
+    for bruto in request.form.getlist("condominios[]"):
+        try:
+            ids.append(int(bruto))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return []
+    return (
+        Condominio.query.filter(Condominio.id.in_(ids), Condominio.ativo.is_(True))
+        .order_by(Condominio.nome)
+        .all()
+    )
+
+
+@superadmin_required
+def superadmin_clube_parceiro_salvar():
+    nome = (request.form.get("nome") or "").strip()
+    descricao_vantagem = (request.form.get("descricao_vantagem") or "").strip() or None
+    cupom = (request.form.get("cupom") or "").strip() or None
+    categoria_id = request.form.get("categoria_id", type=int)
+    parceiro_id = request.form.get("parceiro_id", type=int)
+
+    if not nome or not categoria_id:
+        flash("Informe o nome e a categoria do parceiro.", "danger")
+        return redirect(url_for("superadmin_clube_vantagens"))
+
+    categoria = db.session.get(CategoriaParceiro, categoria_id)
+    if categoria is None or not categoria.ativa:
+        flash("Selecione uma categoria ativa.", "warning")
+        return redirect(url_for("superadmin_clube_vantagens"))
+
+    if parceiro_id:
+        parceiro = Parceiro.query.get_or_404(parceiro_id)
+    else:
+        token = secrets.token_hex(6)
+        parceiro = Parceiro(
+            nome_empresa=nome,
+            email=f"clube-{token}@interno.vizinsync",
+            usuario_login=f"clube_{token}",
+            categoria=categoria.nome[:50],
+            status="Ativo",
+            ativo=True,
+        )
+        parceiro.set_password(secrets.token_urlsafe(16))
+        db.session.add(parceiro)
+        db.session.flush()
+
+    parceiro.nome_empresa = nome
+    parceiro.categoria_id = categoria.id
+    parceiro.categoria = categoria.nome[:50]
+    parceiro.descricao_vantagem = descricao_vantagem
+    parceiro.cupom = cupom
+
+    arquivo = request.files.get("logo")
+    if arquivo and arquivo.filename:
+        from app.drive_api import upload_logo_parceiro_drive
+
+        nome_arquivo = secure_filename(arquivo.filename) or "logo"
+        resultado = upload_logo_parceiro_drive(arquivo, filename=nome_arquivo)
+        if not resultado or not resultado.get("id"):
+            db.session.rollback()
+            flash("Não foi possível enviar o logo para o Drive.", "danger")
+            return redirect(url_for("superadmin_clube_vantagens"))
+        parceiro.logo_drive_id = resultado.get("id")
+        parceiro.logo_url = resultado.get("webViewLink")
+
+    selecionados = _condominios_selecionados()
+    parceiro.condominios = []
+    db.session.flush()
+    for condominio in selecionados:
+        parceiro.condominios.append(condominio)
+
+    db.session.commit()
+    if selecionados:
+        flash("Parceiro salvo. A oferta aparece nos condomínios marcados.", "success")
+    else:
+        flash(
+            "Parceiro salvo. Sem condomínio marcado, a oferta continua visível em todos.",
+            "success",
+        )
+    return redirect(url_for("superadmin_clube_vantagens"))
+
+
 def register(app):
     """Registra as rotas do Super Admin preservando os endpoints legados."""
     app.add_url_rule(
@@ -619,5 +763,29 @@ def register(app):
         "/superadmin/parceiros/<int:parceiro_id>/ativar",
         "superadmin_parceiro_ativar",
         superadmin_parceiro_ativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/clube-vantagens",
+        "superadmin_clube_vantagens",
+        superadmin_clube_vantagens,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/superadmin/clube-vantagens/categoria/salvar",
+        "superadmin_clube_categoria_salvar",
+        superadmin_clube_categoria_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/clube-vantagens/categoria/<int:categoria_id>/alternar",
+        "superadmin_clube_categoria_alternar",
+        superadmin_clube_categoria_alternar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/superadmin/clube-vantagens/parceiro/salvar",
+        "superadmin_clube_parceiro_salvar",
+        superadmin_clube_parceiro_salvar,
         methods=["POST"],
     )

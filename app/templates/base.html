@@ -161,7 +161,7 @@
                     <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
                     {% endif %}
                 </a>
-                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['morador_clube_vantagens', 'clube_vantagens'] %}active{% endif %}" href="{{ url_for('morador_clube_vantagens') }}">
                     <i class="bi bi-gift me-2"></i>Clube de Vantagens
                 </a>
             {% elif sidebar_user and sidebar_user.role == 'sindico' %}
@@ -289,7 +289,7 @@
                         <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
                         {% endif %}
                     </a>
-                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'clube_vantagens' %}active{% endif %}" href="{{ url_for('clube_vantagens') }}">
+                    <a class="nav-link text-white d-flex align-items-center {% if request.endpoint in ['morador_clube_vantagens', 'clube_vantagens'] %}active{% endif %}" href="{{ url_for('morador_clube_vantagens') }}">
                         <i class="bi bi-gift me-2"></i>Clube de Vantagens
                     </a>
                 {% elif sidebar_user and sidebar_user.role == 'sindico' %}

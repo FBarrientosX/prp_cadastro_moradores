@@ -396,6 +396,36 @@ class Reserva(db.Model):
         return f"<Reserva {self.id} ({self.status})>"
 
 
+class CategoriaParceiro(db.Model):
+    """Categoria global do Clube de Vantagens (plataforma, sem condomínio)."""
+
+    __tablename__ = "categoria_parceiro"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(80), nullable=False, unique=True)
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    def __repr__(self):
+        return f"<CategoriaParceiro {self.nome}>"
+
+
+parceiro_condominio = db.Table(
+    "parceiro_condominio",
+    db.Column(
+        "parceiro_id",
+        db.Integer,
+        db.ForeignKey("parceiro.id"),
+        primary_key=True,
+    ),
+    db.Column(
+        "condominio_id",
+        db.Integer,
+        db.ForeignKey("condominio.id"),
+        primary_key=True,
+    ),
+)
+
+
 class Parceiro(db.Model):
     """Parceiro comercial — escopo GLOBAL (sem condominio_id)."""
 
@@ -408,9 +438,19 @@ class Parceiro(db.Model):
     senha_hash = db.Column(db.String(256), nullable=False)
     telefone = db.Column(db.String(20), nullable=True)
     categoria = db.Column(db.String(50), nullable=False)
+    categoria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("categoria_parceiro.id"),
+        nullable=True,
+        index=True,
+    )
     endereco = db.Column(db.String(255), nullable=True)
     descricao = db.Column(db.Text, nullable=True)
+    descricao_vantagem = db.Column(db.Text, nullable=True)
+    cupom = db.Column(db.String(80), nullable=True)
     logo_arquivo = db.Column(db.String(255), nullable=True)
+    logo_drive_id = db.Column(db.String(100), nullable=True)
+    logo_url = db.Column(db.String(500), nullable=True)
     link_instagram = db.Column(db.String(255), nullable=True)
     link_facebook = db.Column(db.String(255), nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
@@ -421,6 +461,16 @@ class Parceiro(db.Model):
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     cupons = db.relationship("Cupom", backref="parceiro", lazy=True)
+    categoria_ref = db.relationship("CategoriaParceiro", backref="parceiros")
+    condominios = db.relationship(
+        "Condominio",
+        secondary=parceiro_condominio,
+        backref=db.backref("parceiros_vinculados", lazy="dynamic"),
+    )
+
+    @property
+    def nome(self):
+        return self.nome_empresa
 
     def set_password(self, password):
         self.senha_hash = generate_password_hash(password)

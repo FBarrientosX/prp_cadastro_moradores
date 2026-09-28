@@ -306,6 +306,7 @@ def _garantir_colunas_parceiros():
         return
 
     colunas = {coluna["name"] for coluna in inspetor.get_columns("parceiro")}
+    status_novo = "status" not in colunas
     alteracoes = []
     if "status" not in colunas:
         alteracoes.append(
@@ -327,11 +328,24 @@ def _garantir_colunas_parceiros():
         alteracoes.append(
             "ALTER TABLE parceiro ADD COLUMN senha_atualizada_em DATETIME"
         )
+    if "descricao_vantagem" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN descricao_vantagem TEXT")
+    if "cupom" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN cupom VARCHAR(80)")
+    if "logo_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN logo_drive_id VARCHAR(100)"
+        )
+    if "logo_url" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN logo_url VARCHAR(500)")
+    if "categoria_id" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN categoria_id INTEGER")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
         db.session.commit()
+    if status_novo:
         db.session.execute(
             text(
                 """
