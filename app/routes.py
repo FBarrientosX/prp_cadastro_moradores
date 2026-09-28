@@ -48,6 +48,7 @@ from app.models import (
     AgendamentoMudanca,
     AutorizacaoAcesso,
     CategoriaOcorrencia,
+    CategoriaParceiro,
     Condominio,
     Cupom,
     Encomenda,
@@ -1174,6 +1175,19 @@ def _contagem_resgates_por_cupom(cupom_ids):
     return {cupom_id: total for cupom_id, total in rows}
 
 
+def _parceiro_visivel_no_condominio(parceiro, condominio_id):
+    """Parceiro sem vínculo continua visível em todos os condomínios.
+
+    Com pelo menos um condomínio marcado, a oferta fica restrita a eles.
+    """
+    if not parceiro or parceiro.status != "Ativo":
+        return False
+    vinculados = list(parceiro.condominios)
+    if not vinculados:
+        return True
+    return any(condominio.id == condominio_id for condominio in vinculados)
+
+
 @unidade_required
 def clube_vantagens(unidade):
     data_atual = datetime.utcnow().date()
@@ -1208,6 +1222,8 @@ def clube_vantagens(unidade):
         resgates_unidade = resgates_unidade_por_cupom.get(cupom.id, 0)
         if resgates_unidade >= cupom.limite_por_unidade:
             continue
+        if not _parceiro_visivel_no_condominio(cupom.parceiro, unidade.condominio_id):
+            continue
         cupons_disponiveis.append(cupom)
 
     resgates_ativos = (
@@ -1225,11 +1241,13 @@ def clube_vantagens(unidade):
         .all()
     )
 
-    parceiros_ativos = (
-        Parceiro.query.filter_by(status="Ativo")
+    parceiros_ativos = [
+        parceiro
+        for parceiro in Parceiro.query.filter_by(status="Ativo")
         .order_by(Parceiro.nome_empresa)
         .all()
-    )
+        if _parceiro_visivel_no_condominio(parceiro, unidade.condominio_id)
+    ]
     parceiros_com_cupons_ativos = {
         parceiro_id
         for (parceiro_id,) in db.session.query(Cupom.parceiro_id)
@@ -1254,16 +1272,130 @@ def clube_vantagens(unidade):
 
 
 @unidade_required
+def morador_clube_vantagens(unidade):
+    """Vitrine do morador: parceiros globais ou vinculados ao condomínio dele."""
+    candidatos = (
+        Parceiro.query.filter_by(ativo=True).order_by(Parceiro.nome_empresa).all()
+    )
+    parceiros_visiveis = []
+    for parceiro in candidatos:
+        if parceiro.status != "Ativo":
+            continue
+        vinculados = list(parceiro.condominios)
+        if not vinculados or any(
+            condominio.id == unidade.condominio_id for condominio in vinculados
+        ):
+            parceiros_visiveis.append(parceiro)
+
+    categorias_ids = {
+        parceiro.categoria_id
+        for parceiro in parceiros_visiveis
+        if parceiro.categoria_id
+    }
+    categorias = []
+    if categorias_ids:
+        categorias = (
+            CategoriaParceiro.query.filter(
+                CategoriaParceiro.id.in_(categorias_ids),
+                CategoriaParceiro.ativa.is_(True),
+            )
+            .order_by(CategoriaParceiro.nome)
+            .all()
+        )
+
+    morador = (
+        unidade.pessoas.filter_by(is_responsavel=True).first()
+        or unidade.pessoas.first()
+    )
+
+    parceiro_ids = [parceiro.id for parceiro in parceiros_visiveis]
+    ofertas_por_parceiro = {parceiro_id: [] for parceiro_id in parceiro_ids}
+    if parceiro_ids:
+        data_atual = datetime.utcnow().date()
+        cupons_ativos = (
+            Cupom.query.filter(
+                Cupom.parceiro_id.in_(parceiro_ids),
+                Cupom.ativo.is_(True),
+                or_(Cupom.data_validade.is_(None), Cupom.data_validade >= data_atual),
+            )
+            .order_by(Cupom.titulo)
+            .all()
+        )
+        cupom_ids = [cupom.id for cupom in cupons_ativos]
+        resgates_por_cupom = _contagem_resgates_por_cupom(cupom_ids)
+        resgates_unidade_rows = (
+            db.session.query(ResgateCupom.cupom_id, func.count(ResgateCupom.id))
+            .filter(ResgateCupom.unidade_id == unidade.id)
+            .group_by(ResgateCupom.cupom_id)
+            .all()
+        )
+        resgates_unidade_por_cupom = {
+            cupom_id: total for cupom_id, total in resgates_unidade_rows
+        }
+        for cupom in cupons_ativos:
+            total_resgates = resgates_por_cupom.get(cupom.id, 0)
+            if cupom.limite_total is not None and total_resgates >= cupom.limite_total:
+                continue
+            if resgates_unidade_por_cupom.get(cupom.id, 0) >= cupom.limite_por_unidade:
+                continue
+            ofertas_por_parceiro.setdefault(cupom.parceiro_id, []).append(cupom)
+
+    cupons_disponiveis = [
+        cupom
+        for lista in ofertas_por_parceiro.values()
+        for cupom in lista
+    ]
+    cupons_disponiveis.sort(
+        key=lambda cupom: (cupom.parceiro.nome_empresa.lower(), cupom.titulo.lower())
+    )
+
+    resgates_ativos = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(ResgateCupom.unidade_id == unidade.id, ResgateCupom.status == "Ativo")
+        .order_by(ResgateCupom.data_resgate.desc())
+        .all()
+    )
+    resgates_utilizados = (
+        ResgateCupom.query.join(Cupom)
+        .join(Parceiro)
+        .filter(
+            ResgateCupom.unidade_id == unidade.id,
+            ResgateCupom.status == "Utilizado",
+        )
+        .order_by(ResgateCupom.data_utilizacao.desc())
+        .all()
+    )
+
+    return render_template(
+        "morador/clube_vantagens.html",
+        parceiros_visiveis=parceiros_visiveis,
+        categorias=categorias,
+        ofertas_por_parceiro=ofertas_por_parceiro,
+        cupons_disponiveis=cupons_disponiveis,
+        resgates_ativos=resgates_ativos,
+        resgates_utilizados=resgates_utilizados,
+        unidade=unidade,
+        morador=morador,
+        aba=request.args.get("aba") or "parceiros",
+    )
+
+
+@unidade_required
 def clube_vantagens_resgatar(unidade, cupom_id):
     cupom = Cupom.query.get_or_404(cupom_id)
 
     if not cupom.ativo or not cupom.parceiro.ativo:
         flash("Este cupom não está disponível no momento.", "warning")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
+
+    if not _parceiro_visivel_no_condominio(cupom.parceiro, unidade.condominio_id):
+        flash("Esta oferta não está disponível para o seu condomínio.", "warning")
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     if cupom.data_validade and cupom.data_validade < datetime.utcnow().date():
         flash("Este cupom expirou.", "warning")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     resgates_unidade = ResgateCupom.query.filter_by(
         cupom_id=cupom.id,
@@ -1271,7 +1403,7 @@ def clube_vantagens_resgatar(unidade, cupom_id):
     ).count()
     if resgates_unidade >= cupom.limite_por_unidade:
         flash("Você atingiu o limite de resgates para esta oferta.", "danger")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     # Reserva atomicamente uma "vaga" no limite total do cupom: um único
     # UPDATE é indivisível mesmo sob concorrência — diferente de um
@@ -1287,7 +1419,7 @@ def clube_vantagens_resgatar(unidade, cupom_id):
     if resultado.rowcount == 0:
         db.session.rollback()
         flash("Oferta esgotada.", "danger")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     # Revalida o limite por unidade dentro da mesma transação: o UPDATE acima
     # já tomou o lock de escrita do SQLite para este cupom, então nenhuma
@@ -1299,7 +1431,7 @@ def clube_vantagens_resgatar(unidade, cupom_id):
     if resgates_unidade_atual >= cupom.limite_por_unidade:
         db.session.rollback()
         flash("Você atingiu o limite de resgates para esta oferta.", "danger")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     bloco = "".join(ch for ch in str(unidade.bloco or "") if ch.isalnum()).upper()
     apartamento = "".join(ch for ch in str(unidade.apartamento or "") if ch.isalnum()).upper()
@@ -1319,7 +1451,7 @@ def clube_vantagens_resgatar(unidade, cupom_id):
         # ResgateCupom correspondente.
         db.session.rollback()
         flash("Não foi possível gerar um código único. Tente novamente.", "danger")
-        return redirect(url_for("clube_vantagens"))
+        return redirect(url_for("morador_clube_vantagens", aba="cupons"))
 
     db.session.add(
         ResgateCupom(
@@ -1331,7 +1463,7 @@ def clube_vantagens_resgatar(unidade, cupom_id):
     )
     db.session.commit()
     flash(f"Cupom resgatado com sucesso! Código: {codigo_unico}", "success")
-    return redirect(url_for("clube_vantagens"))
+    return redirect(url_for("morador_clube_vantagens", aba="historico"))
 
 
 @acesso_reservas_required
@@ -2539,6 +2671,7 @@ def notificacoes_ler(notificacao_id):
 
 def init_app(app):
     from app.blueprints import admin as admin_routes
+    from app.blueprints import api as api_routes
     from app.blueprints import parceiro as parceiro_routes
     from app.blueprints import portaria as portaria_routes
     from app.blueprints import sindico as sindico_routes
@@ -2549,6 +2682,7 @@ def init_app(app):
     sindico_routes.register(app)
     admin_routes.register(app)
     portaria_routes.register(app)
+    api_routes.register(app)
 
     app.add_url_rule("/", "index", index, methods=["GET"])
     app.add_url_rule(
@@ -2599,6 +2733,12 @@ def init_app(app):
     )
     app.add_url_rule(
         "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
+    )
+    app.add_url_rule(
+        "/clube-vantagens",
+        "morador_clube_vantagens",
+        morador_clube_vantagens,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/clube_vantagens",

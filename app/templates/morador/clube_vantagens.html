@@ -1,0 +1,451 @@
+{% extends "base.html" %}
+
+{% block title %}Clube de Vantagens{% endblock %}
+
+{% block head %}
+<style>
+    .parceiro-logo-sm {
+        width: 56px;
+        height: 56px;
+        object-fit: contain;
+        background: #fff;
+        border: 1px solid var(--bs-border-color);
+        border-radius: 0.5rem;
+        flex-shrink: 0;
+    }
+    .parceiro-logo-placeholder {
+        width: 56px;
+        height: 56px;
+        background: #f8f9fa;
+        color: #6c757d;
+        border-radius: 0.5rem;
+        flex-shrink: 0;
+    }
+    .nav-tabs .nav-link {
+        border: none;
+        color: #6c757d;
+        font-weight: 500;
+        padding: 0.5rem 1rem;
+    }
+    .nav-tabs .nav-link.active {
+        color: #0d6efd !important;
+        background-color: transparent !important;
+        border-bottom: 2px solid #0d6efd !important;
+    }
+    .nome-parceiro {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .descricao-card {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .carteirinha {
+        border-radius: 1rem;
+        padding: 1.5rem;
+        color: #fff;
+        background: linear-gradient(135deg, #0d6efd 0%, #084298 55%, #198754 100%);
+        box-shadow: 0 0.75rem 1.5rem rgba(13, 110, 253, 0.25);
+    }
+    .carteirinha-pendente {
+        filter: grayscale(1);
+        opacity: 0.85;
+    }
+    .badge-valido {
+        font-size: 1rem;
+        letter-spacing: 0.04em;
+        animation: carteirinha-pulso 1.6s infinite;
+    }
+    @keyframes carteirinha-pulso {
+        0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.65); }
+        70% { box-shadow: 0 0 0 12px rgba(25, 135, 84, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set carteirinha_aprovada = unidade.status in ['Aprovada', 'Registrada'] %}
+{% set label_bloco = unidade.condominio.configuracao.label_agrupamento if unidade.condominio and unidade.condominio.configuracao else 'Bloco' %}
+{% set label_apto = unidade.condominio.configuracao.label_unidade if unidade.condominio and unidade.condominio.configuracao else 'Apto' %}
+{% set total_historico = (resgates_ativos|length) + (resgates_utilizados|length) %}
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Clube de Vantagens</h1>
+        <p class="text-muted mb-0">Parceiros do condomínio e cupons para resgatar.</p>
+    </div>
+    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modalCarteirinha">
+        <i class="bi bi-person-badge"></i> Minha Carteirinha
+    </button>
+</div>
+
+<ul class="nav nav-tabs mb-4" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if aba == 'parceiros' %}active{% endif %}" id="parceiros-tab"
+                data-bs-toggle="tab" data-bs-target="#painel-parceiros" type="button" role="tab">
+            Parceiros
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if aba == 'cupons' %}active{% endif %}" id="cupons-tab"
+                data-bs-toggle="tab" data-bs-target="#painel-cupons" type="button" role="tab">
+            Cupons Disponíveis
+            {% if cupons_disponiveis %}
+            <span class="badge text-bg-light text-dark ms-1">{{ cupons_disponiveis|length }}</span>
+            {% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if aba == 'historico' %}active{% endif %}" id="historico-tab"
+                data-bs-toggle="tab" data-bs-target="#painel-historico" type="button" role="tab">
+            Meu Histórico
+            {% if total_historico %}
+            <span class="badge text-bg-light text-dark ms-1">{{ total_historico }}</span>
+            {% endif %}
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade {% if aba == 'parceiros' %}show active{% endif %}" id="painel-parceiros" role="tabpanel">
+        {% if parceiros_visiveis %}
+        <div class="row row-cols-1 row-cols-md-3 g-3">
+            {% for parceiro in parceiros_visiveis %}
+            {% set email_contato = parceiro.email if parceiro.email and '@interno.vizinsync' not in parceiro.email else '' %}
+            {% set telefone_limpo = parceiro.telefone|replace(' ', '')|replace('(', '')|replace(')', '')|replace('-', '')|replace('+', '') if parceiro.telefone else '' %}
+            <div class="col">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column gap-2">
+                        <div class="d-flex align-items-center gap-2">
+                            {% if parceiro.logo_drive_id %}
+                            <img class="parceiro-logo-sm" alt=""
+                                 src="https://drive.google.com/thumbnail?id={{ parceiro.logo_drive_id }}&sz=w200">
+                            {% elif parceiro.logo_url %}
+                            <img class="parceiro-logo-sm" alt="" src="{{ parceiro.logo_url }}">
+                            {% elif parceiro.logo_arquivo %}
+                            <img class="parceiro-logo-sm" alt=""
+                                 src="{{ url_for('static', filename='uploads/parceiros/' ~ parceiro.logo_arquivo) }}">
+                            {% else %}
+                            <div class="parceiro-logo-placeholder d-flex align-items-center justify-content-center">
+                                <i class="bi bi-shop"></i>
+                            </div>
+                            {% endif %}
+                            <div class="min-w-0">
+                                <h2 class="h5 mb-1 nome-parceiro">{{ parceiro.nome_empresa }}</h2>
+                                <span class="badge text-bg-primary">
+                                    {{ parceiro.categoria_ref.nome if parceiro.categoria_ref else parceiro.categoria }}
+                                </span>
+                            </div>
+                        </div>
+                        {% if parceiro.descricao %}
+                        <div class="text-muted small descricao-card html-rico mb-0" style="-webkit-line-clamp: 3;">{{ parceiro.descricao|safe }}</div>
+                        <button type="button" class="btn btn-link p-0 text-decoration-none small btn-ler-mais" onclick="toggleDescricao(this)">Ler mais</button>
+                        {% elif parceiro.descricao_vantagem %}
+                        <p class="text-muted small descricao-card mb-0" style="-webkit-line-clamp: 3;">{{ parceiro.descricao_vantagem }}</p>
+                        <button type="button" class="btn btn-link p-0 text-decoration-none small btn-ler-mais" onclick="toggleDescricao(this)">Ler mais</button>
+                        {% endif %}
+                        {% if parceiro.endereco or telefone_limpo or email_contato %}
+                        <div class="d-flex flex-wrap gap-2 small text-muted">
+                            {% if parceiro.endereco %}
+                            <span><i class="bi bi-geo-alt"></i> {{ parceiro.endereco }}</span>
+                            {% endif %}
+                            {% if telefone_limpo %}
+                            <a class="link-success text-decoration-none"
+                               href="https://wa.me/{{ telefone_limpo if telefone_limpo.startswith('55') else '55' ~ telefone_limpo }}"
+                               target="_blank" rel="noopener noreferrer">
+                                <i class="bi bi-whatsapp"></i> WhatsApp
+                            </a>
+                            {% endif %}
+                            {% if email_contato %}
+                            <a class="link-secondary text-decoration-none" href="mailto:{{ email_contato }}">
+                                <i class="bi bi-envelope"></i> E-mail
+                            </a>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="card-footer bg-white border-top-0 pt-0">
+                        <button type="button"
+                                class="btn btn-outline-primary w-100 py-2 btn-ver-cupons"
+                                data-parceiro-id="{{ parceiro.id }}"
+                                data-parceiro-nome="{{ parceiro.nome_empresa }}">
+                            Ver Cupons
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">Nenhum parceiro disponível para o seu condomínio.</div>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if aba == 'cupons' %}show active{% endif %}" id="painel-cupons" role="tabpanel">
+        <div class="row g-2 mb-3">
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="filtroCategoria">Categoria</label>
+                <select id="filtroCategoria" class="form-select">
+                    <option value="">Todas</option>
+                    {% for categoria in categorias %}
+                    <option value="{{ categoria.id }}">{{ categoria.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="filtroParceiro">Parceiro</label>
+                <select id="filtroParceiro" class="form-select">
+                    <option value="">Todos</option>
+                    {% for parceiro in parceiros_visiveis %}
+                    {% if ofertas_por_parceiro.get(parceiro.id) %}
+                    <option value="{{ parceiro.id }}">{{ parceiro.nome_empresa }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        {% if cupons_disponiveis %}
+        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3" id="grade-cupons">
+            {% for cupom in cupons_disponiveis %}
+            <div class="col card-cupom"
+                 data-categoria-id="{{ cupom.parceiro.categoria_id or '' }}"
+                 data-parceiro-id="{{ cupom.parceiro_id }}">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column gap-2">
+                        <div class="fw-semibold text-primary">{{ cupom.parceiro.nome_empresa }}</div>
+                        <h2 class="h5 mb-0">{{ cupom.titulo }}</h2>
+                        {% if cupom.descricao %}
+                        <div class="small text-muted html-rico mb-0">{{ cupom.descricao|safe }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="card-footer bg-white border-top-0">
+                        <form method="post" action="{{ url_for('clube_vantagens_resgatar', cupom_id=cupom.id) }}">
+                            <button type="submit" class="btn btn-success w-100 py-2">Resgatar Cupom</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <p class="text-muted mb-0 d-none" id="cupons-vazio">Nenhum cupom com esse filtro.</p>
+        {% else %}
+        <div class="alert alert-light border mb-0">Nenhum cupom disponível no momento.</div>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if aba == 'historico' %}show active{% endif %}" id="painel-historico" role="tabpanel">
+        <h2 class="h6 mb-3">Para usar</h2>
+        {% if resgates_ativos %}
+        <div class="row row-cols-1 row-cols-md-2 g-3 mb-4">
+            {% for resgate in resgates_ativos %}
+            <div class="col">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column gap-2">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <h3 class="h6 mb-0">{{ resgate.cupom.parceiro.nome_empresa }}</h3>
+                            <span class="badge text-bg-success">Aguardando uso</span>
+                        </div>
+                        <p class="fw-semibold mb-0">{{ resgate.cupom.titulo }}</p>
+                        <p class="small text-muted mb-0">
+                            Resgatado em {{ resgate.data_resgate.strftime('%d/%m/%Y %H:%M') }}
+                        </p>
+                        <div class="bg-light border rounded p-3 text-center">
+                            <p class="small text-muted mb-1">Seu código</p>
+                            <p class="fw-bold fs-5 mb-0">{{ resgate.codigo_unico }}</p>
+                            <div class="qrcode-container mt-3 mx-auto d-flex justify-content-center"
+                                 style="width: 128px;"
+                                 data-url="{{ url_for('parceiro_validacao', codigo=resgate.codigo_unico, _external=True) }}"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted">Nenhum cupom aguardando uso.</p>
+        {% endif %}
+
+        <h2 class="h6 mb-3">Já utilizados</h2>
+        {% if resgates_utilizados %}
+        <div class="row row-cols-1 row-cols-md-2 g-3">
+            {% for resgate in resgates_utilizados %}
+            <div class="col">
+                <div class="card border-0 bg-light text-muted">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div>
+                                <h3 class="h6 mb-1 text-body-secondary">{{ resgate.cupom.titulo }}</h3>
+                                <p class="small mb-0">{{ resgate.cupom.parceiro.nome_empresa }}</p>
+                            </div>
+                            <span class="badge text-bg-secondary">Utilizado</span>
+                        </div>
+                        <p class="small mb-0 mt-2">
+                            Validado em
+                            {% if resgate.data_utilizacao %}
+                            {{ resgate.data_utilizacao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">Nenhum cupom utilizado ainda.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="modalCarteirinha" tabindex="-1" aria-labelledby="modalCarteirinhaLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalCarteirinhaLabel">Minha Carteirinha</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% if carteirinha_aprovada %}
+                <div class="carteirinha">
+                    <div class="small text-white-50 mb-1">Condomínio</div>
+                    <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                    <div class="small text-white-50">Morador</div>
+                    <div class="fs-5 fw-bold mb-3">{{ morador.nome_completo if morador else 'Morador' }}</div>
+                    <div class="d-flex justify-content-between align-items-end gap-3">
+                        <div>
+                            <div class="small text-white-50">{{ label_bloco }} / {{ label_apto }}</div>
+                            <div class="fw-semibold">{{ unidade.bloco }} / {{ unidade.apartamento }}</div>
+                        </div>
+                        <span class="badge text-bg-success badge-valido">MORADOR ATIVO - VÁLIDO</span>
+                    </div>
+                </div>
+                {% else %}
+                <div class="carteirinha carteirinha-pendente">
+                    <div class="small mb-1">Condomínio</div>
+                    <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                    <div class="small">Morador</div>
+                    <div class="fs-5 fw-bold mb-3">{{ morador.nome_completo if morador else 'Morador' }}</div>
+                    <div>
+                        <div class="small">{{ label_bloco }} / {{ label_apto }}</div>
+                        <div class="fw-semibold">{{ unidade.bloco }} / {{ unidade.apartamento }}</div>
+                    </div>
+                </div>
+                <p class="text-danger fw-semibold mt-3 mb-0">
+                    CADASTRO PENDENTE: A sua carteirinha será ativada assim que a administração aprovar o seu perfil.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+function toggleDescricao(btn) {
+    var texto = btn.previousElementSibling;
+    if (texto.style.webkitLineClamp === "3") {
+        texto.style.webkitLineClamp = "unset";
+        btn.innerText = "Ler menos";
+    } else {
+        texto.style.webkitLineClamp = "3";
+        btn.innerText = "Ler mais";
+    }
+}
+
+(function () {
+    var filtroCategoria = document.getElementById("filtroCategoria");
+    var filtroParceiro = document.getElementById("filtroParceiro");
+    var vazio = document.getElementById("cupons-vazio");
+
+    function aplicarFiltros() {
+        var categoria = filtroCategoria ? filtroCategoria.value : "";
+        var parceiro = filtroParceiro ? filtroParceiro.value : "";
+        var visiveis = 0;
+        document.querySelectorAll(".card-cupom").forEach(function (card) {
+            var okCategoria = !categoria || card.getAttribute("data-categoria-id") === categoria;
+            var okParceiro = !parceiro || card.getAttribute("data-parceiro-id") === parceiro;
+            var mostra = okCategoria && okParceiro;
+            card.classList.toggle("d-none", !mostra);
+            if (mostra) {
+                visiveis += 1;
+            }
+        });
+        if (vazio) {
+            vazio.classList.toggle("d-none", visiveis > 0);
+        }
+    }
+
+    if (filtroCategoria) {
+        filtroCategoria.addEventListener("change", aplicarFiltros);
+    }
+    if (filtroParceiro) {
+        filtroParceiro.addEventListener("change", aplicarFiltros);
+    }
+
+    document.querySelectorAll(".btn-ver-cupons").forEach(function (botao) {
+        botao.addEventListener("click", function () {
+            var parceiroId = botao.getAttribute("data-parceiro-id") || "";
+            var aba = document.getElementById("cupons-tab");
+            if (aba && window.bootstrap) {
+                window.bootstrap.Tab.getOrCreateInstance(aba).show();
+            }
+            if (!filtroParceiro) {
+                return;
+            }
+            var existe = Array.prototype.some.call(filtroParceiro.options, function (opcao) {
+                return opcao.value === parceiroId;
+            });
+            if (!existe && parceiroId) {
+                var opcao = document.createElement("option");
+                opcao.value = parceiroId;
+                opcao.textContent = botao.getAttribute("data-parceiro-nome") || "Parceiro";
+                filtroParceiro.appendChild(opcao);
+            }
+            filtroParceiro.value = parceiroId;
+            filtroParceiro.dispatchEvent(new Event("change"));
+        });
+    });
+
+    function montarQrs() {
+        if (typeof QRCode === "undefined") {
+            return;
+        }
+        document.querySelectorAll(".qrcode-container").forEach(function (container) {
+            if (container.getAttribute("data-pronto") === "1") {
+                return;
+            }
+            var url = container.getAttribute("data-url");
+            if (!url) {
+                return;
+            }
+            container.setAttribute("data-pronto", "1");
+            new QRCode(container, {
+                text: url,
+                width: 128,
+                height: 128,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        });
+    }
+
+    var abaHistorico = document.getElementById("historico-tab");
+    if (abaHistorico) {
+        abaHistorico.addEventListener("shown.bs.tab", montarQrs);
+        if (abaHistorico.classList.contains("active")) {
+            montarQrs();
+        }
+    }
+})();
+</script>
+{% endblock %}

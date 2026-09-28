@@ -306,6 +306,7 @@ def _garantir_colunas_parceiros():
         return
 
     colunas = {coluna["name"] for coluna in inspetor.get_columns("parceiro")}
+    status_novo = "status" not in colunas
     alteracoes = []
     if "status" not in colunas:
         alteracoes.append(
@@ -327,11 +328,24 @@ def _garantir_colunas_parceiros():
         alteracoes.append(
             "ALTER TABLE parceiro ADD COLUMN senha_atualizada_em DATETIME"
         )
+    if "descricao_vantagem" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN descricao_vantagem TEXT")
+    if "cupom" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN cupom VARCHAR(80)")
+    if "logo_drive_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN logo_drive_id VARCHAR(100)"
+        )
+    if "logo_url" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN logo_url VARCHAR(500)")
+    if "categoria_id" not in colunas:
+        alteracoes.append("ALTER TABLE parceiro ADD COLUMN categoria_id INTEGER")
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
         db.session.commit()
+    if status_novo:
         db.session.execute(
             text(
                 """
@@ -636,6 +650,30 @@ def _garantir_coluna_ativo_condominio():
     db.session.commit()
 
 
+def _garantir_coluna_api_key_condominio():
+    """Chave de API dos equipamentos, única por condomínio."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    if "api_key" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE condominio ADD COLUMN api_key VARCHAR(64)")
+        )
+        db.session.commit()
+        inspetor.clear_cache()
+
+    indices = {indice["name"] for indice in inspetor.get_indexes("condominio")}
+    if "uq_condominio_api_key" not in indices:
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_condominio_api_key ON condominio (api_key)"
+            )
+        )
+        db.session.commit()
+
+
 def _garantir_colunas_livro_servico():
     """Colunas novas do livro de serviço em bancos já existentes."""
     inspetor = inspect(db.engine)
@@ -709,10 +747,15 @@ def _seed_condominio_transicao():
     cria o Cliente Nº 1 se ainda não existir e faz backfill de condominio_id.
     """
     from app.models import Condominio, ConfiguracaoCondominio
+    from app.utils import gerar_api_key
 
     condominio = Condominio.query.order_by(Condominio.id).first()
     if condominio is None:
-        condominio = Condominio(nome="PRP Condomínio", slug="prp")
+        condominio = Condominio(
+            nome="PRP Condomínio",
+            slug="prp",
+            api_key=gerar_api_key(),
+        )
         db.session.add(condominio)
         db.session.flush()
         db.session.add(ConfiguracaoCondominio(condominio_id=condominio.id))
@@ -996,6 +1039,7 @@ def create_app(config=None):
         _garantir_coluna_slug_condominio()
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
+        _garantir_coluna_api_key_condominio()
         _garantir_colunas_livro_servico()
         _seed_condominio_transicao()
         _migrar_sindico_agrupamentos()

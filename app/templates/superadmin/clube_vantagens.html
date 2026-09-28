@@ -1,0 +1,284 @@
+{% extends "superadmin_base.html" %}
+
+{% block title %}Clube de Vantagens — Super Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-1">Clube de Vantagens</h1>
+        <p class="text-muted mb-0">
+            Categorias e parceiros da plataforma. Cada parceiro escolhe em quais condomínios a oferta aparece.
+        </p>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if aba != 'categorias' %}active{% endif %}" id="tab-parceiros"
+                data-bs-toggle="tab" data-bs-target="#painel-parceiros" type="button" role="tab">
+            Parceiros
+            <span class="badge text-bg-secondary ms-1">{{ parceiros|length }}</span>
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if aba == 'categorias' %}active{% endif %}" id="tab-categorias"
+                data-bs-toggle="tab" data-bs-target="#painel-categorias" type="button" role="tab">
+            Categorias
+            <span class="badge text-bg-secondary ms-1">{{ categorias|length }}</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade {% if aba != 'categorias' %}show active{% endif %}" id="painel-parceiros" role="tabpanel">
+        <div class="d-flex justify-content-end mb-3">
+            <button type="button" class="btn btn-dark" id="btn-novo-parceiro"
+                    data-bs-toggle="modal" data-bs-target="#modalParceiro">
+                <i class="bi bi-plus-lg me-1"></i>Novo Parceiro
+            </button>
+        </div>
+        {% if parceiros %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Parceiro</th>
+                        <th>Categoria</th>
+                        <th>Cupom</th>
+                        <th>Condomínios</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for parceiro in parceiros %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ parceiro.nome }}</div>
+                            {% if parceiro.descricao_vantagem %}
+                            <div class="small text-muted">{{ parceiro.descricao_vantagem }}</div>
+                            {% endif %}
+                        </td>
+                        <td>{{ parceiro.categoria_ref.nome if parceiro.categoria_ref else parceiro.categoria }}</td>
+                        <td>{{ parceiro.cupom or "—" }}</td>
+                        <td>
+                            {% if parceiro.condominios %}
+                                {% for cond in parceiro.condominios %}
+                                <span class="badge text-bg-light border">{{ cond.nome }}</span>
+                                {% endfor %}
+                            {% else %}
+                            <span class="text-muted small">Todos (sem vínculo)</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if parceiro.ativo and parceiro.status == 'Ativo' %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">{{ parceiro.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-sm btn-outline-dark btn-editar-parceiro"
+                                    data-bs-toggle="modal" data-bs-target="#modalParceiro"
+                                    data-id="{{ parceiro.id }}"
+                                    data-nome="{{ parceiro.nome }}"
+                                    data-descricao="{{ parceiro.descricao_vantagem or '' }}"
+                                    data-cupom="{{ parceiro.cupom or '' }}"
+                                    data-categoria="{{ parceiro.categoria_id or '' }}"
+                                    data-condominios="{{ parceiro.condominios|map(attribute='id')|join(',') }}">
+                                Editar
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">Nenhum parceiro cadastrado.</div>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if aba == 'categorias' %}show active{% endif %}" id="painel-categorias" role="tabpanel">
+        <div class="d-flex justify-content-end mb-3">
+            <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#modalCategoria">
+                <i class="bi bi-plus-lg me-1"></i>Nova Categoria
+            </button>
+        </div>
+        {% if categorias %}
+        <div class="table-responsive card shadow-sm">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>Situação</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for categoria in categorias %}
+                    <tr>
+                        <td>{{ categoria.nome }}</td>
+                        <td>
+                            {% if categoria.ativa %}
+                            <span class="badge text-bg-success">Ativa</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativa</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-sm btn-outline-dark btn-editar-categoria"
+                                    data-bs-toggle="modal" data-bs-target="#modalCategoria"
+                                    data-id="{{ categoria.id }}"
+                                    data-nome="{{ categoria.nome }}">
+                                Editar
+                            </button>
+                            <form method="post"
+                                  action="{{ url_for('superadmin_clube_categoria_alternar', categoria_id=categoria.id) }}"
+                                  class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{ 'Desativar' if categoria.ativa else 'Ativar' }}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">Nenhuma categoria cadastrada.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="modalParceiro" tabindex="-1" aria-labelledby="modalParceiroLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <form method="post" action="{{ url_for('superadmin_clube_parceiro_salvar') }}"
+              enctype="multipart/form-data" class="modal-content" id="form-parceiro">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalParceiroLabel">Novo Parceiro</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="parceiro_id" id="parceiro_id" value="">
+                <div class="mb-3">
+                    <label class="form-label" for="parceiro_nome">Nome</label>
+                    <input type="text" class="form-control" id="parceiro_nome" name="nome" required maxlength="100">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="parceiro_categoria">Categoria</label>
+                    <select class="form-select" id="parceiro_categoria" name="categoria_id" required>
+                        <option value="">Selecione</option>
+                        {% for categoria in categorias if categoria.ativa %}
+                        <option value="{{ categoria.id }}">{{ categoria.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="parceiro_descricao">Descrição da vantagem</label>
+                    <textarea class="form-control" id="parceiro_descricao" name="descricao_vantagem" rows="3"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="parceiro_cupom">Cupom</label>
+                    <input type="text" class="form-control" id="parceiro_cupom" name="cupom" maxlength="80">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="parceiro_logo">Logo</label>
+                    <input type="file" class="form-control" id="parceiro_logo" name="logo"
+                           accept="image/png,image/jpeg,image/webp">
+                    <div class="form-text">A imagem é enviada para a pasta de parceiros no Google Drive.</div>
+                </div>
+                <div>
+                    <label class="form-label">Condomínios atendidos</label>
+                    {% for cond in todos_condominios %}
+                    <div class="form-check">
+                        <input class="form-check-input cond-check" type="checkbox" name="condominios[]"
+                               value="{{ cond.id }}" id="cond-{{ cond.id }}">
+                        <label class="form-check-label" for="cond-{{ cond.id }}">{{ cond.nome }}</label>
+                    </div>
+                    {% else %}
+                    <p class="text-muted small mb-0">Nenhum condomínio ativo.</p>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-dark">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalCategoria" tabindex="-1" aria-labelledby="modalCategoriaLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="{{ url_for('superadmin_clube_categoria_salvar') }}" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalCategoriaLabel">Nova Categoria</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="categoria_id" id="categoria_id" value="">
+                <label class="form-label" for="categoria_nome">Nome</label>
+                <input type="text" class="form-control" id="categoria_nome" name="nome" required maxlength="50">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-dark">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var modalParceiro = document.getElementById("modalParceiro");
+    if (modalParceiro) {
+        document.getElementById("btn-novo-parceiro").addEventListener("click", function () {
+            document.getElementById("modalParceiroLabel").textContent = "Novo Parceiro";
+            document.getElementById("form-parceiro").reset();
+            document.getElementById("parceiro_id").value = "";
+            document.getElementById("parceiro_logo").value = "";
+        });
+        modalParceiro.addEventListener("show.bs.modal", function (event) {
+            var botao = event.relatedTarget;
+            if (!botao || !botao.classList.contains("btn-editar-parceiro")) {
+                return;
+            }
+            document.getElementById("modalParceiroLabel").textContent = "Editar Parceiro";
+            document.getElementById("parceiro_id").value = botao.getAttribute("data-id") || "";
+            document.getElementById("parceiro_nome").value = botao.getAttribute("data-nome") || "";
+            document.getElementById("parceiro_descricao").value = botao.getAttribute("data-descricao") || "";
+            document.getElementById("parceiro_cupom").value = botao.getAttribute("data-cupom") || "";
+            document.getElementById("parceiro_categoria").value = botao.getAttribute("data-categoria") || "";
+            document.getElementById("parceiro_logo").value = "";
+            var marcados = (botao.getAttribute("data-condominios") || "").split(",").filter(Boolean);
+            document.querySelectorAll(".cond-check").forEach(function (input) {
+                input.checked = marcados.indexOf(input.value) !== -1;
+            });
+        });
+    }
+
+    var modalCategoria = document.getElementById("modalCategoria");
+    if (modalCategoria) {
+        modalCategoria.addEventListener("show.bs.modal", function (event) {
+            var botao = event.relatedTarget;
+            var titulo = document.getElementById("modalCategoriaLabel");
+            var id = document.getElementById("categoria_id");
+            var nome = document.getElementById("categoria_nome");
+            if (botao && botao.classList.contains("btn-editar-categoria")) {
+                titulo.textContent = "Editar Categoria";
+                id.value = botao.getAttribute("data-id") || "";
+                nome.value = botao.getAttribute("data-nome") || "";
+            } else {
+                titulo.textContent = "Nova Categoria";
+                id.value = "";
+                nome.value = "";
+            }
+        });
+    }
+})();
+</script>
+{% endblock %}

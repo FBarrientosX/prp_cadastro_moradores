@@ -112,6 +112,8 @@ class Condominio(db.Model):
     cnpj = db.Column(db.String(18), nullable=True)
     # Soft delete: cliente inativo permanece no histórico (não hard delete).
     ativo = db.Column(db.Boolean, nullable=False, default=True)
+    # Chave M2M dos equipamentos de acesso (catraca, RFID, facial).
+    api_key = db.Column(db.String(64), unique=True, nullable=True)
     # Livro de serviço: campos opcionais de apoio e ronda na abertura do plantão.
     permitir_apoio = db.Column(db.Boolean, nullable=False, default=False)
     permitir_ronda = db.Column(db.Boolean, nullable=False, default=False)
@@ -121,6 +123,11 @@ class Condominio(db.Model):
         "ConfiguracaoCondominio",
         back_populates="condominio",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    credenciais_acesso = db.relationship(
+        "CredencialAcesso",
+        back_populates="condominio",
         cascade="all, delete-orphan",
     )
 
@@ -396,6 +403,36 @@ class Reserva(db.Model):
         return f"<Reserva {self.id} ({self.status})>"
 
 
+class CategoriaParceiro(db.Model):
+    """Categoria global do Clube de Vantagens (plataforma, sem condomínio)."""
+
+    __tablename__ = "categoria_parceiro"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(80), nullable=False, unique=True)
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    def __repr__(self):
+        return f"<CategoriaParceiro {self.nome}>"
+
+
+parceiro_condominio = db.Table(
+    "parceiro_condominio",
+    db.Column(
+        "parceiro_id",
+        db.Integer,
+        db.ForeignKey("parceiro.id"),
+        primary_key=True,
+    ),
+    db.Column(
+        "condominio_id",
+        db.Integer,
+        db.ForeignKey("condominio.id"),
+        primary_key=True,
+    ),
+)
+
+
 class Parceiro(db.Model):
     """Parceiro comercial — escopo GLOBAL (sem condominio_id)."""
 
@@ -408,9 +445,19 @@ class Parceiro(db.Model):
     senha_hash = db.Column(db.String(256), nullable=False)
     telefone = db.Column(db.String(20), nullable=True)
     categoria = db.Column(db.String(50), nullable=False)
+    categoria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("categoria_parceiro.id"),
+        nullable=True,
+        index=True,
+    )
     endereco = db.Column(db.String(255), nullable=True)
     descricao = db.Column(db.Text, nullable=True)
+    descricao_vantagem = db.Column(db.Text, nullable=True)
+    cupom = db.Column(db.String(80), nullable=True)
     logo_arquivo = db.Column(db.String(255), nullable=True)
+    logo_drive_id = db.Column(db.String(100), nullable=True)
+    logo_url = db.Column(db.String(500), nullable=True)
     link_instagram = db.Column(db.String(255), nullable=True)
     link_facebook = db.Column(db.String(255), nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
@@ -421,6 +468,16 @@ class Parceiro(db.Model):
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     cupons = db.relationship("Cupom", backref="parceiro", lazy=True)
+    categoria_ref = db.relationship("CategoriaParceiro", backref="parceiros")
+    condominios = db.relationship(
+        "Condominio",
+        secondary=parceiro_condominio,
+        backref=db.backref("parceiros_vinculados", lazy="dynamic"),
+    )
+
+    @property
+    def nome(self):
+        return self.nome_empresa
 
     def set_password(self, password):
         self.senha_hash = generate_password_hash(password)
@@ -507,9 +564,40 @@ class Pessoa(db.Model):
     )
 
     unidade = db.relationship("Unidade", back_populates="pessoas")
+    credenciais = db.relationship(
+        "CredencialAcesso",
+        back_populates="morador",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Pessoa {self.nome_completo}>"
+
+
+class CredencialAcesso(db.Model):
+    """Tag, biometria, controle ou cartão de um morador. Escopo do condomínio."""
+
+    __tablename__ = "credencial_acesso"
+
+    TIPOS = ("Tag RFID", "Biometria Facial", "Controle Remoto", "Cartão")
+
+    id = db.Column(db.Integer, primary_key=True)
+    tipo = db.Column(db.String(40), nullable=False)
+    codigo_identificador = db.Column(db.String(120), nullable=False, index=True)
+    morador_id = db.Column(
+        db.Integer, db.ForeignKey("pessoas.id"), nullable=False, index=True
+    )
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+    data_emissao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    morador = db.relationship("Pessoa", back_populates="credenciais")
+    condominio = db.relationship("Condominio", back_populates="credenciais_acesso")
+
+    def __repr__(self):
+        return f"<CredencialAcesso {self.tipo} {self.codigo_identificador}>"
 
 
 class Veiculo(db.Model):

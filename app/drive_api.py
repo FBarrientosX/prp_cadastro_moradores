@@ -137,6 +137,19 @@ def upload_file_stream(file_obj, filename=None, tenant_slug=None):
     return upload_to_drive(file_obj, filename=filename, tenant_slug=tenant_slug)
 
 
+def upload_logo_parceiro_drive(file_obj, filename=None):
+    """Envia o logo do parceiro para a pasta do Clube no Drive.
+
+    O nome da pasta vem de `UPLOAD_PARCEIROS_FOLDER` (ex.: `parceiros`),
+    criada dentro da pasta raiz do Drive.
+    """
+    from flask import current_app
+
+    pasta_local = current_app.config.get("UPLOAD_PARCEIROS_FOLDER") or "parceiros"
+    nome_pasta = os.path.basename(str(pasta_local).rstrip("\\/")) or "parceiros"
+    return upload_to_drive(file_obj, filename=filename, tenant_slug=nome_pasta)
+
+
 def delete_from_drive(file_id):
     """Remove um ficheiro do Drive. Falhas (ex.: já inexistente) não bloqueiam."""
     if not file_id:

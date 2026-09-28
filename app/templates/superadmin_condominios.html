@@ -356,6 +356,19 @@
                     <button type="submit" class="btn btn-primary">Salvar alterações</button>
                 </div>
             </form>
+            <div class="border-top px-3 py-3">
+                <label class="form-label" for="api_key_{{ condo.id }}">API Key do Condomínio</label>
+                <input type="text" class="form-control font-monospace" id="api_key_{{ condo.id }}"
+                       value="{{ condo.api_key or '' }}" readonly
+                       placeholder="Nenhuma chave gerada">
+                <form method="post" class="mt-2"
+                      action="{{ url_for('superadmin_condominio_api_key', condominio_id=condo.id) }}"
+                      onsubmit="return confirm('Gerar uma nova chave invalida a anterior nos equipamentos.');">
+                    <button type="submit" class="btn btn-outline-dark">
+                        Gerar/Regerar Chave
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 </div>
