@@ -170,12 +170,27 @@
                         {% endif %}
                     </div>
                     <div class="card-footer bg-white border-top-0 pt-0">
-                        <button type="button"
-                                class="btn btn-outline-primary w-100 py-2 btn-ver-cupons"
-                                data-parceiro-id="{{ parceiro.id }}"
-                                data-parceiro-nome="{{ parceiro.nome_empresa }}">
-                            Ver Cupons
-                        </button>
+                        {% set produtos_ativos = parceiro.produtos|selectattr('ativo', 'equalto', true)|list %}
+                        <div class="d-flex flex-column gap-2">
+                            <button type="button"
+                                    class="btn btn-outline-primary w-100 btn-ver-cupons"
+                                    data-parceiro-id="{{ parceiro.id }}"
+                                    data-parceiro-nome="{{ parceiro.nome_empresa }}">
+                                Ver Cupons
+                            </button>
+                            {% if produtos_ativos %}
+                            <button type="button" class="btn btn-success w-100"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalCatalogo-{{ parceiro.id }}">
+                                <i class="bi bi-bag"></i> Ver Catálogo
+                            </button>
+                            {% elif parceiro.link_catalogo_externo %}
+                            <a href="{{ parceiro.link_catalogo_externo }}" target="_blank"
+                               rel="noopener noreferrer" class="btn btn-success w-100">
+                                <i class="bi bi-shop"></i> Fazer Pedido
+                            </a>
+                            {% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -345,6 +360,63 @@
         </div>
     </div>
 </div>
+
+{% for parceiro in parceiros_visiveis %}
+{% set produtos_ativos = parceiro.produtos|selectattr('ativo', 'equalto', true)|list %}
+{% if produtos_ativos %}
+<div class="modal fade" id="modalCatalogo-{{ parceiro.id }}" tabindex="-1"
+     aria-labelledby="modalCatalogoLabel-{{ parceiro.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalCatalogoLabel-{{ parceiro.id }}">{{ parceiro.nome_empresa }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            {% set telefone_limpo = parceiro.telefone|replace(' ', '')|replace('(', '')|replace(')', '')|replace('-', '')|replace('.', '')|replace('+', '') if parceiro.telefone else '' %}
+            {% set numero_whatsapp = telefone_limpo if telefone_limpo.startswith('55') else ('55' ~ telefone_limpo) %}
+            {% set nome_condominio = condominio.nome if condominio else (unidade.condominio.nome if unidade.condominio else 'condomínio') %}
+            {% set texto_unidade = label_bloco ~ ' ' ~ unidade.bloco ~ ' - ' ~ label_apto ~ ' ' ~ unidade.apartamento %}
+            <div class="modal-body p-0">
+                <div class="list-group list-group-flush">
+                    {% for produto in produtos_ativos %}
+                    {% set mensagem = 'Olá! Sou morador do ' ~ nome_condominio ~ ' (' ~ texto_unidade ~ '). Gostaria de pedir o item do catálogo: *' ~ produto.nome ~ '* no valor de *R$ ' ~ ('%.2f'|format(produto.preco_com_desconto)) ~ '*.' %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                        <div class="me-auto pe-3">
+                            <h6 class="mb-1 fw-bold">{{ produto.nome }}</h6>
+                            {% if produto.descricao %}
+                            <p class="mb-1 small text-muted">{{ produto.descricao }}</p>
+                            {% endif %}
+                            <div>
+                                {% if produto.preco_original and produto.preco_original > 0 %}
+                                <del class="text-danger small">R$ {{ "%.2f"|format(produto.preco_original) }}</del>
+                                {% endif %}
+                                <strong class="text-success">R$ {{ "%.2f"|format(produto.preco_com_desconto) }}</strong>
+                            </div>
+                        </div>
+                        {% if telefone_limpo %}
+                        <a href="https://wa.me/{{ numero_whatsapp }}?text={{ mensagem|urlencode }}"
+                           target="_blank" rel="noopener noreferrer"
+                           class="btn btn-success btn-sm rounded-pill px-3 flex-shrink-0">
+                            <i class="bi bi-whatsapp"></i> Pedir
+                        </a>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% if parceiro.link_catalogo_externo %}
+            <div class="modal-footer">
+                <a href="{{ parceiro.link_catalogo_externo }}" target="_blank"
+                   rel="noopener noreferrer" class="btn btn-dark w-100">
+                    Ver Cardápio Completo
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
 {% endblock %}
 
 {% block scripts %}

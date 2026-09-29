@@ -340,6 +340,10 @@ def _garantir_colunas_parceiros():
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN logo_url VARCHAR(500)")
     if "categoria_id" not in colunas:
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN categoria_id INTEGER")
+    if "link_catalogo_externo" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN link_catalogo_externo VARCHAR(500)"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))

@@ -11,6 +11,7 @@ já espalhado pelos templates. Em vez disso, `register(app)` chama
 
 import traceback
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 
 from flask import flash, redirect, render_template, request, session, url_for
@@ -19,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 from app import db
 from app.email_service import enviar_email_redefinicao_senha
-from app.models import Cupom, Parceiro, ResgateCupom
+from app.models import Cupom, Parceiro, ProdutoParceiro, ResgateCupom
 from app.utils import (
     SALT_RECUPERACAO_PARCEIRO,
     gerar_token_redefinicao,
@@ -500,11 +501,167 @@ def parceiro_perfil_editar():
     parceiro.descricao = descricao
     parceiro.link_instagram = link_instagram
     parceiro.link_facebook = link_facebook
+    parceiro.link_catalogo_externo = _link_catalogo_externo(
+        request.form.get("link_catalogo_externo")
+    )
     if novo_logo:
         parceiro.logo_arquivo = novo_logo
     db.session.commit()
     flash("Perfil comercial atualizado com sucesso.", "success")
     return redirect(url_for("parceiro_perfil"))
+
+
+def _parceiro_pode_operar(parceiro, destino):
+    """Cupons e catálogo exigem parceiro ativo. Devolve redirect ou None."""
+    if not parceiro:
+        session.pop("parceiro_id", None)
+        flash("Sessão inválida. Faça login novamente.", "warning")
+        return redirect(url_for("parceiro_login"))
+    if parceiro.status == "Pendente":
+        flash("Ative seu cadastro para gerenciar o catálogo.", "warning")
+        return redirect(url_for("parceiro_dashboard"))
+    if parceiro.status != "Ativo":
+        flash("Seu acesso está indisponível no momento.", "danger")
+        return redirect(url_for(destino))
+    return None
+
+
+def _parse_preco(valor, obrigatorio=False):
+    texto = (valor or "").strip().replace("R$", "").replace(" ", "")
+    if not texto:
+        if obrigatorio:
+            return None, "Informe o preço atual."
+        return None, None
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        numero = Decimal(texto).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return None, "Preço inválido. Use apenas números."
+    if numero < 0:
+        return None, "O preço não pode ser negativo."
+    if numero > Decimal("99999999.99"):
+        return None, "Preço acima do limite permitido."
+    return numero, None
+
+
+def _link_catalogo_externo(valor):
+    texto = (valor or "").strip()
+    if not texto:
+        return None
+    if texto.lower().startswith(("javascript:", "data:", "vbscript:")):
+        return None
+    return texto[:500]
+
+
+def _texto_opcional(valor, limite):
+    texto = (valor or "").strip()
+    return texto[:limite] if texto else None
+
+
+@parceiro_required
+def parceiro_catalogo():
+    parceiro = _buscar_parceiro_logado()
+    bloqueio = _parceiro_pode_operar(parceiro, "parceiro_dashboard")
+    if bloqueio:
+        return bloqueio
+    produtos = (
+        ProdutoParceiro.query.filter_by(parceiro_id=parceiro.id)
+        .order_by(ProdutoParceiro.id.desc())
+        .all()
+    )
+    return render_template(
+        "parceiro/catalogo.html",
+        parceiro=parceiro,
+        produtos=produtos,
+    )
+
+
+@parceiro_required
+def parceiro_catalogo_salvar():
+    parceiro = _buscar_parceiro_logado()
+    bloqueio = _parceiro_pode_operar(parceiro, "parceiro_catalogo")
+    if bloqueio:
+        return bloqueio
+
+    nome = request.form.get("nome", "").strip()
+    descricao = _texto_opcional(request.form.get("descricao"), 255)
+    imagem_url = _link_catalogo_externo(request.form.get("imagem_url"))
+    preco_original, erro_original = _parse_preco(request.form.get("preco_original"))
+    preco_desconto, erro_desconto = _parse_preco(
+        request.form.get("preco_com_desconto"), obrigatorio=True
+    )
+    produto_id_bruto = request.form.get("produto_id", "").strip()
+    if produto_id_bruto:
+        try:
+            produto_id = int(produto_id_bruto)
+        except ValueError:
+            flash("Produto inválido.", "danger")
+            return redirect(url_for("parceiro_catalogo"))
+    else:
+        produto_id = None
+
+    if not nome:
+        flash("Informe o nome do produto ou serviço.", "danger")
+        return redirect(url_for("parceiro_catalogo"))
+    if len(nome) > 100:
+        flash("O nome deve ter no máximo 100 caracteres.", "danger")
+        return redirect(url_for("parceiro_catalogo"))
+    if erro_original or erro_desconto:
+        flash(erro_original or erro_desconto, "danger")
+        return redirect(url_for("parceiro_catalogo"))
+
+    if produto_id:
+        produto = ProdutoParceiro.query.filter_by(
+            id=produto_id, parceiro_id=parceiro.id
+        ).first_or_404()
+    else:
+        produto = ProdutoParceiro(parceiro_id=parceiro.id, ativo=True)
+        db.session.add(produto)
+
+    produto.nome = nome
+    produto.descricao = descricao
+    produto.preco_original = preco_original
+    produto.preco_com_desconto = preco_desconto
+    produto.imagem_url = imagem_url
+    db.session.commit()
+    flash("Produto salvo no catálogo.", "success")
+    return redirect(url_for("parceiro_catalogo"))
+
+
+@parceiro_required
+def parceiro_catalogo_alternar(produto_id):
+    parceiro = _buscar_parceiro_logado()
+    bloqueio = _parceiro_pode_operar(parceiro, "parceiro_catalogo")
+    if bloqueio:
+        return bloqueio
+
+    produto = ProdutoParceiro.query.filter_by(
+        id=produto_id, parceiro_id=parceiro.id
+    ).first_or_404()
+    produto.ativo = not produto.ativo
+    db.session.commit()
+    flash(
+        "Produto ativado na vitrine." if produto.ativo else "Produto ocultado da vitrine.",
+        "success",
+    )
+    return redirect(url_for("parceiro_catalogo"))
+
+
+@parceiro_required
+def parceiro_catalogo_excluir(produto_id):
+    parceiro = _buscar_parceiro_logado()
+    bloqueio = _parceiro_pode_operar(parceiro, "parceiro_catalogo")
+    if bloqueio:
+        return bloqueio
+
+    produto = ProdutoParceiro.query.filter_by(
+        id=produto_id, parceiro_id=parceiro.id
+    ).first_or_404()
+    db.session.delete(produto)
+    db.session.commit()
+    flash("Produto excluído do catálogo.", "warning")
+    return redirect(url_for("parceiro_catalogo"))
 
 
 def register(app):
@@ -585,5 +742,29 @@ def register(app):
         "/parceiro/cupons/<int:cupom_id>/desativar",
         "parceiro_cupons_desativar",
         parceiro_cupons_desativar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/catalogo",
+        "parceiro_catalogo",
+        parceiro_catalogo,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/parceiro/catalogo/salvar",
+        "parceiro_catalogo_salvar",
+        parceiro_catalogo_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/catalogo/<int:produto_id>/alternar",
+        "parceiro_catalogo_alternar",
+        parceiro_catalogo_alternar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/parceiro/catalogo/<int:produto_id>/excluir",
+        "parceiro_catalogo_excluir",
+        parceiro_catalogo_excluir,
         methods=["POST"],
     )

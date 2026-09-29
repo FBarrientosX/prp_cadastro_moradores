@@ -460,6 +460,7 @@ class Parceiro(db.Model):
     logo_url = db.Column(db.String(500), nullable=True)
     link_instagram = db.Column(db.String(255), nullable=True)
     link_facebook = db.Column(db.String(255), nullable=True)
+    link_catalogo_externo = db.Column(db.String(500), nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="Pendente")
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -468,6 +469,12 @@ class Parceiro(db.Model):
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     cupons = db.relationship("Cupom", backref="parceiro", lazy=True)
+    produtos = db.relationship(
+        "ProdutoParceiro",
+        backref="parceiro",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
     categoria_ref = db.relationship("CategoriaParceiro", backref="parceiros")
     condominios = db.relationship(
         "Condominio",
@@ -488,6 +495,26 @@ class Parceiro(db.Model):
 
     def __repr__(self):
         return f"<Parceiro {self.nome_empresa}>"
+
+
+class ProdutoParceiro(db.Model):
+    """Item do catálogo virtual do parceiro (produto ou serviço)."""
+
+    __tablename__ = "produto_parceiro"
+
+    id = db.Column(db.Integer, primary_key=True)
+    parceiro_id = db.Column(
+        db.Integer, db.ForeignKey("parceiro.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(100), nullable=False)
+    descricao = db.Column(db.String(255), nullable=True)
+    preco_original = db.Column(db.Numeric(10, 2), nullable=True)
+    preco_com_desconto = db.Column(db.Numeric(10, 2), nullable=False)
+    imagem_url = db.Column(db.String(500), nullable=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    def __repr__(self):
+        return f"<ProdutoParceiro {self.nome}>"
 
 
 class Cupom(db.Model):
