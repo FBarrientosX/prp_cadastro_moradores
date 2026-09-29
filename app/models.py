@@ -510,6 +510,7 @@ class ProdutoParceiro(db.Model):
     descricao = db.Column(db.String(255), nullable=True)
     preco_original = db.Column(db.Numeric(10, 2), nullable=True)
     preco_com_desconto = db.Column(db.Numeric(10, 2), nullable=False)
+    imagem_drive_id = db.Column(db.String(100), nullable=True)
     imagem_url = db.Column(db.String(500), nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
 

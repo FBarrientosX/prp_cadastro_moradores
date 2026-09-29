@@ -17,6 +17,7 @@ from functools import wraps
 from flask import flash, redirect, render_template, request, session, url_for
 from sqlalchemy import case, func
 from werkzeug.security import check_password_hash
+from werkzeug.utils import secure_filename
 
 from app import db
 from app.email_service import enviar_email_redefinicao_senha
@@ -554,6 +555,27 @@ def _link_catalogo_externo(valor):
     return texto[:500]
 
 
+def _erro_imagem_produto(arquivo):
+    """None se não houver arquivo ou se a imagem for aceita."""
+    if not arquivo or not arquivo.filename:
+        return None
+    nome = secure_filename(arquivo.filename)
+    if not nome or "." not in nome:
+        return "Envie a imagem em PNG, JPG, JPEG ou WEBP."
+    extensao = nome.rsplit(".", 1)[-1].lower()
+    if extensao not in {"png", "jpg", "jpeg", "webp"}:
+        return "Envie a imagem em PNG, JPG, JPEG ou WEBP."
+    stream = arquivo.stream
+    stream.seek(0, 2)
+    tamanho = stream.tell()
+    stream.seek(0)
+    if tamanho > 2 * 1024 * 1024:
+        return "A imagem do produto deve ter no máximo 2 MB."
+    if tamanho == 0:
+        return "O arquivo de imagem está vazio."
+    return None
+
+
 def _texto_opcional(valor, limite):
     texto = (valor or "").strip()
     return texto[:limite] if texto else None
@@ -586,7 +608,6 @@ def parceiro_catalogo_salvar():
 
     nome = request.form.get("nome", "").strip()
     descricao = _texto_opcional(request.form.get("descricao"), 255)
-    imagem_url = _link_catalogo_externo(request.form.get("imagem_url"))
     preco_original, erro_original = _parse_preco(request.form.get("preco_original"))
     preco_desconto, erro_desconto = _parse_preco(
         request.form.get("preco_com_desconto"), obrigatorio=True
@@ -611,6 +632,22 @@ def parceiro_catalogo_salvar():
         flash(erro_original or erro_desconto, "danger")
         return redirect(url_for("parceiro_catalogo"))
 
+    arquivo = request.files.get("imagem_produto")
+    erro_imagem = _erro_imagem_produto(arquivo)
+    if erro_imagem:
+        flash(erro_imagem, "danger")
+        return redirect(url_for("parceiro_catalogo"))
+
+    resultado_imagem = None
+    if arquivo and arquivo.filename:
+        from app.drive_api import upload_imagem_produto_drive
+
+        nome_arquivo = secure_filename(arquivo.filename) or "produto"
+        resultado_imagem = upload_imagem_produto_drive(arquivo, filename=nome_arquivo)
+        if not resultado_imagem or not resultado_imagem.get("id"):
+            flash("Não foi possível enviar a imagem para o Drive.", "danger")
+            return redirect(url_for("parceiro_catalogo"))
+
     if produto_id:
         produto = ProdutoParceiro.query.filter_by(
             id=produto_id, parceiro_id=parceiro.id
@@ -623,7 +660,9 @@ def parceiro_catalogo_salvar():
     produto.descricao = descricao
     produto.preco_original = preco_original
     produto.preco_com_desconto = preco_desconto
-    produto.imagem_url = imagem_url
+    if resultado_imagem:
+        produto.imagem_drive_id = resultado_imagem.get("id")
+        produto.imagem_url = resultado_imagem.get("webViewLink")
     db.session.commit()
     flash("Produto salvo no catálogo.", "success")
     return redirect(url_for("parceiro_catalogo"))

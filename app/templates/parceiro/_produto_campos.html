@@ -22,8 +22,13 @@
     </div>
 </div>
 <div class="mt-3">
-    <label class="form-label">URL da imagem</label>
-    <input type="text" class="form-control" name="imagem_url"
-           placeholder="Opcional — envio pelo Drive entra depois"
-           value="{{ produto.imagem_url if produto and produto.imagem_url else '' }}">
+    {% if produto and (produto.imagem_drive_id or produto.imagem_url) %}
+    <img alt="Imagem atual" class="rounded border mb-2"
+         style="width: 40px; height: 40px; object-fit: cover;"
+         src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
+    {% endif %}
+    <label class="form-label">Imagem do Produto (Opcional)</label>
+    <input type="file" class="form-control" name="imagem_produto"
+           accept="image/png, image/jpeg, image/webp">
+    <div class="form-text">Tamanho máximo: 2MB.</div>
 </div>

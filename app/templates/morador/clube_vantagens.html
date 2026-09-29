@@ -381,6 +381,12 @@
                     {% for produto in produtos_ativos %}
                     {% set mensagem = 'Olá! Sou morador do ' ~ nome_condominio ~ ' (' ~ texto_unidade ~ '). Gostaria de pedir o item do catálogo: *' ~ produto.nome ~ '* no valor de *R$ ' ~ ('%.2f'|format(produto.preco_com_desconto)) ~ '*.' %}
                     <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                        {% if produto.imagem_drive_id or produto.imagem_url %}
+                        <img src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}"
+                             class="rounded me-3 flex-shrink-0"
+                             style="width: 60px; height: 60px; object-fit: cover;"
+                             alt="{{ produto.nome }}">
+                        {% endif %}
                         <div class="me-auto pe-3">
                             <h6 class="mb-1 fw-bold">{{ produto.nome }}</h6>
                             {% if produto.descricao %}

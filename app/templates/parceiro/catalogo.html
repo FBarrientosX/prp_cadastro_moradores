@@ -32,9 +32,10 @@
                     <tr>
                         <td>
                             <div class="d-flex align-items-center gap-2">
-                                {% if produto.imagem_url %}
-                                <img src="{{ produto.imagem_url }}" alt="" class="rounded border"
-                                     style="width: 48px; height: 48px; object-fit: cover;">
+                                {% if produto.imagem_drive_id or produto.imagem_url %}
+                                <img alt="" class="rounded border"
+                                     style="width: 40px; height: 40px; object-fit: cover;"
+                                     src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
                                 {% endif %}
                                 <div>
                                     <div class="fw-semibold">{{ produto.nome }}</div>
@@ -95,7 +96,7 @@
 <div class="modal fade" id="modalNovoProduto" tabindex="-1" aria-labelledby="modalNovoProdutoLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
-            <form method="post" action="{{ url_for('parceiro_catalogo_salvar') }}">
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
                 <div class="modal-header">
                     <h2 class="modal-title h5" id="modalNovoProdutoLabel">Novo produto</h2>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
@@ -119,7 +120,7 @@
      aria-labelledby="modalEditarProdutoLabel{{ produto.id }}" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
-            <form method="post" action="{{ url_for('parceiro_catalogo_salvar') }}">
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
                 <input type="hidden" name="produto_id" value="{{ produto.id }}">
                 <div class="modal-header">
                     <h2 class="modal-title h5" id="modalEditarProdutoLabel{{ produto.id }}">Editar produto</h2>

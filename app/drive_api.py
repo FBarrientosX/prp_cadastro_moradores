@@ -150,6 +150,11 @@ def upload_logo_parceiro_drive(file_obj, filename=None):
     return upload_to_drive(file_obj, filename=filename, tenant_slug=nome_pasta)
 
 
+def upload_imagem_produto_drive(file_obj, filename=None):
+    """Envia a foto do produto para a pasta `produtos` do Clube no Drive."""
+    return upload_to_drive(file_obj, filename=filename, tenant_slug="produtos")
+
+
 def delete_from_drive(file_id):
     """Remove um ficheiro do Drive. Falhas (ex.: já inexistente) não bloqueiam."""
     if not file_id:
