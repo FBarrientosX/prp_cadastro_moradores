@@ -19,6 +19,7 @@ from flask import (
     url_for,
 )
 from sqlalchemy import and_, func, or_, text
+from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 
@@ -1275,7 +1276,10 @@ def clube_vantagens(unidade):
 def morador_clube_vantagens(unidade):
     """Vitrine do morador: parceiros globais ou vinculados ao condomínio dele."""
     candidatos = (
-        Parceiro.query.filter_by(ativo=True).order_by(Parceiro.nome_empresa).all()
+        Parceiro.query.options(selectinload(Parceiro.produtos))
+        .filter_by(ativo=True)
+        .order_by(Parceiro.nome_empresa)
+        .all()
     )
     parceiros_visiveis = []
     for parceiro in candidatos:

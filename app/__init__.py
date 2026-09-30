@@ -340,6 +340,10 @@ def _garantir_colunas_parceiros():
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN logo_url VARCHAR(500)")
     if "categoria_id" not in colunas:
         alteracoes.append("ALTER TABLE parceiro ADD COLUMN categoria_id INTEGER")
+    if "link_catalogo_externo" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE parceiro ADD COLUMN link_catalogo_externo VARCHAR(500)"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -357,6 +361,24 @@ def _garantir_colunas_parceiros():
                 WHERE status IS NULL OR status = 'Pendente'
                 """
             )
+        )
+        db.session.commit()
+
+
+def _garantir_colunas_produto_parceiro():
+    """Foto do produto no Drive, em catálogos já criados."""
+    inspetor = inspect(db.engine)
+    if "produto_parceiro" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("produto_parceiro")}
+    if "imagem_drive_id" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE produto_parceiro ADD COLUMN imagem_drive_id VARCHAR(100)")
+        )
+        db.session.commit()
+    if "imagem_url" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE produto_parceiro ADD COLUMN imagem_url VARCHAR(500)")
         )
         db.session.commit()
 
@@ -1049,6 +1071,7 @@ def create_app(config=None):
         _garantir_coluna_condominio_espacos_comuns()
         _garantir_coluna_ativo_espacos_comuns()
         _garantir_colunas_parceiros()
+        _garantir_colunas_produto_parceiro()
         _garantir_colunas_cupom()
         _garantir_tabela_agendamentos_mudanca()
         _garantir_colunas_registros_acesso()

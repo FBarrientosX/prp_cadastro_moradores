@@ -1,0 +1,34 @@
+<div class="mb-3">
+    <label class="form-label">Nome</label>
+    <input type="text" class="form-control" name="nome" maxlength="100" required
+           value="{{ produto.nome if produto else '' }}">
+</div>
+<div class="mb-3">
+    <label class="form-label">Descrição</label>
+    <input type="text" class="form-control" name="descricao" maxlength="255"
+           value="{{ produto.descricao if produto and produto.descricao else '' }}">
+</div>
+<div class="row g-3">
+    <div class="col-12 col-md-6">
+        <label class="form-label">Preço original</label>
+        <input type="text" class="form-control" name="preco_original" inputmode="decimal"
+               placeholder="Opcional"
+               value="{% if produto and produto.preco_original is not none %}{{ ('%.2f'|format(produto.preco_original|float)).replace('.', ',') }}{% endif %}">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Preço atual</label>
+        <input type="text" class="form-control" name="preco_com_desconto" inputmode="decimal" required
+               value="{% if produto and produto.preco_com_desconto is not none %}{{ ('%.2f'|format(produto.preco_com_desconto|float)).replace('.', ',') }}{% endif %}">
+    </div>
+</div>
+<div class="mt-3">
+    {% if produto and (produto.imagem_drive_id or produto.imagem_url) %}
+    <img alt="Imagem atual" class="rounded border mb-2"
+         style="width: 40px; height: 40px; object-fit: cover;"
+         src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
+    {% endif %}
+    <label class="form-label">Imagem do Produto (Opcional)</label>
+    <input type="file" class="form-control" name="imagem_produto"
+           accept="image/png, image/jpeg, image/webp">
+    <div class="form-text">Tamanho máximo: 2MB.</div>
+</div>

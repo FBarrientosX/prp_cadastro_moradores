@@ -1,0 +1,143 @@
+{% extends "parceiro_base.html" %}
+
+{% block title %}Meu Catálogo — Portal do Parceiro{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Meu Catálogo</h1>
+        <p class="text-muted mb-0">Produtos e serviços exibidos na vitrine do morador.</p>
+    </div>
+    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modalNovoProduto">
+        + Novo Produto
+    </button>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-3">
+        {% if produtos %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Produto</th>
+                        <th>Preço original</th>
+                        <th>Preço atual</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for produto in produtos %}
+                    <tr>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                {% if produto.imagem_drive_id or produto.imagem_url %}
+                                <img alt="" class="rounded border"
+                                     style="width: 40px; height: 40px; object-fit: cover;"
+                                     src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
+                                {% endif %}
+                                <div>
+                                    <div class="fw-semibold">{{ produto.nome }}</div>
+                                    {% if produto.descricao %}
+                                    <div class="small text-muted">{{ produto.descricao }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td>
+                            {% if produto.preco_original %}
+                            <s class="text-muted">R$ {{ ('%.2f'|format(produto.preco_original|float)).replace('.', ',') }}</s>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="fw-semibold">
+                            R$ {{ ('%.2f'|format(produto.preco_com_desconto|float)).replace('.', ',') }}
+                        </td>
+                        <td>
+                            {% if produto.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalEditarProduto{{ produto.id }}">
+                                Editar
+                            </button>
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('parceiro_catalogo_alternar', produto_id=produto.id) }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {% if produto.ativo %}Desativar{% else %}Ativar{% endif %}
+                                </button>
+                            </form>
+                            <form method="post" class="d-inline"
+                                  action="{{ url_for('parceiro_catalogo_excluir', produto_id=produto.id) }}"
+                                  onsubmit="return confirm('Excluir este produto do catálogo?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-0">
+            Nenhum produto cadastrado. Use <strong>+ Novo Produto</strong> para montar a vitrine.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="modalNovoProduto" tabindex="-1" aria-labelledby="modalNovoProdutoLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalNovoProdutoLabel">Novo produto</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    {% with produto=none %}
+                    {% include "parceiro/_produto_campos.html" %}
+                    {% endwith %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success">Salvar produto</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% for produto in produtos %}
+<div class="modal fade" id="modalEditarProduto{{ produto.id }}" tabindex="-1"
+     aria-labelledby="modalEditarProdutoLabel{{ produto.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
+                <input type="hidden" name="produto_id" value="{{ produto.id }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="modalEditarProdutoLabel{{ produto.id }}">Editar produto</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    {% with produto=produto %}
+                    {% include "parceiro/_produto_campos.html" %}
+                    {% endwith %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success">Salvar alterações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

@@ -76,11 +76,20 @@
                                value="{{ parceiro.link_instagram or '' }}"
                                placeholder="https://instagram.com/empresa">
                     </div>
-                    <div class="mb-4">
+                    <div class="mb-3">
                         <label for="link_facebook" class="form-label">Facebook</label>
                         <input type="text" class="form-control" id="link_facebook" name="link_facebook"
                                value="{{ parceiro.link_facebook or '' }}"
                                placeholder="https://facebook.com/empresa">
+                    </div>
+                    <div class="mb-4">
+                        <label for="link_catalogo_externo" class="form-label">
+                            Link do Cardápio / Catálogo Externo (ex: Goomer, iFood, WhatsApp)
+                        </label>
+                        <input type="text" class="form-control" id="link_catalogo_externo"
+                               name="link_catalogo_externo"
+                               value="{{ parceiro.link_catalogo_externo or '' }}"
+                               placeholder="https://">
                     </div>
                     <div class="d-flex justify-content-end">
                         <button type="submit" class="btn btn-success">
