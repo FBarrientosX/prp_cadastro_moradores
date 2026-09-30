@@ -22,13 +22,18 @@
     </div>
 </div>
 <div class="mt-3">
-    {% if produto and (produto.imagem_drive_id or produto.imagem_url) %}
-    <img alt="Imagem atual" class="rounded border mb-2"
-         style="width: 40px; height: 40px; object-fit: cover;"
-         src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
-    {% endif %}
     <label class="form-label">Imagem do Produto (Opcional)</label>
     <input type="file" class="form-control" name="imagem_produto"
            accept="image/png, image/jpeg, image/webp">
     <div class="form-text">Tamanho máximo: 2MB.</div>
+    <img class="preview-imagem-produto js-ampliar-imagem mt-2"
+         alt="Prévia da imagem"
+         title="Clique para ampliar"
+         {% if produto and (produto.imagem_drive_id or produto.imagem_url) %}
+         src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w800{% else %}{{ produto.imagem_url }}{% endif %}"
+         data-zoom="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w1600{% else %}{{ produto.imagem_url }}{% endif %}"
+         style="max-height: 140px; max-width: 100%; border-radius: 8px; cursor: pointer; display: block;"
+         {% else %}
+         style="max-height: 140px; max-width: 100%; border-radius: 8px; cursor: pointer; display: none;"
+         {% endif %}>
 </div>

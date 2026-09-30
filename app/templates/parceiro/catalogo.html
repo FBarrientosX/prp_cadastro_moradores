@@ -33,9 +33,11 @@
                         <td>
                             <div class="d-flex align-items-center gap-2">
                                 {% if produto.imagem_drive_id or produto.imagem_url %}
-                                <img alt="" class="rounded border"
-                                     style="width: 40px; height: 40px; object-fit: cover;"
-                                     src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}">
+                                <img alt="" class="rounded border js-ampliar-imagem"
+                                     title="Clique para ampliar"
+                                     style="width: 40px; height: 40px; object-fit: cover; cursor: pointer;"
+                                     src="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w200{% else %}{{ produto.imagem_url }}{% endif %}"
+                                     data-zoom="{% if produto.imagem_drive_id %}https://drive.google.com/thumbnail?id={{ produto.imagem_drive_id }}&sz=w1600{% else %}{{ produto.imagem_url }}{% endif %}">
                                 {% endif %}
                                 <div>
                                     <div class="fw-semibold">{{ produto.nome }}</div>
@@ -94,14 +96,14 @@
 </div>
 
 <div class="modal fade" id="modalNovoProduto" tabindex="-1" aria-labelledby="modalNovoProdutoLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
             <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
                 <div class="modal-header">
                     <h2 class="modal-title h5" id="modalNovoProdutoLabel">Novo produto</h2>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
-                <div class="modal-body">
+                <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                     {% with produto=none %}
                     {% include "parceiro/_produto_campos.html" %}
                     {% endwith %}
@@ -118,7 +120,7 @@
 {% for produto in produtos %}
 <div class="modal fade" id="modalEditarProduto{{ produto.id }}" tabindex="-1"
      aria-labelledby="modalEditarProdutoLabel{{ produto.id }}" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
             <form method="post" enctype="multipart/form-data" action="{{ url_for('parceiro_catalogo_salvar') }}">
                 <input type="hidden" name="produto_id" value="{{ produto.id }}">
@@ -126,7 +128,7 @@
                     <h2 class="modal-title h5" id="modalEditarProdutoLabel{{ produto.id }}">Editar produto</h2>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
-                <div class="modal-body">
+                <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                     {% with produto=produto %}
                     {% include "parceiro/_produto_campos.html" %}
                     {% endwith %}
@@ -140,4 +142,76 @@
     </div>
 </div>
 {% endfor %}
+
+<div id="lightboxProduto" role="dialog" aria-modal="true" aria-label="Imagem ampliada"
+     style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; display: none; align-items: center; justify-content: center;">
+    <button type="button" id="lightboxProdutoFechar" aria-label="Fechar"
+            style="position: absolute; top: 12px; right: 16px; border: 0; background: transparent; color: #fff; font-size: 2rem; line-height: 1; cursor: pointer;">×</button>
+    <img id="lightboxProdutoImg" alt=""
+         style="max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 8px;">
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var lightbox = document.getElementById("lightboxProduto");
+    var imagem = document.getElementById("lightboxProdutoImg");
+    var fecharBtn = document.getElementById("lightboxProdutoFechar");
+    if (!lightbox || !imagem) {
+        return;
+    }
+
+    function abrir(origem) {
+        var src = origem.getAttribute("data-zoom") || origem.getAttribute("src");
+        if (!src) {
+            return;
+        }
+        imagem.src = src;
+        lightbox.style.display = "flex";
+    }
+
+    function fechar() {
+        lightbox.style.display = "none";
+        imagem.removeAttribute("src");
+    }
+
+    document.querySelectorAll(".js-ampliar-imagem").forEach(function (miniatura) {
+        miniatura.addEventListener("click", function () {
+            abrir(miniatura);
+        });
+    });
+
+    lightbox.addEventListener("click", function (evento) {
+        if (evento.target === lightbox || evento.target === fecharBtn) {
+            fechar();
+        }
+    });
+
+    document.addEventListener("keydown", function (evento) {
+        if (evento.key === "Escape" && lightbox.style.display === "flex") {
+            evento.preventDefault();
+            evento.stopPropagation();
+            fechar();
+        }
+    }, true);
+
+    document.querySelectorAll('input[name="imagem_produto"]').forEach(function (input) {
+        input.addEventListener("change", function () {
+            var preview = input.form ? input.form.querySelector(".preview-imagem-produto") : null;
+            var arquivo = input.files && input.files[0];
+            if (!preview || !arquivo) {
+                return;
+            }
+            var leitor = new FileReader();
+            leitor.onload = function () {
+                preview.src = leitor.result;
+                preview.setAttribute("data-zoom", leitor.result);
+                preview.style.display = "block";
+            };
+            leitor.readAsDataURL(arquivo);
+        });
+    });
+})();
+</script>
 {% endblock %}
