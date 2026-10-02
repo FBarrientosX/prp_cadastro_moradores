@@ -7,6 +7,7 @@ import random
 import re
 import string
 import traceback
+from types import SimpleNamespace
 
 from flask import (
     current_app,
@@ -510,28 +511,53 @@ def _calcular_idade(data_nascimento):
     return idade
 
 
-def _parse_pessoas_form(form):
+_ALIASES_VINCULO_MORADOR = {
+    "proprietário": VinculoPessoa.PROPRIETARIO,
+    "proprietario": VinculoPessoa.PROPRIETARIO,
+    "inquilino": VinculoPessoa.LOCATARIO,
+    "locatário": VinculoPessoa.LOCATARIO,
+    "locatario": VinculoPessoa.LOCATARIO,
+    "familiar/morador": VinculoPessoa.MORADOR,
+    "familiar": VinculoPessoa.MORADOR,
+    "morador": VinculoPessoa.MORADOR,
+}
+
+
+def _canonicalizar_vinculo_morador(valor):
+    texto = (valor or "").strip()
+    if texto in VinculoPessoa.CHOICES:
+        return texto
+    return _ALIASES_VINCULO_MORADOR.get(texto.lower())
+
+
+def _parse_pessoas_form(form, prefixo="pessoa", aceitar_aliases_vinculo=False):
     pessoas = []
     indice = 0
     while True:
-        nome = form.get(f"pessoa_{indice}_nome", "").strip()
+        nome = form.get(f"{prefixo}_{indice}_nome", "").strip()
         if not nome:
             break
 
-        vinculo = form.get(f"pessoa_{indice}_vinculo", "").strip()
-        if vinculo not in VinculoPessoa.CHOICES:
+        vinculo_bruto = form.get(f"{prefixo}_{indice}_vinculo", "").strip()
+        if aceitar_aliases_vinculo:
+            vinculo = _canonicalizar_vinculo_morador(vinculo_bruto)
+        else:
+            vinculo = vinculo_bruto if vinculo_bruto in VinculoPessoa.CHOICES else None
+        if not vinculo:
             raise ValueError(f"Vínculo inválido para {nome}.")
 
-        data_nascimento = _parse_data(form.get(f"pessoa_{indice}_data_nascimento", ""))
+        data_nascimento = _parse_data(
+            form.get(f"{prefixo}_{indice}_data_nascimento", "")
+        )
         idade = _calcular_idade(data_nascimento) if data_nascimento else None
         is_menor = idade is not None and idade < 18
-        is_responsavel = form.get(f"pessoa_{indice}_is_responsavel") == "on"
+        is_responsavel = form.get(f"{prefixo}_{indice}_is_responsavel") == "on"
 
-        cpf = form.get(f"pessoa_{indice}_cpf", "").strip()
-        telefone = form.get(f"pessoa_{indice}_telefone", "").strip()
-        email = form.get(f"pessoa_{indice}_email", "").strip()
+        cpf = form.get(f"{prefixo}_{indice}_cpf", "").strip()
+        telefone = form.get(f"{prefixo}_{indice}_telefone", "").strip()
+        email = form.get(f"{prefixo}_{indice}_email", "").strip()
         autoriza_interfone_raw = (
-            form.get(f"pessoa_{indice}_autoriza_interfone", "").strip().lower()
+            form.get(f"{prefixo}_{indice}_autoriza_interfone", "").strip().lower()
         )
         autoriza_interfone = autoriza_interfone_raw == "true"
 
@@ -549,7 +575,7 @@ def _parse_pessoas_form(form):
                 )
 
         pessoa_id = None
-        pessoa_id_raw = form.get(f"pessoa_{indice}_id", "").strip()
+        pessoa_id_raw = form.get(f"{prefixo}_{indice}_id", "").strip()
         if pessoa_id_raw:
             try:
                 pessoa_id = int(pessoa_id_raw)
@@ -564,7 +590,7 @@ def _parse_pessoas_form(form):
                 "vinculo": vinculo,
                 "telefone": telefone or "",
                 "email": email or None,
-                "parentesco": form.get(f"pessoa_{indice}_parentesco", "").strip()
+                "parentesco": form.get(f"{prefixo}_{indice}_parentesco", "").strip()
                 or None,
                 "data_nascimento": data_nascimento,
                 "is_responsavel": is_responsavel,
@@ -580,6 +606,366 @@ def _parse_pessoas_form(form):
         raise ValueError("Marque ao menos uma pessoa como responsável.")
 
     return pessoas
+
+
+def _parse_moradores_form(form):
+    return _parse_pessoas_form(
+        form, prefixo="morador", aceitar_aliases_vinculo=True
+    )
+
+
+def _parse_proprietarios_lista_form(form):
+    """Donos legais enviados pelo formulário novo (proprietario_0_nome, ...)."""
+    proprietarios = []
+    indice = 0
+    while True:
+        nome = form.get(f"proprietario_{indice}_nome", "").strip()
+        if not nome:
+            break
+
+        cpf = form.get(f"proprietario_{indice}_cpf", "").strip()
+        if not _somente_digitos(cpf):
+            raise ValueError(f"CPF é obrigatório para o proprietário {nome}.")
+
+        pessoa_id = None
+        pessoa_id_raw = form.get(f"proprietario_{indice}_id", "").strip()
+        if pessoa_id_raw:
+            try:
+                pessoa_id = int(pessoa_id_raw)
+            except ValueError:
+                raise ValueError(f"Identificador inválido para o proprietário {nome}.")
+
+        email = form.get(f"proprietario_{indice}_email", "").strip()
+        proprietarios.append(
+            {
+                "id": pessoa_id,
+                "nome_completo": nome,
+                "cpf": cpf,
+                "telefone": form.get(f"proprietario_{indice}_telefone", "").strip(),
+                "email": email or None,
+                "data_nascimento": _parse_data(
+                    form.get(f"proprietario_{indice}_data_nascimento", "")
+                ),
+            }
+        )
+        indice += 1
+
+    return proprietarios
+
+
+_RE_LISTAS_SEPARADAS = re.compile(r"^(proprietario|morador)_\d+_nome$")
+
+
+def _formulario_usa_listas_separadas(form):
+    return any(_RE_LISTAS_SEPARADAS.match(chave) for chave in form.keys())
+
+
+def _preencher_dados_basicos(destino, origem):
+    for campo in ("nome_completo", "telefone", "email", "data_nascimento"):
+        valor = origem.get(campo)
+        if valor not in (None, ""):
+            destino[campo] = valor
+
+
+def _sincronizar_dados_basicos_por_cpf(proprietarios, moradores):
+    """
+    Quando o mesmo CPF está nas duas listas da unidade, nome, telefone,
+    e-mail e data de nascimento ficam iguais nos dois lados.
+    O lado do morador prevalece se os dois trouxerem valor.
+    """
+    por_cpf = {}
+    for item in proprietarios:
+        cpf = _somente_digitos(item.get("cpf"))
+        if not cpf:
+            continue
+        por_cpf.setdefault(cpf, {"proprietarios": [], "moradores": []})
+        por_cpf[cpf]["proprietarios"].append(item)
+    for item in moradores:
+        cpf = _somente_digitos(item.get("cpf"))
+        if not cpf:
+            continue
+        por_cpf.setdefault(cpf, {"proprietarios": [], "moradores": []})
+        por_cpf[cpf]["moradores"].append(item)
+
+    for grupos in por_cpf.values():
+        if not grupos["proprietarios"] or not grupos["moradores"]:
+            continue
+        base = {
+            "nome_completo": "",
+            "telefone": "",
+            "email": None,
+            "data_nascimento": None,
+        }
+        for item in grupos["proprietarios"]:
+            _preencher_dados_basicos(base, item)
+        for item in grupos["moradores"]:
+            _preencher_dados_basicos(base, item)
+        for item in grupos["proprietarios"] + grupos["moradores"]:
+            item["nome_completo"] = base["nome_completo"]
+            item["telefone"] = base["telefone"] or ""
+            item["email"] = base["email"]
+            item["data_nascimento"] = base["data_nascimento"]
+
+
+def _unir_proprietarios_e_moradores(proprietarios, moradores):
+    """Uma linha de Pessoa por CPF, com as flags dos papéis preenchidos."""
+    _sincronizar_dados_basicos_por_cpf(proprietarios, moradores)
+    pessoas = []
+    indice_por_cpf = {}
+
+    for morador in moradores:
+        item = {
+            "id": morador.get("id"),
+            "nome_completo": morador["nome_completo"],
+            "cpf": morador.get("cpf") or "",
+            "vinculo": morador["vinculo"],
+            "telefone": morador.get("telefone") or "",
+            "email": morador.get("email"),
+            "parentesco": morador.get("parentesco"),
+            "data_nascimento": morador.get("data_nascimento"),
+            "is_responsavel": bool(morador.get("is_responsavel")),
+            "autoriza_interfone": bool(morador.get("autoriza_interfone")),
+            "eh_proprietario": False,
+            "eh_morador": True,
+        }
+        pessoas.append(item)
+        cpf = _somente_digitos(item["cpf"])
+        if cpf:
+            indice_por_cpf[cpf] = len(pessoas) - 1
+
+    cpfs_somente_dono = set()
+    for proprietario in proprietarios:
+        cpf = _somente_digitos(proprietario.get("cpf"))
+        if cpf and cpf in indice_por_cpf:
+            pessoas[indice_por_cpf[cpf]]["eh_proprietario"] = True
+            continue
+        if cpf and cpf in cpfs_somente_dono:
+            continue
+        if cpf:
+            cpfs_somente_dono.add(cpf)
+        pessoas.append(
+            {
+                "id": proprietario.get("id"),
+                "nome_completo": proprietario["nome_completo"],
+                "cpf": proprietario.get("cpf") or "",
+                "vinculo": VinculoPessoa.PROPRIETARIO,
+                "telefone": proprietario.get("telefone") or "",
+                "email": proprietario.get("email"),
+                "parentesco": None,
+                "data_nascimento": proprietario.get("data_nascimento"),
+                "is_responsavel": False,
+                "autoriza_interfone": False,
+                "eh_proprietario": True,
+                "eh_morador": False,
+            }
+        )
+    return pessoas
+
+
+def _aplicar_papeis_formulario_legado(pessoas_data, unidade=None):
+    """
+    Formulário atual: vínculo Proprietário ocupa e também é dono.
+    Quem já é dono com outro vínculo (as duas listas) permanece dono.
+    """
+    atuais_por_id = {}
+    if unidade is not None:
+        atuais_por_id = {pessoa.id: pessoa for pessoa in unidade.pessoas.all()}
+    for pessoa in pessoas_data:
+        pessoa["eh_morador"] = True
+        if pessoa.get("vinculo") == VinculoPessoa.PROPRIETARIO:
+            pessoa["eh_proprietario"] = True
+            continue
+        atual = atuais_por_id.get(pessoa.get("id"))
+        pessoa["eh_proprietario"] = bool(
+            atual
+            and atual.eh_proprietario
+            and atual.vinculo != VinculoPessoa.PROPRIETARIO
+        )
+
+
+def _pessoa_somente_proprietario(pessoa):
+    return bool(pessoa.eh_proprietario) and not bool(pessoa.eh_morador)
+
+
+def _dados_pessoa_persistida(pessoa):
+    return {
+        "id": pessoa.id,
+        "nome_completo": pessoa.nome_completo,
+        "cpf": pessoa.cpf or "",
+        "vinculo": pessoa.vinculo,
+        "telefone": pessoa.telefone or "",
+        "email": pessoa.email,
+        "parentesco": pessoa.parentesco,
+        "data_nascimento": pessoa.data_nascimento,
+        "is_responsavel": bool(pessoa.is_responsavel),
+        "autoriza_interfone": bool(pessoa.autoriza_interfone),
+        "eh_proprietario": bool(pessoa.eh_proprietario),
+        "eh_morador": bool(pessoa.eh_morador),
+    }
+
+
+def _anexar_proprietarios_nao_ocupantes(unidade, pessoas_data):
+    """O formulário atual não lista donos que não moram; o save não pode apagá-los."""
+    ids = {pessoa.get("id") for pessoa in pessoas_data if pessoa.get("id")}
+    cpfs = {
+        _somente_digitos(pessoa.get("cpf"))
+        for pessoa in pessoas_data
+        if _somente_digitos(pessoa.get("cpf"))
+    }
+    for pessoa in unidade.pessoas.all():
+        if not _pessoa_somente_proprietario(pessoa):
+            continue
+        cpf = _somente_digitos(pessoa.cpf)
+        if pessoa.id in ids or (cpf and cpf in cpfs):
+            continue
+        pessoas_data.append(_dados_pessoa_persistida(pessoa))
+    return pessoas_data
+
+
+def _legado_proprietario_desde_listas(proprietarios, moradores):
+    cpfs_moradores = {
+        _somente_digitos(morador.get("cpf"))
+        for morador in moradores
+        if _somente_digitos(morador.get("cpf"))
+    }
+    externos = [
+        item
+        for item in proprietarios
+        if _somente_digitos(item.get("cpf")) not in cpfs_moradores
+    ]
+    escolhido = (externos or proprietarios or [None])[0]
+    if not escolhido:
+        return {
+            "proprietario_nome": None,
+            "proprietario_telefone": None,
+            "proprietario_email": None,
+            "proprietario_cpf": None,
+        }
+    return {
+        "proprietario_nome": escolhido.get("nome_completo"),
+        "proprietario_telefone": escolhido.get("telefone"),
+        "proprietario_email": escolhido.get("email"),
+        "proprietario_cpf": escolhido.get("cpf"),
+    }
+
+
+def _registro_autocomplete(nome, cpf, telefone, email, data_nascimento, origem):
+    if isinstance(data_nascimento, date):
+        nascimento = data_nascimento.isoformat()
+    else:
+        nascimento = (data_nascimento or "") if data_nascimento else ""
+    return {
+        "nome": nome or "",
+        "cpf": cpf or "",
+        "telefone": telefone or "",
+        "email": email or "",
+        "data_nascimento": nascimento,
+        "origem": origem,
+    }
+
+
+def _listas_proprietarios_moradores(unidade):
+    pessoas = unidade.pessoas.order_by(Pessoa.id).all()
+    moradores = [
+        pessoa
+        for pessoa in pessoas
+        if pessoa.eh_morador or not pessoa.eh_proprietario
+    ]
+    proprietarios = [pessoa for pessoa in pessoas if pessoa.eh_proprietario]
+    cpf_legado = _somente_digitos(unidade.proprietario_cpf)
+    nome_legado = (unidade.proprietario_nome or "").strip()
+    if nome_legado or cpf_legado:
+        ja_listado = False
+        for pessoa in proprietarios:
+            mesmo_cpf = cpf_legado and _somente_digitos(pessoa.cpf) == cpf_legado
+            mesmo_nome = (
+                not cpf_legado
+                and _normalizar_texto_comparacao(pessoa.nome_completo)
+                == _normalizar_texto_comparacao(nome_legado)
+            )
+            if mesmo_cpf or mesmo_nome:
+                ja_listado = True
+                break
+        if not ja_listado:
+            proprietarios.append(
+                SimpleNamespace(
+                    id=None,
+                    nome_completo=nome_legado,
+                    cpf=unidade.proprietario_cpf or "",
+                    telefone=unidade.proprietario_telefone or "",
+                    email=unidade.proprietario_email,
+                    data_nascimento=None,
+                    vinculo=VinculoPessoa.PROPRIETARIO,
+                    parentesco=None,
+                    is_responsavel=False,
+                    autoriza_interfone=False,
+                    eh_proprietario=True,
+                    eh_morador=False,
+                )
+            )
+    return proprietarios, moradores
+
+
+def _sugestoes_pessoas_unidade(unidade, termo):
+    termo_limpo = (termo or "").strip()
+    termo_nome = termo_limpo.casefold()
+    digitos = _somente_digitos(termo_limpo)
+    vistos = set()
+    sugestoes = []
+
+    def _incluir(nome, cpf, telefone, email, nascimento, origem):
+        cpf_digitos = _somente_digitos(cpf)
+        chave = f"cpf:{cpf_digitos}" if cpf_digitos else f"nome:{_normalizar_texto_comparacao(nome)}"
+        if not chave.strip(":") or chave in vistos:
+            return
+        if termo_limpo:
+            nome_ok = termo_nome in (nome or "").casefold()
+            cpf_ok = bool(digitos) and digitos in cpf_digitos
+            if not nome_ok and not cpf_ok:
+                return
+        vistos.add(chave)
+        sugestoes.append(
+            _registro_autocomplete(nome, cpf, telefone, email, nascimento, origem)
+        )
+
+    for pessoa in unidade.pessoas.order_by(Pessoa.nome_completo).all():
+        if pessoa.eh_proprietario:
+            origem = "Proprietário"
+        elif pessoa.eh_morador or not pessoa.eh_proprietario:
+            origem = "Morador"
+        else:
+            continue
+        _incluir(
+            pessoa.nome_completo,
+            pessoa.cpf,
+            pessoa.telefone,
+            pessoa.email,
+            pessoa.data_nascimento,
+            origem,
+        )
+
+    if unidade.proprietario_nome or unidade.proprietario_cpf:
+        _incluir(
+            unidade.proprietario_nome,
+            unidade.proprietario_cpf,
+            unidade.proprietario_telefone,
+            unidade.proprietario_email,
+            None,
+            "Proprietário",
+        )
+
+    cpfs_donos = {
+        _somente_digitos(pessoa.cpf)
+        for pessoa in unidade.pessoas.all()
+        if pessoa.eh_proprietario and _somente_digitos(pessoa.cpf)
+    }
+    cpf_legado = _somente_digitos(unidade.proprietario_cpf)
+    if cpf_legado:
+        cpfs_donos.add(cpf_legado)
+    for item in sugestoes:
+        if _somente_digitos(item["cpf"]) in cpfs_donos:
+            item["origem"] = "Proprietário"
+    return sugestoes
 
 
 def _parse_veiculos_form(form):
@@ -665,8 +1051,9 @@ def _encontrar_par_pessoa_morador(pessoa_atual, candidatos):
     return None
 
 
-def _houve_add_remove_pessoas(unidade, pessoas_data):
-    pessoas_atuais = unidade.pessoas.all()
+def _houve_add_remove_pessoas(unidade, pessoas_data, pessoas_atuais=None):
+    if pessoas_atuais is None:
+        pessoas_atuais = unidade.pessoas.all()
     ids_informados = {p["id"] for p in pessoas_data if p.get("id") is not None}
 
     if ids_informados:
@@ -726,8 +1113,12 @@ def _houve_mudanca_proprietario_ou_responsavel(unidade, pessoas_data, dados_prop
     return False
 
 
-def _requer_nova_aprovacao_sindico(unidade, pessoas_data, veiculos_data, dados_proprietario):
-    if _houve_add_remove_pessoas(unidade, pessoas_data):
+def _requer_nova_aprovacao_sindico(
+    unidade, pessoas_data, veiculos_data, dados_proprietario, pessoas_atuais=None
+):
+    if _houve_add_remove_pessoas(
+        unidade, pessoas_data, pessoas_atuais=pessoas_atuais
+    ):
         return True
     if _houve_add_remove_veiculos(unidade, veiculos_data):
         return True
@@ -824,6 +1215,12 @@ def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data, *, modo_atual
 
         for dados in pessoas_data:
             campos_pessoa = {k: v for k, v in dados.items() if k != "id"}
+            if "eh_morador" not in campos_pessoa:
+                campos_pessoa["eh_morador"] = True
+            if "eh_proprietario" not in campos_pessoa:
+                campos_pessoa["eh_proprietario"] = (
+                    campos_pessoa.get("vinculo") == VinculoPessoa.PROPRIETARIO
+                )
             pessoa_id = dados.get("id")
             if modo_atualizacao and pessoa_id and pessoa_id in status_por_id:
                 campos_pessoa["status"] = status_por_id[pessoa_id]
@@ -982,7 +1379,7 @@ def verificar_unidade(slug):
         )
 
     login_unidade(unidade)
-    return redirect(url_for("atualizar_dados"))
+    return redirect(url_for("morador_inicio"))
 
 
 def status_unidade(slug):
@@ -1143,13 +1540,92 @@ def cadastro_inicial(slug):
 
 
 @unidade_required
+def morador_inicio(unidade):
+    """Painel do dia a dia do morador."""
+    configuracao = (
+        unidade.condominio.configuracao if unidade.condominio else None
+    )
+    label_bloco = (
+        configuracao.label_agrupamento
+        if configuracao and configuracao.label_agrupamento
+        else "Bloco"
+    )
+    label_apto = (
+        configuracao.label_unidade
+        if configuracao and configuracao.label_unidade
+        else "Apto"
+    )
+    responsavel = (
+        unidade.pessoas.filter_by(is_responsavel=True).first()
+        or unidade.pessoas.first()
+    )
+    docs_incompletos = unidade.documento_status in (
+        StatusDocumento.PENDENTE,
+        StatusDocumento.NAO_ENVIADO,
+        StatusDocumento.REJEITADO,
+    )
+    contrato_incompleto = unidade.contrato_locacao_status in (
+        StatusDocumento.PENDENTE,
+        StatusDocumento.NAO_ENVIADO,
+        StatusDocumento.REJEITADO,
+    )
+    cadastro_pendente = (
+        unidade.status == StatusUnidade.PENDENTE
+        or unidade.atualizacao_pendente
+        or docs_incompletos
+        or contrato_incompleto
+    )
+    if unidade.documento_status == StatusDocumento.REJEITADO or (
+        unidade.contrato_locacao_status == StatusDocumento.REJEITADO
+    ):
+        alerta_cadastro = (
+            "A documentação do seu cadastro foi recusada. "
+            "Envie os arquivos novamente para concluir a análise."
+        )
+    elif unidade.atualizacao_pendente:
+        alerta_cadastro = (
+            "Seus dados atualizados estão aguardando a aprovação do síndico."
+        )
+    else:
+        alerta_cadastro = (
+            "Seu cadastro ainda tem informações ou documentos pendentes."
+        )
+    encomendas_aguardando = 0
+    if unidade.condominio_id:
+        encomendas_aguardando = Encomenda.query.filter_by(
+            unidade_id=unidade.id,
+            condominio_id=unidade.condominio_id,
+            status=StatusEncomenda.PENDENTE,
+        ).count()
+
+    return render_template(
+        "morador/inicio.html",
+        unidade=unidade,
+        responsavel=responsavel,
+        label_bloco=label_bloco,
+        label_apto=label_apto,
+        cadastro_pendente=cadastro_pendente,
+        alerta_cadastro=alerta_cadastro,
+        encomendas_aguardando=encomendas_aguardando,
+    )
+
+
+@unidade_required
 def atualizar_dados(unidade):
     if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
         flash("Esta unidade não pode ser atualizada no momento.", "warning")
         return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
 
-    pessoas = unidade.pessoas.all()
+    if request.method == "POST":
+        return salvar_cadastro()
+
+    pessoas = [
+        pessoa
+        for pessoa in unidade.pessoas.all()
+        if not _pessoa_somente_proprietario(pessoa)
+    ]
     veiculos = unidade.veiculos.all()
+    proprietarios, moradores = _listas_proprietarios_moradores(unidade)
 
     return render_template(
         "cadastro_morador.html",
@@ -1158,10 +1634,18 @@ def atualizar_dados(unidade):
         modo="atualizacao",
         vinculos=VinculoPessoa.CHOICES,
         pessoas=pessoas,
+        proprietarios=proprietarios,
+        moradores=moradores,
         veiculos=veiculos,
         unidade=unidade,
         slug=_slug_sessao_ou_prp(),
     )
+
+
+@unidade_required
+def api_unidade_pessoas_autocomplete(unidade):
+    termo = request.args.get("q", "")
+    return jsonify(_sugestoes_pessoas_unidade(unidade, termo))
 
 
 def _contagem_resgates_por_cupom(cupom_ids):
@@ -2065,14 +2549,29 @@ def salvar_cadastro():
     confirmar_senha = request.form.get("confirmar_senha", "").strip()
 
     try:
-        pessoas_data = _parse_pessoas_form(request.form)
+        listas_separadas = _formulario_usa_listas_separadas(request.form)
+        proprietarios_lista = []
+        moradores_lista = []
+        if listas_separadas:
+            proprietarios_lista = _parse_proprietarios_lista_form(request.form)
+            moradores_lista = _parse_moradores_form(request.form)
+            pessoas_data = _unir_proprietarios_e_moradores(
+                proprietarios_lista, moradores_lista
+            )
+        else:
+            pessoas_data = _parse_pessoas_form(request.form)
         veiculos_data = _parse_veiculos_form(request.form)
 
         if modo_atualizacao:
             if unidade.status not in (StatusUnidade.APROVADA, StatusUnidade.REGISTRADA):
                 raise ValueError("Esta unidade não pode ser atualizada.")
 
-            _validar_ids_pessoas_unidade(unidade, pessoas_data)
+            if listas_separadas:
+                _validar_ids_pessoas_unidade(
+                    unidade, proprietarios_lista + moradores_lista
+                )
+            else:
+                _validar_ids_pessoas_unidade(unidade, pessoas_data)
 
             if senha:
                 if senha != confirmar_senha:
@@ -2100,12 +2599,35 @@ def salvar_cadastro():
             db.session.add(unidade)
             db.session.flush()
 
-        dados_proprietario = _parse_proprietario_form(request.form)
+        if not listas_separadas:
+            _aplicar_papeis_formulario_legado(
+                pessoas_data, unidade if modo_atualizacao else None
+            )
+
+        if listas_separadas:
+            dados_proprietario = _legado_proprietario_desde_listas(
+                proprietarios_lista, moradores_lista
+            )
+        else:
+            dados_proprietario = _parse_proprietario_form(request.form)
         requer_nova_aprovacao = False
         if modo_atualizacao:
+            pessoas_atuais_diff = None
+            if not listas_separadas:
+                pessoas_atuais_diff = [
+                    pessoa
+                    for pessoa in unidade.pessoas.all()
+                    if not _pessoa_somente_proprietario(pessoa)
+                ]
             requer_nova_aprovacao = _requer_nova_aprovacao_sindico(
-                unidade, pessoas_data, veiculos_data, dados_proprietario
+                unidade,
+                pessoas_data,
+                veiculos_data,
+                dados_proprietario,
+                pessoas_atuais=pessoas_atuais_diff,
             )
+            if not listas_separadas:
+                _anexar_proprietarios_nao_ocupantes(unidade, pessoas_data)
 
         _salvar_pessoas_veiculos(
             unidade,
@@ -2171,7 +2693,9 @@ def salvar_cadastro():
             unidade.proprietario_nome = dados_proprietario["proprietario_nome"]
             unidade.proprietario_telefone = dados_proprietario["proprietario_telefone"]
             unidade.proprietario_email = dados_proprietario["proprietario_email"]
-            if not modo_atualizacao:
+            if listas_separadas:
+                unidade.proprietario_cpf = dados_proprietario.get("proprietario_cpf")
+            elif not modo_atualizacao:
                 unidade.proprietario_cpf = None
 
             arquivo_contrato = request.files.get("contrato_locacao")
@@ -2735,8 +3259,18 @@ def init_app(app):
         redefinir_senha,
         methods=["GET", "POST"],
     )
+    app.add_url_rule("/inicio", "morador_inicio", morador_inicio, methods=["GET"])
     app.add_url_rule(
-        "/atualizar-dados", "atualizar_dados", atualizar_dados, methods=["GET"]
+        "/atualizar-dados",
+        "atualizar_dados",
+        atualizar_dados,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/api/unidade/pessoas-autocomplete",
+        "api_unidade_pessoas_autocomplete",
+        api_unidade_pessoas_autocomplete,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/clube-vantagens",

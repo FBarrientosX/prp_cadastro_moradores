@@ -587,6 +587,11 @@ class Pessoa(db.Model):
     data_nascimento = db.Column(db.Date, nullable=True)
     is_responsavel = db.Column(db.Boolean, nullable=False, default=False)
     autoriza_interfone = db.Column(db.Boolean, nullable=False, default=False)
+    # A mesma pessoa pode ser dona legal e ocupante. Quem já estava
+    # cadastrado como ocupante permanece morador; vínculo Proprietário
+    # também liga a flag de dono na migração de boot.
+    eh_proprietario = db.Column(db.Boolean, nullable=False, default=False)
+    eh_morador = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(
         db.String(20), nullable=False, default=StatusPessoa.PENDENTE
     )

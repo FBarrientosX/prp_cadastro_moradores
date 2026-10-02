@@ -122,10 +122,35 @@ def _garantir_colunas_pessoas():
             "VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
         )
         adicionou_status = True
+    adicionou_eh_proprietario = "eh_proprietario" not in colunas
+    if adicionou_eh_proprietario:
+        alteracoes.append(
+            "ALTER TABLE pessoas ADD COLUMN eh_proprietario "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    adicionou_eh_morador = "eh_morador" not in colunas
+    if adicionou_eh_morador:
+        alteracoes.append(
+            "ALTER TABLE pessoas ADD COLUMN eh_morador BOOLEAN NOT NULL DEFAULT 1"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
+        db.session.commit()
+
+    if adicionou_eh_proprietario:
+        # Quem já ocupava o imóvel com vínculo de dono continua morador
+        # e passa a ser reconhecido também como proprietário.
+        db.session.execute(
+            text(
+                """
+                UPDATE pessoas
+                SET eh_proprietario = 1
+                WHERE vinculo = 'Proprietário'
+                """
+            )
+        )
         db.session.commit()
 
     if adicionou_status:
