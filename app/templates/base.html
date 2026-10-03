@@ -26,6 +26,12 @@
             border-radius: 0.375rem;
         }
 
+        .nav-interfone {
+            background: rgba(37, 211, 102, 0.2);
+            border: 1px solid rgba(37, 211, 102, 0.55);
+            font-weight: 600;
+        }
+
         .brand-logo {
             max-height: 40px;
             width: auto;
@@ -168,6 +174,9 @@
                     <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
                 </a>
             {% elif sidebar_user and sidebar_user.role == 'sindico' %}
+                <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                    <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
+                </a>
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
                     <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
                 </a>
@@ -184,6 +193,9 @@
                     {% endif %}
                 </a>
             {% elif sidebar_user and sidebar_user.role == 'porteiro' %}
+                <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                    <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
+                </a>
                 <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_dashboard' %}active{% endif %}" href="{{ url_for('portaria_dashboard') }}">
                     <i class="bi bi-shield-check me-2"></i>Painel da Portaria
                 </a>
@@ -209,6 +221,9 @@
                 </a>
                 <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('admin_index') }}#equipe">
                     <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                </a>
+                <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                    <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
                 </a>
                 <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
                     <i class="bi bi-shield-check me-2"></i>Portaria
@@ -302,6 +317,9 @@
                         <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
                     </a>
                 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
+                    <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                        <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
+                    </a>
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
                         <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
                     </a>
@@ -318,6 +336,9 @@
                         {% endif %}
                     </a>
                 {% elif sidebar_user and sidebar_user.role == 'porteiro' %}
+                    <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                        <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
+                    </a>
                     <a class="nav-link text-white d-flex align-items-center {% if request.endpoint == 'portaria_dashboard' %}active{% endif %}" href="{{ url_for('portaria_dashboard') }}">
                         <i class="bi bi-shield-check me-2"></i>Painel da Portaria
                     </a>
@@ -342,6 +363,9 @@
                     </a>
                     <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('admin_index') }}#equipe">
                         <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+                    </a>
+                    <a class="nav-link text-white d-flex align-items-center nav-interfone {% if request.endpoint == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+                        <i class="bi bi-whatsapp me-2"></i>Interfone / Contatos
                     </a>
                     <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('portaria_dashboard') }}">
                         <i class="bi bi-shield-check me-2"></i>Portaria

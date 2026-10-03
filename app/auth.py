@@ -296,6 +296,36 @@ def unidade_required(view):
     return wrapped
 
 
+def interfone_required(view):
+    """Interfone da guarita: portaria, admin local, síndico do tenant ou Super Admin."""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if not usuario:
+            return _redirect_login_tenant()
+        if usuario.role not in (
+            Role.PORTEIRO,
+            Role.ADMIN,
+            Role.SINDICO,
+            Role.SUPERADMIN,
+        ):
+            flash("Acesso restrito à portaria.", "danger")
+            return _redirect_login_tenant()
+        if usuario.role == Role.SUPERADMIN:
+            return view(*args, **kwargs)
+        if not usuario.condominio_id:
+            flash(
+                "Conta sem condomínio vinculado. Contate a administração.",
+                "danger",
+            )
+            return _redirect_login_tenant()
+        _sincronizar_sessao_tenant(usuario)
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 def portaria_required(view):
     """Acesso à portaria: porteiro, admin do tenant ou Super Admin da plataforma."""
 

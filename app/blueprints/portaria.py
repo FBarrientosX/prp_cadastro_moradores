@@ -13,9 +13,10 @@ morador, admin, síndico) — são só importadas aqui, dentro de cada view.
 
 import json
 import os
+import re
 from datetime import datetime
 
-from flask import current_app, flash, redirect, render_template, request, url_for
+from flask import current_app, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -25,7 +26,18 @@ except ImportError:  # pragma: no cover - Python < 3.9
     ZoneInfo = None
 
 from app import db
-from app.auth import condominio_id_obrigatorio, get_current_user, logout_usuario, portaria_required
+from app.auth import (
+    condominio_id_obrigatorio,
+    get_current_user,
+    interfone_required,
+    logout_usuario,
+    portaria_required,
+)
+from app.utils import (
+    get_condominio_estrutura,
+    normalizar_bloco_apartamento,
+    normalizar_bloco_codigo,
+)
 from app.models import (
     AgendamentoMudanca,
     AutorizacaoAcesso,
@@ -1390,6 +1402,249 @@ def portaria_plantao_evento():
     return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
 
 
+_BUSCA_BLOCO_APTO = re.compile(
+    r"^(?:bloco\s*)?(?P<bloco>\d{1,2})\s*[-/]?\s*(?:apto|apartamento|ap\.?)?\s*(?P<apto>\d{2,4})$",
+    re.IGNORECASE,
+)
+_ROTULOS_VINCULO = {
+    "Proprietário": "Proprietário",
+    "Locatário": "Inquilino",
+    "Morador": "Familiar/Morador",
+}
+_LIMITE_UNIDADES_INTERFONE = 8
+
+
+def _blocos_permitidos_interfone(usuario):
+    """None libera o condomínio. Síndico fica nos agrupamentos dele."""
+    if usuario.role != Role.SINDICO:
+        return None
+    from app.routes import _blocos_codigo_sindico
+
+    return _blocos_codigo_sindico(usuario)
+
+
+def _bloco_permitido(bloco, permitidos):
+    if permitidos is None:
+        return True
+    return normalizar_bloco_codigo(bloco) in set(permitidos)
+
+
+def _interpretar_busca_rapida(texto):
+    """Devolve (bloco, apartamento, nome). Nome vazio quando a busca é a unidade.
+
+    Número puro ("703", "105") é apartamento. "6703" também é apartamento,
+    não bloco 6 + apto 703. Bloco e apto juntos exigem separador ou rótulo
+    ("6 703", "6-703", "bloco 6 apto 703").
+    """
+    consulta = " ".join(str(texto or "").split())
+    if not consulta:
+        return "", "", ""
+    if consulta.isdigit() and 2 <= len(consulta) <= 4:
+        return "", consulta, ""
+    encontrado = _BUSCA_BLOCO_APTO.match(consulta)
+    if encontrado:
+        return (
+            normalizar_bloco_codigo(encontrado.group("bloco")),
+            encontrado.group("apto"),
+            "",
+        )
+    return "", "", consulta
+
+
+def _telefones_interfone(telefone):
+    """Número com DDI 55 e a forma legível. Sem dígitos, devolve vazio."""
+    digitos = "".join(ch for ch in str(telefone or "") if ch.isdigit())
+    digitos = digitos.lstrip("0")
+    if not digitos:
+        return "", ""
+    if digitos.startswith("55") and len(digitos) >= 12:
+        whatsapp = digitos
+        nacional = digitos[2:]
+    else:
+        whatsapp = "55" + digitos
+        nacional = digitos
+    if len(nacional) == 11:
+        formatado = f"({nacional[:2]}) {nacional[2:7]}-{nacional[7:]}"
+    elif len(nacional) == 10:
+        formatado = f"({nacional[:2]}) {nacional[2:6]}-{nacional[6:]}"
+    else:
+        formatado = nacional
+    return whatsapp, formatado
+
+
+def _morador_contato(pessoa):
+    """Payload da guarita. Telefone só entra com consentimento LGPD."""
+    item = {
+        "nome": pessoa.nome_completo,
+        "vinculo": _ROTULOS_VINCULO.get(pessoa.vinculo, pessoa.vinculo or "Morador"),
+        "parentesco": (pessoa.parentesco or "").strip(),
+        "responsavel": bool(pessoa.is_responsavel),
+        "autoriza_interfone": bool(pessoa.autoriza_interfone),
+    }
+    if not pessoa.autoriza_interfone:
+        return item
+    whatsapp, formatado = _telefones_interfone(pessoa.telefone)
+    if whatsapp:
+        item["telefone"] = whatsapp
+        item["telefone_formatado"] = formatado
+    return item
+
+
+def _moradores_residentes(unidade):
+    pessoas = (
+        Pessoa.query.filter(
+            Pessoa.unidade_id == unidade.id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
+        .all()
+    )
+    return [_morador_contato(pessoa) for pessoa in pessoas]
+
+
+def _autorizacoes_ativas_unidade(unidade):
+    """Pré-autorizações pendentes cuja data prevista é hoje (fuso de São Paulo)."""
+    if not unidade.condominio_id:
+        return []
+    registros = (
+        AutorizacaoAcesso.query.filter(
+            AutorizacaoAcesso.unidade_id == unidade.id,
+            AutorizacaoAcesso.condominio_id == unidade.condominio_id,
+            AutorizacaoAcesso.status == StatusAutorizacaoAcesso.PENDENTE,
+            AutorizacaoAcesso.data_prevista == _hoje_sao_paulo(),
+        )
+        .order_by(AutorizacaoAcesso.nome_visitante.asc())
+        .all()
+    )
+    itens = []
+    for registro in registros:
+        itens.append(
+            {
+                "nome": registro.nome_visitante,
+                "tipo": registro.tipo or "",
+                "documento": (registro.documento or "").strip(),
+                "placa": (registro.placa_veiculo or "").strip(),
+                "validade": registro.data_prevista.strftime("%d/%m/%Y"),
+            }
+        )
+    return itens
+
+
+def _card_unidade(unidade, nome=""):
+    moradores = _moradores_residentes(unidade)
+    if nome:
+        termo = nome.casefold()
+        moradores = [item for item in moradores if termo in item["nome"].casefold()]
+    return {
+        "bloco": unidade.bloco,
+        "apartamento": unidade.apartamento,
+        "moradores": moradores,
+        "autorizacoes_ativas": _autorizacoes_ativas_unidade(unidade),
+    }
+
+
+def _unidades_interfone(condominio_id, bloco, apartamento, consulta, permitidos):
+    from app.routes import _buscar_unidade
+
+    bloco_q, apto_q, nome = _interpretar_busca_rapida(consulta)
+    bloco = normalizar_bloco_codigo(bloco) if bloco else bloco_q
+    apartamento = str(apartamento or "").strip() or apto_q
+    if bloco and not _bloco_permitido(bloco, permitidos):
+        return [], False
+
+    if bloco and apartamento:
+        unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio_id)
+        if not unidade or not _bloco_permitido(unidade.bloco, permitidos):
+            return [], False
+        return [_card_unidade(unidade, nome)], False
+
+    # Bloco sozinho não lista o prédio inteiro: a guarita informa o apto ou o nome.
+    if not apartamento and not nome:
+        return [], False
+
+    consulta_unidades = Unidade.query.filter(Unidade.condominio_id == condominio_id)
+    if bloco:
+        consulta_unidades = consulta_unidades.filter(Unidade.bloco == bloco)
+    if apartamento:
+        consulta_unidades = consulta_unidades.filter(Unidade.apartamento == apartamento)
+    if nome:
+        termo = nome.replace("%", "").replace("_", "").strip()
+        if len(termo) < 2:
+            return [], False
+        consulta_unidades = consulta_unidades.join(Pessoa).filter(
+            Pessoa.eh_morador.is_(True),
+            Pessoa.nome_completo.ilike(f"%{termo}%"),
+        )
+
+    if permitidos is not None:
+        if not permitidos:
+            return [], False
+        consulta_unidades = consulta_unidades.filter(Unidade.bloco.in_(list(permitidos)))
+
+    brutas = (
+        consulta_unidades.order_by(Unidade.bloco.asc(), Unidade.apartamento.asc())
+        .limit(40)
+        .all()
+    )
+    vistas = []
+    ids = set()
+    for unidade in brutas:
+        if unidade.id in ids or not _bloco_permitido(unidade.bloco, permitidos):
+            continue
+        ids.add(unidade.id)
+        vistas.append(unidade)
+    truncado = len(vistas) > _LIMITE_UNIDADES_INTERFONE
+    cards = [
+        _card_unidade(unidade, nome)
+        for unidade in vistas[:_LIMITE_UNIDADES_INTERFONE]
+    ]
+    return cards, truncado
+
+
+@interfone_required
+def portaria_contatos():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    layout = "base.html" if usuario.role == Role.SINDICO else "portaria_base.html"
+    return render_template(
+        "portaria/contatos.html",
+        layout=layout,
+        current_user=usuario,
+        condominio_estrutura=get_condominio_estrutura(),
+        sem_condominio=not condominio_id,
+    )
+
+
+@interfone_required
+def api_portaria_buscar_unidade():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "unidades": [], "truncado": False})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    bloco, apartamento = normalizar_bloco_apartamento(
+        request.args.get("bloco", ""),
+        request.args.get("apartamento", ""),
+    )
+    unidades, truncado = _unidades_interfone(
+        condominio_id,
+        bloco,
+        apartamento,
+        request.args.get("q", ""),
+        _blocos_permitidos_interfone(usuario),
+    )
+    resposta = jsonify({"ok": True, "unidades": unidades, "truncado": truncado})
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
 def register(app):
     """Registra as rotas da portaria preservando os endpoints legados."""
     app.add_url_rule(
@@ -1408,6 +1663,18 @@ def register(app):
         "/portaria/dashboard",
         "portaria_dashboard",
         portaria_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/contatos",
+        "portaria_contatos",
+        portaria_contatos,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/portaria/buscar-unidade",
+        "api_portaria_buscar_unidade",
+        api_portaria_buscar_unidade,
         methods=["GET"],
     )
     app.add_url_rule(

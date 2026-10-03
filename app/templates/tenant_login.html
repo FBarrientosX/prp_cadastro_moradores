@@ -81,7 +81,8 @@
                     </button>
                 </form>
                 <div class="text-center mt-3">
-                    <a href="{{ url_for('esqueci_senha') }}" class="small text-muted text-decoration-none">
+                    <a href="{{ url_for('esqueci_senha') }}" id="link-esqueci-senha"
+                       class="small text-muted text-decoration-none">
                         Esqueci minha senha
                     </a>
                 </div>
@@ -128,6 +129,7 @@
     const campoSenha = document.getElementById("campo-senha-unidade");
     const senhaInput = document.getElementById("senha");
     const btnContinuar = document.getElementById("btn-continuar-unidade");
+    const linkEsqueci = document.getElementById("link-esqueci-senha");
     const blocoInicial = {{ bloco | tojson }};
     const apartamentoInicial = {{ apartamento | tojson }};
     let statusUnidadeController = null;
@@ -220,9 +222,23 @@
             });
     }
 
+    function atualizarLinkEsqueci() {
+        if (!linkEsqueci || !blocoSelect || !apartamentoSelect) {
+            return;
+        }
+        const url = new URL(linkEsqueci.href, window.location.origin);
+        url.search = "";
+        if (blocoSelect.value && apartamentoSelect.value) {
+            url.searchParams.set("bloco", blocoSelect.value);
+            url.searchParams.set("apartamento", apartamentoSelect.value);
+        }
+        linkEsqueci.href = url.pathname + url.search;
+    }
+
     function aoTrocarUnidade() {
         aplicarEstadoSenha(false);
         verificarStatusUnidade();
+        atualizarLinkEsqueci();
     }
 
     if (blocoSelect && apartamentoSelect) {
@@ -230,6 +246,7 @@
         if (blocoInicial) {
             popularApartamentos(blocoInicial, apartamentoInicial);
         }
+        atualizarLinkEsqueci();
         blocoSelect.addEventListener("change", (event) => {
             popularApartamentos(event.target.value);
             aoTrocarUnidade();

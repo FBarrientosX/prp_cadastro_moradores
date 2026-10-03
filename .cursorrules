@@ -179,17 +179,23 @@ Desacoplamento de identidade (Parceiros):
   (`POST /parceiro/perfil/editar`). `usuario_login` nao e alterado pelo parceiro.
 
 Scoping por perfil:
-- Morador: `_buscar_unidade_e_email_login(email, condominio_id)` consulta apenas
-  `Unidade` + `Pessoa` responsavel (e `proprietario_email`) DO MESMO `condominio_id`.
-  Sem `condominio_id` nao resolve (anti-enumeracao cross-tenant).
+- Morador: a recuperacao exige Bloco + Apartamento + e-mail ou CPF.
+  Primeiro localiza a `Unidade` por condominio + bloco + apartamento
+  (`_buscar_unidade`). Depois `_email_destino_recuperacao_unidade` so aceita
+  `Pessoa.unidade_id` dessa unidade (ou `proprietario_email`/`proprietario_cpf`
+  da mesma linha). Sem `condominio_id` nao resolve (anti-enumeracao cross-tenant).
+  Nunca escolher a unidade com `.first()` global de e-mail/CPF.
 - Parceiro: `Parceiro.query.filter_by(email=...)` — so tabela `parceiro`; envio
   apenas se `status == 'Ativo'`.
 - Cada fluxo tem rotas, templates e salt proprios.
 
 Anti-enumeracao (OBRIGATORIO):
-- `/esqueci_senha` e `/parceiro/esqueci_senha` NUNCA revelam se o e-mail existe.
-- Sempre a mesma mensagem: "Se o e-mail estiver cadastrado, enviaremos instruções
-  para redefinição de senha."
+- `/esqueci_senha` e `/parceiro/esqueci_senha` NUNCA revelam se o e-mail existe
+  nem se a pessoa tem vinculo com a unidade informada.
+- Morador, sempre a mesma mensagem: "Se os dados informados estiverem corretos
+  e vinculados a esta unidade, as instruções de recuperação foram enviadas."
+- Parceiro: "Se o e-mail estiver cadastrado, enviaremos instruções para
+  redefinição de senha."
 - Enviar e-mail so quando a entidade existir e estiver elegivel; senao, mesma mensagem.
 - Falha tecnica de SMTP: erro generico de indisponibilidade, sem confirmar existencia.
 
@@ -198,10 +204,12 @@ Tokens (`app/utils.py`):
 - `max_age=3600`.
 - Salts: `SALT_RECUPERACAO_MORADOR = "recuperacao-morador"`,
   `SALT_RECUPERACAO_PARCEIRO = "recuperacao-parceiro"`.
-- Payload atual: `{"email", "condominio_id"}`. Resolver a unidade pelo
-  `condominio_id` do token, nunca pelo tenant da sessao no clique do link.
-- Aceita payload legado (e-mail puro) na janela de validade.
-- `verificar_token_redefinicao` devolve `(email, condominio_id, emitido_em)`.
+- Payload da unidade: `{"email", "condominio_id", "unidade_id"}`. A nova senha
+  grava somente na `Unidade` desse `unidade_id` (e do mesmo `condominio_id`).
+  Nunca resolver pelo tenant da sessao nem pelo primeiro cadastro do e-mail.
+- Token de unidade sem `unidade_id` (payload legado) e rejeitado.
+- `verificar_token_redefinicao` devolve `(email, condominio_id, emitido_em, unidade_id)`.
+- E-mail e tela de nova senha identificam a unidade (Bloco X, Apto Y).
 - Rejeitar token se `emitido_em` for anterior a `senha_atualizada_em` da entidade
   (unidade, usuario ou parceiro) — evita reuso apos troca de senha.
 - Token invalido/expirado: "Link inválido ou expirado..." sem detalhes internos.
@@ -430,6 +438,16 @@ Portaria (`app/blueprints/portaria.py`):
 - controle de acesso: entrada avulsa, baixa de autorizacao, saida
 - encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador
 - QR html5-qrcode na tela de encomendas
+- Interfone / Contatos: `GET /portaria/contatos` e
+  `GET /api/portaria/buscar-unidade` (`@interfone_required`: porteiro, admin,
+  sindico do tenant ou superadmin). So pessoas com `eh_morador=True`.
+  Sindico limitado aos proprios agrupamentos. Telefone so sai no JSON se
+  `autoriza_interfone=True` (digitos com prefixo 55 + numero formatado).
+  Sem consentimento: nome, vinculo/parentesco e `autoriza_interfone: false`.
+  Cada unidade inclui `autorizacoes_ativas`: pre-autorizacoes com status
+  Pendente e `data_prevista` igual a hoje em America/Sao_Paulo
+  (nome, tipo, documento, placa e validade). Cancelada, Concluida e outra
+  data nao entram.
 
 Autorizacoes e ocorrencias (morador):
 - `/morador/autorizacoes`, cancelar

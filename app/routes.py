@@ -317,6 +317,52 @@ def _condominio_id_da_sessao():
     return condominio.id if condominio else None
 
 
+def _identificacao_recuperacao(valor):
+    """Separa e-mail ou CPF digitados no mesmo campo de confirmação."""
+    texto = str(valor or "").strip()
+    if "@" in texto:
+        return texto.lower(), ""
+    digitos = _somente_digitos(texto)
+    if len(digitos) == 11:
+        return "", digitos
+    return "", ""
+
+
+def _email_destino_recuperacao_unidade(unidade, identificacao):
+    """
+    E-mail de destino somente se o CPF ou e-mail pertencer à unidade já
+    localizada. Não consulta outras unidades.
+    """
+    if unidade is None:
+        return None
+    email_informado, cpf_informado = _identificacao_recuperacao(identificacao)
+    if not email_informado and not cpf_informado:
+        return None
+
+    pessoas = Pessoa.query.filter(Pessoa.unidade_id == unidade.id).all()
+    for pessoa in pessoas:
+        email_pessoa = (pessoa.email or "").strip()
+        if email_informado and email_pessoa.lower() == email_informado:
+            return email_pessoa
+        if (
+            cpf_informado
+            and email_pessoa
+            and _somente_digitos(pessoa.cpf) == cpf_informado
+        ):
+            return email_pessoa
+
+    email_dono = (unidade.proprietario_email or "").strip()
+    if email_informado and email_dono.lower() == email_informado:
+        return email_dono
+    if (
+        cpf_informado
+        and email_dono
+        and _somente_digitos(unidade.proprietario_cpf) == cpf_informado
+    ):
+        return email_dono
+    return None
+
+
 def _buscar_unidade_e_email_login(email, condominio_id=None):
     """Localiza unidade e o e-mail cadastrado, estritamente no condomínio informado."""
     email_normalizado = email.strip().lower()
@@ -1437,60 +1483,116 @@ def status_unidade(slug):
     return resposta
 
 
+_MENSAGEM_RECUPERACAO_UNIDADE = (
+    "Se os dados informados estiverem corretos e vinculados a esta unidade, "
+    "as instruções de recuperação foram enviadas."
+)
+
+
+def _unidade_do_token_redefinicao(email, condominio_id, unidade_id):
+    """Unidade do token, só se o e-mail ainda pertencer a ela."""
+    if not email or not condominio_id or not unidade_id:
+        return None
+    try:
+        unidade_id = int(unidade_id)
+        condominio_id = int(condominio_id)
+    except (TypeError, ValueError):
+        return None
+    unidade = Unidade.query.filter_by(
+        id=unidade_id,
+        condominio_id=condominio_id,
+    ).first()
+    if not unidade:
+        return None
+    if not _email_destino_recuperacao_unidade(unidade, email):
+        return None
+    return unidade
+
+
+def _render_esqueci_senha(bloco="", apartamento=""):
+    bloco, apartamento = normalizar_bloco_apartamento(bloco, apartamento)
+    if not validar_unidade(bloco, apartamento):
+        bloco, apartamento = "", ""
+    return render_template(
+        "esqueci_senha.html",
+        slug=_slug_sessao_ou_prp(),
+        condominio_estrutura=get_condominio_estrutura(),
+        bloco=bloco,
+        apartamento=apartamento,
+    )
+
+
 def esqueci_senha():
     if request.method == "POST":
-        email_solicitado = request.form.get("email", "").strip().lower()
-        mensagem_generica = (
-            "Se o e-mail estiver cadastrado, enviaremos instruções para redefinição de senha."
+        bloco, apartamento = normalizar_bloco_apartamento(
+            request.form.get("bloco", ""),
+            request.form.get("apartamento", ""),
         )
-
+        identificacao = request.form.get("identificacao", "")
         condominio_id_solicitacao = _condominio_id_da_sessao()
-        unidade, email_destino = _buscar_unidade_e_email_login(
-            email_solicitado, condominio_id=condominio_id_solicitacao
-        )
+        unidade = None
+        if condominio_id_solicitacao and validar_unidade(bloco, apartamento):
+            unidade = _buscar_unidade(
+                bloco,
+                apartamento,
+                condominio_id=condominio_id_solicitacao,
+            )
+        email_destino = _email_destino_recuperacao_unidade(unidade, identificacao)
         if unidade and email_destino:
             try:
                 token = gerar_token_redefinicao(
-                    email_solicitado,
+                    email_destino,
                     SALT_RECUPERACAO_MORADOR,
                     condominio_id=condominio_id_solicitacao,
+                    unidade_id=unidade.id,
                 )
                 link = url_for("redefinir_senha", token=token, _external=True)
-                enviar_email_redefinicao_senha(email_destino, link, perfil="morador")
+                enviar_email_redefinicao_senha(
+                    email_destino,
+                    link,
+                    perfil="morador",
+                    bloco=unidade.bloco,
+                    apartamento=unidade.apartamento,
+                )
             except Exception:
                 traceback.print_exc()
                 flash(
                     "Não foi possível enviar o e-mail. Tente novamente mais tarde.",
                     "danger",
                 )
-                return redirect(url_for("esqueci_senha"))
+                return redirect(
+                    url_for("esqueci_senha", bloco=bloco, apartamento=apartamento)
+                )
 
-        flash(mensagem_generica, "info")
+        flash(_MENSAGEM_RECUPERACAO_UNIDADE, "info")
         return redirect(url_for("tenant_login", slug=_slug_sessao_ou_prp()))
 
+    return _render_esqueci_senha(
+        request.args.get("bloco", ""),
+        request.args.get("apartamento", ""),
+    )
+
+
+def _render_redefinir_senha(token, unidade):
     return render_template(
-        "esqueci_senha.html",
-        slug=_slug_sessao_ou_prp(),
+        "redefinir_senha.html",
+        token=token,
+        unidade=unidade,
     )
 
 
 def redefinir_senha(token):
-    email, condominio_id_token, emitido_em = verificar_token_redefinicao(
+    email, condominio_id_token, emitido_em, unidade_id = verificar_token_redefinicao(
         token, SALT_RECUPERACAO_MORADOR
     )
-    # Sem condominio_id no token: ou é um link antigo (formato anterior a esta
-    # correção) ou foi solicitado fora de qualquer tenant — em ambos os casos
-    # não é seguro resolver a unidade pelo estado da sessão atual (poderia
-    # pertencer a outro condomínio). Pede para solicitar um link novo.
-    if not email or not condominio_id_token:
-        flash("Link inválido ou expirado. Solicite uma nova redefinição de senha.", "danger")
-        return redirect(url_for("esqueci_senha"))
-
-    unidade, _ = _buscar_unidade_e_email_login(
-        email, condominio_id=condominio_id_token
+    unidade = _unidade_do_token_redefinicao(
+        email, condominio_id_token, unidade_id
     )
     if not unidade:
-        flash("Unidade não encontrada para este e-mail.", "danger")
+        flash(
+            "Link inválido ou expirado. Solicite uma nova redefinição de senha.",
+            "danger",
+        )
         return redirect(url_for("esqueci_senha"))
 
     if unidade.senha_atualizada_em and emitido_em:
@@ -1511,23 +1613,33 @@ def redefinir_senha(token):
 
         if len(senha) < 6:
             flash("A senha deve ter ao menos 6 caracteres.", "danger")
-            return render_template("redefinir_senha.html", token=token)
+            return _render_redefinir_senha(token, unidade)
         if senha != confirmacao:
             flash("As senhas não coincidem.", "danger")
-            return render_template("redefinir_senha.html", token=token)
+            return _render_redefinir_senha(token, unidade)
 
-        unidade.set_password(senha)
+        unidade_alvo = Unidade.query.filter_by(
+            id=unidade.id,
+            condominio_id=unidade.condominio_id,
+        ).first()
+        if not unidade_alvo:
+            flash(
+                "Link inválido ou expirado. Solicite uma nova redefinição de senha.",
+                "danger",
+            )
+            return redirect(url_for("esqueci_senha"))
+        unidade_alvo.set_password(senha)
         db.session.commit()
         flash(
             "Senha redefinida com sucesso. Acesse com bloco, apartamento e a nova senha.",
             "success",
         )
         slug = "prp"
-        if unidade.condominio and unidade.condominio.slug:
-            slug = unidade.condominio.slug
+        if unidade_alvo.condominio and unidade_alvo.condominio.slug:
+            slug = unidade_alvo.condominio.slug
         return redirect(url_for("tenant_login", slug=slug))
 
-    return render_template("redefinir_senha.html", token=token)
+    return _render_redefinir_senha(token, unidade)
 
 
 def cadastro_inicial(slug):

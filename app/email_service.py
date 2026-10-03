@@ -26,7 +26,13 @@ def _enviar_email(email_destino, assunto, corpo):
         servidor.sendmail(username, [email_destino], mensagem.as_string())
 
 
-def enviar_email_redefinicao_senha(email_destino, link_redefinicao, perfil="morador"):
+def enviar_email_redefinicao_senha(
+    email_destino,
+    link_redefinicao,
+    perfil="morador",
+    bloco=None,
+    apartamento=None,
+):
     if perfil == "parceiro":
         assunto = "PRP Condomínio - Redefinição de Senha do Parceiro"
         corpo = (
@@ -35,10 +41,14 @@ def enviar_email_redefinicao_senha(email_destino, link_redefinicao, perfil="mora
             "Se você não solicitou esta alteração, ignore este e-mail."
         )
     else:
-        assunto = "PRP Condomínio - Redefinição de Senha da Unidade"
+        identificacao = f"Bloco {bloco}, Apto {apartamento}"
+        assunto = f"Recuperação de senha — {identificacao}"
         corpo = (
-            "Recebemos uma solicitação para redefinir a senha de acesso da sua unidade no cadastro de moradores.\n\n"
+            f"Recuperação de senha — {identificacao}\n\n"
+            "Recebemos uma solicitação para redefinir a senha de acesso desta unidade "
+            "no cadastro de moradores.\n\n"
             f"Acesse o link abaixo para criar uma nova senha (válido por 1 hora):\n{link_redefinicao}\n\n"
+            "O link altera somente a senha desta unidade. "
             "Se você não solicitou esta alteração, ignore este e-mail."
         )
     _enviar_email(email_destino, assunto, corpo)

@@ -98,50 +98,58 @@ def _get_token_serializer():
     return URLSafeTimedSerializer(secret_key)
 
 
-def gerar_token_redefinicao(email, salt, condominio_id=None):
+def gerar_token_redefinicao(email, salt, condominio_id=None, unidade_id=None):
     """
-    Gera token de redefinição amarrado ao e-mail e (quando aplicável) ao
-    condomínio/tenant vigente no momento da solicitação — evita que o link
-    seja resolvido depois contra o tenant errado (ver verificar_token_redefinicao).
+    Gera token de redefinição amarrado ao e-mail e, no fluxo da unidade, ao
+    condomínio e à unidade exatos da solicitação.
     """
     email_normalizado = str(email).strip().lower()
-    payload = {"email": email_normalizado, "condominio_id": condominio_id}
+    payload = {
+        "email": email_normalizado,
+        "condominio_id": condominio_id,
+        "unidade_id": unidade_id,
+    }
     return _get_token_serializer().dumps(payload, salt=salt)
 
 
 def verificar_token_redefinicao(token, salt, max_age=3600):
     """
-    Retorna (email, condominio_id, emitido_em) ou (None, None, None) se o
-    token for inválido/expirado.
+    Retorna (email, condominio_id, emitido_em, unidade_id) ou
+    (None, None, None, None) se o token for inválido/expirado.
 
-    `condominio_id` é o tenant amarrado no momento da emissão do token — use-o
-    para resolver a unidade/usuário, nunca o tenant da sessão atual (pode ter
-    mudado entre a solicitação e o clique no link).
+    `condominio_id` e `unidade_id` são os gravados na emissão. A senha da
+    unidade só pode ser trocada na unidade do token, nunca pela sessão atual
+    nem pelo primeiro cadastro encontrado para o e-mail.
 
-    `emitido_em` (datetime UTC aware) permite ao chamador rejeitar reuso: um
-    token emitido antes da última troca de senha já foi consumido ou está
-    obsoleto.
+    `emitido_em` (datetime UTC aware) permite rejeitar reuso: um token emitido
+    antes da última troca de senha já foi consumido ou está obsoleto.
 
-    Aceita também o formato legado (payload = e-mail em texto puro, sem
-    tenant), para não invalidar imediatamente links antigos ainda dentro da
-    janela de validade — nesse caso condominio_id volta como None.
+    Payload legado (e-mail puro, sem unidade) devolve unidade_id None. O fluxo
+    da unidade rejeita esse token e pede um link novo.
     """
     try:
         payload, emitido_em = _get_token_serializer().loads(
             token, salt=salt, max_age=max_age, return_timestamp=True
         )
     except (BadSignature, SignatureExpired):
-        return None, None, None
+        return None, None, None, None
 
+    unidade_id = None
     if isinstance(payload, dict):
         email = payload.get("email")
         condominio_id = payload.get("condominio_id")
+        unidade_id = payload.get("unidade_id")
     else:
         email = payload
         condominio_id = None
 
     email = str(email).strip().lower() if email else None
-    return email, condominio_id, emitido_em
+    if unidade_id is not None:
+        try:
+            unidade_id = int(unidade_id)
+        except (TypeError, ValueError):
+            unidade_id = None
+    return email, condominio_id, emitido_em, unidade_id
 
 
 def salvar_logo_parceiro(arquivo, prefixo="parceiro"):
