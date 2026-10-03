@@ -50,7 +50,9 @@ def credenciais_ativas(condominio):
     credenciais = []
     for credencial in registros:
         morador = credencial.morador
-        unidade = morador.unidade if morador is not None else None
+        if morador is None or not morador.eh_morador:
+            continue
+        unidade = morador.unidade
         credenciais.append(
             {
                 "tipo": credencial.tipo,

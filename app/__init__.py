@@ -153,6 +153,20 @@ def _garantir_colunas_pessoas():
         )
         db.session.commit()
 
+    # Dono legal é quem está na lista de proprietários (eh_proprietario).
+    # Vínculo "Proprietário" sem essa flag vira ocupante familiar.
+    db.session.execute(
+        text(
+            """
+            UPDATE pessoas
+            SET vinculo = 'Morador'
+            WHERE eh_proprietario = 0
+              AND vinculo = 'Proprietário'
+            """
+        )
+    )
+    db.session.commit()
+
     if adicionou_status:
         # Moradores já existentes em unidades aprovadas/registradas
         # são tratados como aprovados; pendentes de cadastro ficam Pendente.

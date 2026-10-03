@@ -338,8 +338,16 @@
                 <div class="carteirinha">
                     <div class="small text-white-50 mb-1">Condomínio</div>
                     <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
-                    <div class="small text-white-50">Morador</div>
-                    <div class="fs-5 fw-bold mb-3">{{ morador.nome_completo if morador else 'Morador' }}</div>
+                    <div class="small text-white-50">Titular</div>
+                    <div class="fs-5 fw-bold {% if not dependentes %}mb-3{% endif %}">{{ morador.nome_completo if morador else 'Nenhum morador ativo' }}</div>
+                    {% if dependentes %}
+                    <div class="small text-white-50 mt-3">Dependentes</div>
+                    <ul class="mb-3 ps-3">
+                        {% for pessoa in dependentes %}
+                        <li>{{ pessoa.nome_completo }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
                     <div class="d-flex justify-content-between align-items-end gap-3">
                         <div>
                             <div class="small text-white-50">{{ label_bloco }} / {{ label_apto }}</div>
@@ -352,8 +360,16 @@
                 <div class="carteirinha carteirinha-pendente">
                     <div class="small mb-1">Condomínio</div>
                     <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
-                    <div class="small">Morador</div>
-                    <div class="fs-5 fw-bold mb-3">{{ morador.nome_completo if morador else 'Morador' }}</div>
+                    <div class="small">Titular</div>
+                    <div class="fs-5 fw-bold {% if not dependentes %}mb-3{% endif %}">{{ morador.nome_completo if morador else 'Nenhum morador ativo' }}</div>
+                    {% if dependentes %}
+                    <div class="small mt-3">Dependentes</div>
+                    <ul class="mb-3 ps-3">
+                        {% for pessoa in dependentes %}
+                        <li>{{ pessoa.nome_completo }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
                     <div>
                         <div class="small">{{ label_bloco }} / {{ label_apto }}</div>
                         <div class="fw-semibold">{{ unidade.bloco }} / {{ unidade.apartamento }}</div>

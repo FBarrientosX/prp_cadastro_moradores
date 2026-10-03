@@ -1336,6 +1336,7 @@ def admin_controle_acesso():
         .filter(
             Unidade.condominio_id == condominio_id,
             Pessoa.status == StatusPessoa.APROVADO,
+            Pessoa.eh_morador.is_(True),
             Unidade.status.in_((StatusUnidade.APROVADA, StatusUnidade.REGISTRADA)),
         )
         .order_by(Unidade.bloco, Unidade.apartamento, Pessoa.nome_completo)
@@ -1381,6 +1382,12 @@ def admin_controle_acesso_salvar():
     )
     if morador is None:
         flash("Morador não encontrado neste condomínio.", "danger")
+        return redirect(url_for("admin_controle_acesso"))
+    if not morador.eh_morador:
+        flash(
+            "Somente quem reside na unidade pode receber credencial de acesso.",
+            "warning",
+        )
         return redirect(url_for("admin_controle_acesso"))
 
     duplicada = CredencialAcesso.query.filter_by(

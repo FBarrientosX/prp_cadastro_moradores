@@ -557,9 +557,10 @@ def _parse_pessoas_form(form, prefixo="pessoa", aceitar_aliases_vinculo=False):
         telefone = form.get(f"{prefixo}_{indice}_telefone", "").strip()
         email = form.get(f"{prefixo}_{indice}_email", "").strip()
         autoriza_interfone_raw = (
-            form.get(f"{prefixo}_{indice}_autoriza_interfone", "").strip().lower()
-        )
-        autoriza_interfone = autoriza_interfone_raw == "true"
+            form.get(f"{prefixo}_{indice}_autoriza_interfone", "")
+            or form.get(f"{prefixo}_{indice}_lgpd_interfone", "")
+        ).strip().lower()
+        autoriza_interfone = autoriza_interfone_raw in ("true", "on", "1", "sim")
 
         if not is_menor and not cpf:
             raise ValueError(f"CPF é obrigatório para {nome} (maior de idade).")
@@ -707,8 +708,31 @@ def _sincronizar_dados_basicos_por_cpf(proprietarios, moradores):
             item["data_nascimento"] = base["data_nascimento"]
 
 
+def _cpfs_proprietarios_informados(proprietarios):
+    return {
+        _somente_digitos(item.get("cpf"))
+        for item in proprietarios
+        if _somente_digitos(item.get("cpf"))
+    }
+
+
+def _ajustar_vinculo_morador_sem_dono(proprietarios, moradores):
+    """
+    Vínculo Proprietário no morador só permanece se o CPF dele foi
+    enviado na lista de proprietários desta mesma submissão.
+    """
+    cpfs_donos = _cpfs_proprietarios_informados(proprietarios)
+    for morador in moradores:
+        if morador.get("vinculo") != VinculoPessoa.PROPRIETARIO:
+            continue
+        cpf = _somente_digitos(morador.get("cpf"))
+        if cpf not in cpfs_donos:
+            morador["vinculo"] = VinculoPessoa.MORADOR
+
+
 def _unir_proprietarios_e_moradores(proprietarios, moradores):
     """Uma linha de Pessoa por CPF, com as flags dos papéis preenchidos."""
+    _ajustar_vinculo_morador_sem_dono(proprietarios, moradores)
     _sincronizar_dados_basicos_por_cpf(proprietarios, moradores)
     pessoas = []
     indice_por_cpf = {}
@@ -1791,10 +1815,22 @@ def morador_clube_vantagens(unidade):
             .all()
         )
 
-    morador = (
-        unidade.pessoas.filter_by(is_responsavel=True).first()
-        or unidade.pessoas.first()
+    moradores_ativos = (
+        unidade.pessoas.filter(Pessoa.eh_morador.is_(True))
+        .order_by(Pessoa.nome_completo)
+        .all()
     )
+    titular = next(
+        (pessoa for pessoa in moradores_ativos if pessoa.is_responsavel),
+        None,
+    )
+    if titular is None and moradores_ativos:
+        titular = moradores_ativos[0]
+    dependentes = [
+        pessoa
+        for pessoa in moradores_ativos
+        if titular is None or pessoa.id != titular.id
+    ]
 
     parceiro_ids = [parceiro.id for parceiro in parceiros_visiveis]
     ofertas_por_parceiro = {parceiro_id: [] for parceiro_id in parceiro_ids}
@@ -1864,7 +1900,8 @@ def morador_clube_vantagens(unidade):
         resgates_ativos=resgates_ativos,
         resgates_utilizados=resgates_utilizados,
         unidade=unidade,
-        morador=morador,
+        morador=titular,
+        dependentes=dependentes,
         aba=request.args.get("aba") or "parceiros",
     )
 
@@ -2514,6 +2551,17 @@ def limpar_notificacao_sindico(unidade):
     return redirect(url_for("atualizar_dados"))
 
 
+_ABAS_ATUALIZAR_DADOS = ("proprietarios", "moradores", "veiculos", "seguranca")
+
+
+def _redirect_atualizar_dados():
+    """Volta para Meu Cadastro na mesma aba em que o morador salvou."""
+    aba = (request.form.get("aba_ativa") or "").strip()
+    if aba in _ABAS_ATUALIZAR_DADOS:
+        return redirect(url_for("atualizar_dados", aba=aba))
+    return redirect(url_for("atualizar_dados"))
+
+
 def salvar_cadastro():
     bloco = session.get("cadastro_bloco")
     apartamento = session.get("cadastro_apartamento")
@@ -2754,7 +2802,7 @@ def salvar_cadastro():
                 )
             else:
                 flash("Dados atualizados com sucesso.", "success")
-            return redirect(url_for("atualizar_dados"))
+            return _redirect_atualizar_dados()
 
         session.pop("cadastro_bloco", None)
         session.pop("cadastro_apartamento", None)
@@ -2768,7 +2816,7 @@ def salvar_cadastro():
         db.session.rollback()
         flash(str(exc), "danger")
         if modo_atualizacao:
-            return redirect(url_for("atualizar_dados"))
+            return _redirect_atualizar_dados()
         return redirect(url_for("cadastro_inicial", slug=slug_retorno))
     except Exception:
         db.session.rollback()
@@ -2778,7 +2826,7 @@ def salvar_cadastro():
             "danger",
         )
         if modo_atualizacao:
-            return redirect(url_for("atualizar_dados"))
+            return _redirect_atualizar_dados()
         return redirect(url_for("cadastro_inicial", slug=slug_retorno))
 
 
