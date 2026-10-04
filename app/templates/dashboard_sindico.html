@@ -3,13 +3,11 @@
 {% block title %}Dashboard do Síndico{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h1 class="h3 mb-1">Mapa do Bloco</h1>
-        <p class="text-muted mb-0">{{ agrupamentos_label }} — {{ mapa_bloco|length }} unidades</p>
-    </div>
-    <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
+<div class="mb-4">
+    <h1 class="h3 mb-1">Mapa do Bloco</h1>
+    <p class="text-muted mb-0">{{ agrupamentos_label }} — {{ mapa_bloco|length }} unidades</p>
 </div>
+{% include "includes/filtro_blocos_sindico.html" %}
 
 {% if encomendas_setores %}
 {% include "includes/encomendas_setores.html" %}

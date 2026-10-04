@@ -19,6 +19,7 @@ class StatusAgendamentoMudanca:
     APROVADA = "Aprovada"
     REJEITADA = "Rejeitada"
     CANCELADA = "Cancelada"
+    CONCLUIDA = "Concluída"
 
     PENDENTES = (PENDENTE_SINDICO, PENDENTE_ADMINISTRACAO)
     TIPOS = ("Entrada", "Saída")
@@ -234,6 +235,13 @@ class Usuario(db.Model):
     # bloco_responsavel = db.Column(db.String(50), nullable=True)
     # Marca a última troca de senha; usado para invalidar tokens antigos.
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
+    # Escopo do síndico: "1", "1,2" ou "*" (todos os blocos).
+    blocos_escopo = db.Column(db.String(120), nullable=True)
+    # Permissões extras. Default False trava portaria, reservas gerais e
+    # configurações para os síndicos de bloco já cadastrados.
+    perm_portaria = db.Column(db.Boolean, nullable=False, default=False)
+    perm_reservas_geral = db.Column(db.Boolean, nullable=False, default=False)
+    perm_configuracoes = db.Column(db.Boolean, nullable=False, default=False)
 
     condominio = db.relationship("Condominio", backref=db.backref("usuarios", lazy=True))
 
@@ -243,6 +251,36 @@ class Usuario(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_blocos_permitidos(self):
+        """Blocos que este usuário enxerga.
+
+        None = todos os blocos (admin, superadmin, assistente ou síndico geral).
+        Lista de códigos ("1", "2") = recorte. Lista vazia = nenhum bloco.
+        """
+        if self.role in (Role.ADMIN, Role.SUPERADMIN, Role.ASSISTENTE):
+            return None
+        if self.role != Role.SINDICO:
+            return []
+
+        from app.utils import get_blocos, normalizar_bloco_codigo
+
+        validos = set(get_blocos())
+        bruto = (self.blocos_escopo or "").strip()
+        if bruto == "*":
+            return None
+
+        if bruto:
+            partes = [parte.strip() for parte in bruto.split(",") if parte.strip()]
+        else:
+            partes = [agrup.nome_agrupamento for agrup in self.agrupamentos.all()]
+
+        codigos = []
+        for parte in partes:
+            codigo = normalizar_bloco_codigo(parte)
+            if codigo in validos and codigo not in codigos:
+                codigos.append(codigo)
+        return codigos
 
     @property
     def is_superadmin(self):
@@ -429,6 +467,15 @@ class Reserva(db.Model):
     motivo_reserva = db.Column(db.String(255), nullable=True)
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
     data_solicitacao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    lista_convidados = db.Column(db.Text, nullable=True)
+    chaves_entregue_em = db.Column(db.DateTime, nullable=True)
+    chaves_devolvida_em = db.Column(db.DateTime, nullable=True)
+    porteiro_entrega_chaves_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True
+    )
+    porteiro_devolucao_chaves_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True
+    )
 
     espaco = db.relationship("EspacoComum", back_populates="reservas")
     unidade = db.relationship("Unidade")
@@ -732,9 +779,15 @@ class AgendamentoMudanca(db.Model):
     porteiro_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
     )
+    data_termino = db.Column(db.DateTime, nullable=True)
+    observacao_portaria = db.Column(db.Text, nullable=True)
+    porteiro_termino_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True
+    )
 
     unidade = db.relationship("Unidade", back_populates="agendamentos_mudanca")
     porteiro = db.relationship("Usuario", foreign_keys=[porteiro_id])
+    porteiro_termino = db.relationship("Usuario", foreign_keys=[porteiro_termino_id])
     condominio = db.relationship(
         "Condominio", backref=db.backref("agendamentos_mudanca", lazy=True)
     )

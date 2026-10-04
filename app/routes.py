@@ -84,6 +84,7 @@ from app.utils import (
     PARCEIRO_LOGO_MAX_BYTES,
     SALT_RECUPERACAO_MORADOR,
     gerar_token_redefinicao,
+    get_blocos,
     get_condominio_estrutura,
     normalizar_bloco_apartamento,
     normalizar_bloco_codigo,
@@ -412,43 +413,68 @@ def _buscar_unidade_e_email_login(email, condominio_id=None):
 
 
 def _agrupamentos_sindico(usuario):
-    """Lista os nomes de agrupamento (blocos) sob jurisdição do síndico."""
-    if not usuario:
-        return []
-    query = usuario.agrupamentos
-    if usuario.condominio_id:
-        query = query.filter_by(condominio_id=usuario.condominio_id)
-    return [agrup.nome_agrupamento for agrup in query]
+    """Códigos de bloco sob jurisdição do síndico (ex.: '1', '2')."""
+    return _blocos_codigo_sindico(usuario)
 
 
 def _blocos_codigo_sindico(usuario):
-    """Códigos normalizados dos agrupamentos do síndico (ex.: '1', '6')."""
-    return [
-        normalizar_bloco_codigo(nome) for nome in _agrupamentos_sindico(usuario)
-    ]
+    """Códigos normalizados dos blocos do síndico (ex.: '1', '6').
+
+    Síndico geral (`blocos_escopo == '*'`) recebe todos os blocos residenciais.
+    """
+    if not usuario or usuario.role != Role.SINDICO:
+        return []
+    permitidos = usuario.get_blocos_permitidos()
+    if permitidos is None:
+        return list(get_blocos())
+    return list(permitidos)
 
 
 def _chaves_agrupamento_sindico(usuario):
     """Valores possíveis para filtros SQL em EspacoComum.bloco_vinculado."""
     chaves = set()
-    for nome in _agrupamentos_sindico(usuario):
-        chaves.add(nome)
-        codigo = normalizar_bloco_codigo(nome)
+    for codigo in _blocos_codigo_sindico(usuario):
         chaves.add(codigo)
         chaves.add(f"Bloco {codigo}")
     return list(chaves)
 
 
 def _sindico_gerencia_bloco(usuario, bloco):
-    if not bloco:
+    if not usuario or usuario.role != Role.SINDICO or not bloco:
         return False
-    bloco_norm = normalizar_bloco_codigo(bloco)
-    return bloco_norm in _blocos_codigo_sindico(usuario)
+    return normalizar_bloco_codigo(bloco) in _blocos_codigo_sindico(usuario)
 
 
 def _label_agrupamentos_sindico(usuario):
-    nomes = _agrupamentos_sindico(usuario)
-    return ", ".join(nomes) if nomes else "—"
+    if not usuario or usuario.role != Role.SINDICO:
+        return "—"
+    permitidos = usuario.get_blocos_permitidos()
+    if permitidos is None:
+        return "Todos os blocos"
+    if not permitidos:
+        return "—"
+    return ", ".join(f"Bloco {codigo}" for codigo in permitidos)
+
+
+def _recorte_blocos_consulta(usuario):
+    """(opções do filtro, blocos da query, código selecionado ou '')."""
+    opcoes = _blocos_codigo_sindico(usuario)
+    pedido = normalizar_bloco_codigo((request.args.get("bloco") or "").strip())
+    if pedido and pedido in opcoes:
+        return opcoes, [pedido], pedido
+    return opcoes, list(opcoes), ""
+
+
+def _filtro_espacos_sindico(usuario):
+    """Espaços do(s) bloco(s) do síndico e áreas comuns sem bloco vinculado."""
+    chaves = _chaves_agrupamento_sindico(usuario)
+    partes = [
+        EspacoComum.bloco_vinculado.is_(None),
+        EspacoComum.bloco_vinculado == "",
+    ]
+    if chaves:
+        partes.append(EspacoComum.bloco_vinculado.in_(chaves))
+    return or_(*partes)
 
 
 def _registrar_auditoria(usuario, mensagem):
@@ -1208,6 +1234,12 @@ def acesso_reservas_required(view):
         if usuario and usuario.role == Role.PORTEIRO:
             flash("Acesso restrito à portaria.", "danger")
             return redirect(url_for("portaria_dashboard"))
+        if usuario and usuario.role == Role.SINDICO and not usuario.perm_reservas_geral:
+            flash(
+                "Seu acesso de síndico não inclui reservas de áreas comuns.",
+                "warning",
+            )
+            return redirect(url_for("sindico_dashboard"))
         if usuario or get_unidade_logada():
             return view(*args, **kwargs)
         flash("Faça login para acessar o módulo de reservas.", "warning")
@@ -1223,6 +1255,12 @@ def gestao_espacos_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         usuario = get_current_user()
+        if usuario and usuario.role == Role.SINDICO and not usuario.perm_reservas_geral:
+            flash(
+                "Seu acesso de síndico não inclui reservas de áreas comuns.",
+                "warning",
+            )
+            return redirect(url_for("sindico_dashboard"))
         if usuario and usuario.role in (Role.ADMIN, Role.ASSISTENTE, Role.SINDICO):
             if not usuario.condominio_id:
                 flash(
@@ -1243,6 +1281,10 @@ def _usuario_pode_gerenciar_espaco(usuario, espaco):
     if not usuario.condominio_id or espaco.condominio_id != usuario.condominio_id:
         return False
     if usuario.role == Role.SINDICO:
+        if not usuario.perm_reservas_geral:
+            return False
+        if not espaco.bloco_vinculado:
+            return True
         return _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado)
     if usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         return espaco.gerenciado_por == "admin"
@@ -1260,10 +1302,9 @@ def _reservas_pendentes_por_jurisdicao(usuario):
         )
     )
     if usuario.role == Role.SINDICO:
-        chaves = _chaves_agrupamento_sindico(usuario)
-        if not chaves:
+        if not usuario.perm_reservas_geral:
             return []
-        query = query.filter(EspacoComum.bloco_vinculado.in_(chaves))
+        query = query.filter(_filtro_espacos_sindico(usuario))
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         query = query.filter(EspacoComum.gerenciado_por == "admin")
     else:
@@ -2128,16 +2169,13 @@ def reservas():
     if usuario:
         condominio_id = condominio_id_obrigatorio(usuario)
         if usuario.role == Role.SINDICO:
-            chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
             espacos = (
                 EspacoComum.query.filter(
                     EspacoComum.condominio_id == condominio_id,
-                    EspacoComum.bloco_vinculado.in_(chaves_agrupamento),
+                    _filtro_espacos_sindico(usuario),
                 )
                 .order_by(EspacoComum.nome)
                 .all()
-                if chaves_agrupamento
-                else []
             )
         elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
             espacos = (
@@ -2163,8 +2201,7 @@ def reservas():
         )
 
         if usuario.role == Role.SINDICO:
-            chaves_agrupamento = _chaves_agrupamento_sindico(usuario)
-            filtro_jurisdicao = EspacoComum.bloco_vinculado.in_(chaves_agrupamento or [""])
+            filtro_jurisdicao = _filtro_espacos_sindico(usuario)
             blocos_sindico = _blocos_codigo_sindico(usuario)
             unidades_gestao = (
                 Unidade.query.filter(
@@ -2221,7 +2258,50 @@ def reservas():
         reservas_historico=reservas_historico,
         espacos_disponiveis=espacos_disponiveis,
         minhas_reservas=minhas_reservas,
+        data_minima_reserva=date.today().isoformat(),
+        data_maxima_reserva=(date.today() + timedelta(days=90)).isoformat(),
     )
+
+
+def _normalizar_lista_convidados(texto):
+    """Um nome por linha, sem duplicar e com teto para não inflar o campo."""
+    nomes = []
+    for linha in str(texto or "").replace(";", "\n").splitlines():
+        nome = " ".join(linha.split())
+        if not nome or nome in nomes:
+            continue
+        nomes.append(nome[:120])
+        if len(nomes) >= 200:
+            break
+    return "\n".join(nomes)
+
+
+@unidade_required
+def salvar_convidados_reserva(unidade, reserva_id):
+    reserva = (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            Reserva.id == reserva_id,
+            Reserva.unidade_id == unidade.id,
+            EspacoComum.condominio_id == unidade.condominio_id,
+        )
+        .first()
+    )
+    if reserva is None:
+        flash("Reserva não encontrada.", "danger")
+        return redirect(url_for("reservas"))
+    if reserva.status not in ("Pendente", "Aprovada"):
+        flash(
+            "A lista de convidados só pode ser editada enquanto a reserva está pendente ou aprovada.",
+            "warning",
+        )
+        return redirect(url_for("reservas"))
+    reserva.lista_convidados = _normalizar_lista_convidados(
+        request.form.get("lista_convidados")
+    )
+    db.session.commit()
+    flash("Lista de convidados atualizada.", "success")
+    return redirect(url_for("reservas"))
 
 
 @unidade_required
@@ -2242,6 +2322,21 @@ def solicitar_reserva(unidade):
 
     if not espaco.ativo:
         flash("Este espaço está temporariamente indisponível para reservas.", "warning")
+        return redirect(url_for("reservas"))
+
+    if data_reserva < date.today() or data_reserva > date.today() + timedelta(days=90):
+        flash("Escolha uma data entre hoje e os próximos 90 dias.", "danger")
+        return redirect(url_for("reservas"))
+    dias_espaco = [
+        dia.strip().lower()
+        for dia in (espaco.dias_funcionamento or "").split(",")
+        if dia.strip()
+    ]
+    if (
+        dias_espaco
+        and DIAS_FUNCIONAMENTO_VALIDOS[data_reserva.weekday()] not in dias_espaco
+    ):
+        flash("Este espaço não funciona no dia selecionado.", "danger")
         return redirect(url_for("reservas"))
 
     if espaco.apenas_moradores_bloco and espaco.bloco_vinculado != unidade.bloco:
@@ -2417,10 +2512,9 @@ def api_reservas_eventos():
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
     if usuario.role == Role.SINDICO:
-        chaves = _chaves_agrupamento_sindico(usuario)
         query = Reserva.query.join(EspacoComum).filter(
             EspacoComum.condominio_id == condominio_id,
-            EspacoComum.bloco_vinculado.in_(chaves or [""]),
+            _filtro_espacos_sindico(usuario),
             Reserva.status.in_(["Pendente", "Aprovada"]),
         )
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
@@ -2586,14 +2680,21 @@ def salvar_espaco_reserva():
     espaco.dias_funcionamento = ",".join(dias_selecionados)
 
     if usuario.role == Role.SINDICO:
-        agrupamentos = _agrupamentos_sindico(usuario)
-        if not agrupamentos:
-            flash("Síndico sem agrupamento vinculado. Contate a administração.", "danger")
-            return redirect(url_for("reservas"))
-        espaco.gerenciado_por = "sindico"
-        # Espaço continua vinculado a um agrupamento; usa o primeiro até haver seletor.
-        espaco.bloco_vinculado = agrupamentos[0]
-        espaco.apenas_moradores_bloco = apenas_moradores_bloco
+        if usuario.get_blocos_permitidos() is None:
+            espaco.gerenciado_por = "sindico"
+            espaco.bloco_vinculado = None
+            espaco.apenas_moradores_bloco = False
+        else:
+            agrupamentos = _agrupamentos_sindico(usuario)
+            if not agrupamentos:
+                flash(
+                    "Síndico sem bloco vinculado. Contate a administração.",
+                    "danger",
+                )
+                return redirect(url_for("reservas"))
+            espaco.gerenciado_por = "sindico"
+            espaco.bloco_vinculado = agrupamentos[0]
+            espaco.apenas_moradores_bloco = apenas_moradores_bloco
     else:
         espaco.gerenciado_por = "admin"
         espaco.bloco_vinculado = None
@@ -3057,12 +3158,16 @@ def mudancas_morador(unidade):
         return redirect(url_for("mudancas_morador"))
 
     historico = (
-        AgendamentoMudanca.query.filter_by(
-            unidade_id=unidade.id, condominio_id=unidade.condominio_id
+        AgendamentoMudanca.query.filter(
+            AgendamentoMudanca.unidade_id == unidade.id,
+            or_(
+                AgendamentoMudanca.condominio_id == unidade.condominio_id,
+                AgendamentoMudanca.condominio_id.is_(None),
+            ),
         )
         .order_by(
-            AgendamentoMudanca.data_mudanca.desc(),
             AgendamentoMudanca.data_solicitacao.desc(),
+            AgendamentoMudanca.id.desc(),
         )
         .all()
     )
@@ -3534,6 +3639,12 @@ def init_app(app):
         "/reservas/solicitar",
         "solicitar_reserva",
         solicitar_reserva,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/reservas/<int:reserva_id>/convidados",
+        "salvar_convidados_reserva",
+        salvar_convidados_reserva,
         methods=["POST"],
     )
     app.add_url_rule(

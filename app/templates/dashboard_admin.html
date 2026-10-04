@@ -226,7 +226,7 @@
                     <tr>
                         <th>Login</th>
                         <th>Tipo de Acesso</th>
-                        <th>Bloco Responsável</th>
+                        <th>Escopo</th>
                         <th class="text-end">Ações</th>
                     </tr>
                 </thead>
@@ -249,11 +249,22 @@
                         </td>
                         <td>
                             {% if usuario.role == 'sindico' %}
-                                {% for agrup in usuario.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
-                                    {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                                {% set permitidos = usuario.get_blocos_permitidos() %}
+                                {% if permitidos is none %}
+                                    Todos os blocos
+                                {% elif permitidos %}
+                                    {% for codigo in permitidos %}Bloco {{ codigo }}{% if not loop.last %}, {% endif %}{% endfor %}
                                 {% else %}
                                     —
-                                {% endfor %}
+                                {% endif %}
+                                <div class="small text-muted">
+                                    {% if usuario.perm_portaria %}Portaria{% endif %}
+                                    {% if usuario.perm_reservas_geral %}{% if usuario.perm_portaria %} · {% endif %}Reservas{% endif %}
+                                    {% if usuario.perm_configuracoes %}{% if usuario.perm_portaria or usuario.perm_reservas_geral %} · {% endif %}Configurações{% endif %}
+                                    {% if not usuario.perm_portaria and not usuario.perm_reservas_geral and not usuario.perm_configuracoes %}
+                                    Só o próprio escopo
+                                    {% endif %}
+                                </div>
                             {% else %}
                                 —
                             {% endif %}
@@ -261,6 +272,13 @@
                         <td class="text-end">
                             {% if usuario.id != current_user.id and usuario.role != 'admin' %}
                             <div class="d-inline-flex flex-wrap gap-2 justify-content-end">
+                                {% if usuario.role == 'sindico' %}
+                                <button type="button" class="btn btn-sm btn-outline-primary"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalEscopoSindico{{ usuario.id }}">
+                                    Escopo e permissões
+                                </button>
+                                {% endif %}
                                 <button type="button" class="btn btn-sm btn-outline-warning"
                                         data-bs-toggle="modal"
                                         data-bs-target="#modalSenhaUsuario{{ usuario.id }}">
@@ -284,6 +302,38 @@
                 </tbody>
             </table>
         </div>
+        {% for usuario in equipe_acessos %}
+        {% if usuario.role == 'sindico' and usuario.id != current_user.id %}
+        {% set permitidos = usuario.get_blocos_permitidos() %}
+        <div class="modal fade" id="modalEscopoSindico{{ usuario.id }}" tabindex="-1"
+             aria-labelledby="modalEscopoSindicoLabel{{ usuario.id }}" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <form method="post"
+                          action="{{ url_for('admin_editar_escopo_sindico', usuario_id=usuario.id) }}">
+                        <div class="modal-header">
+                            <h2 class="modal-title h5" id="modalEscopoSindicoLabel{{ usuario.id }}">
+                                Escopo de {{ usuario.username }}
+                            </h2>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                        </div>
+                        <div class="modal-body">
+                            {% with id_prefix="escopo-" ~ usuario.id, blocos=blocos_residenciais, escopo_todos=(permitidos is none), escopo_codigos=(permitidos or []), perm_portaria=usuario.perm_portaria, perm_reservas_geral=usuario.perm_reservas_geral, perm_configuracoes=usuario.perm_configuracoes %}
+                            {% include "includes/escopo_sindico_campos.html" %}
+                            {% endwith %}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                                Cancelar
+                            </button>
+                            <button type="submit" class="btn btn-primary">Salvar escopo</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
         {% for usuario in equipe_acessos %}
         {% if usuario.id != current_user.id and usuario.role != 'admin' %}
         <div class="modal fade" id="modalSenhaUsuario{{ usuario.id }}" tabindex="-1"
@@ -721,6 +771,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/escopo-sindico.js') }}"></script>
 <script>
     (function () {
         const hash = (window.location.hash || "").replace("#", "");

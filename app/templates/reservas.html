@@ -66,6 +66,7 @@
                                 <th>Data Reservada</th>
                                 <th>Financeiro</th>
                                 <th>Status</th>
+                                <th>Convidados</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -80,6 +81,7 @@
                                         {% set falta_pagar = reserva.espaco.valor_reserva - reserva.valor_pago %}
                                         {% if falta_pagar > 0 %}
                                             <span class="badge bg-warning text-dark mt-1">Falta: R$ {{ "%.2f"|format(falta_pagar) }}</span>
+                                            <div class="small text-muted mt-1">Há saldo pendente. Quite com a administração antes do evento.</div>
                                         {% else %}
                                             <span class="badge bg-success mt-1">Quitado</span>
                                         {% endif %}
@@ -98,11 +100,57 @@
                                     <span class="badge text-bg-secondary">{{ reserva.status }}</span>
                                     {% endif %}
                                 </td>
+                                <td>
+                                    {% if reserva.status in ['Pendente', 'Aprovada'] %}
+                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#modalConvidadosMorador{{ reserva.id }}">
+                                        Lista de convidados
+                                    </button>
+                                    <div class="small text-muted mt-1">
+                                        {% if reserva.lista_convidados %}
+                                        {{ reserva.lista_convidados.splitlines()|length }} nome(s)
+                                        {% else %}
+                                        Nenhum nome ainda
+                                        {% endif %}
+                                    </div>
+                                    {% else %}
+                                    <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
+                {% if minhas_reservas %}
+                {% for reserva in minhas_reservas %}
+                {% if reserva.status in ['Pendente', 'Aprovada'] %}
+                <div class="modal fade" id="modalConvidadosMorador{{ reserva.id }}" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="post" action="{{ url_for('salvar_convidados_reserva', reserva_id=reserva.id) }}">
+                                <div class="modal-header">
+                                    <h2 class="modal-title h5">Convidados — {{ reserva.espaco.nome }}</h2>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <p class="small text-muted">Um nome por linha. A portaria confere esta lista no dia do evento.</p>
+                                    <textarea class="form-control" name="lista_convidados" rows="8"
+                                              maxlength="8000"
+                                              placeholder="Maria Souza&#10;João Lima">{{ reserva.lista_convidados or '' }}</textarea>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                    <button type="submit" class="btn btn-primary">Salvar lista</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% endif %}
                 {% else %}
                 <div class="alert alert-light border mb-0">
                     Você ainda não fez nenhuma solicitação de reserva.
@@ -124,7 +172,8 @@
                         <input type="hidden" name="espaco_id" id="modalEspacoId">
                         <div class="mb-0">
                             <label for="modalDataReserva" class="form-label">Data desejada</label>
-                            <input type="text" name="data_reserva" id="modalDataReserva" class="form-control" placeholder="dd/mm/aaaa" required>
+                            <input type="date" name="data_reserva" id="modalDataReserva" class="form-control"
+                                   min="{{ data_minima_reserva }}" max="{{ data_maxima_reserva }}" required>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -586,8 +635,24 @@
     const campoModalEspacoId = document.getElementById("modalEspacoId");
     const campoModalDataReserva = document.getElementById("modalDataReserva");
     const tituloModalReserva = document.getElementById("modalReservaLabel");
-    let seletorDataReserva = null;
-    let diasPermitidosEspaco = [];
+    const mapaDiasReserva = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+
+    function validarDiaReserva() {
+        if (!campoModalDataReserva || !campoModalDataReserva.value) {
+            return;
+        }
+        const escolhida = new Date(campoModalDataReserva.value + "T12:00:00");
+        const permitidos = (campoModalDataReserva.dataset.dias || "")
+            .split(",")
+            .map((dia) => dia.trim().toLowerCase())
+            .filter(Boolean);
+        const dia = mapaDiasReserva[escolhida.getDay()];
+        if (permitidos.length && !permitidos.includes(dia)) {
+            campoModalDataReserva.setCustomValidity("Este espaço não funciona nesse dia da semana.");
+        } else {
+            campoModalDataReserva.setCustomValidity("");
+        }
+    }
 
     if (modalReserva && campoModalDataReserva) {
         modalReserva.addEventListener("show.bs.modal", (evento) => {
@@ -595,35 +660,19 @@
             const espacoId = botao?.getAttribute("data-id") || "";
             const espacoNome = botao?.getAttribute("data-nome") || "Espaço";
             const diasRaw = botao?.getAttribute("data-dias") || "";
-
             campoModalEspacoId.value = espacoId;
             tituloModalReserva.textContent = `Solicitar reserva - ${espacoNome}`;
-            diasPermitidosEspaco = diasRaw
-                .split(",")
-                .map((dia) => dia.trim().toLowerCase())
-                .filter(Boolean);
-            const mapaDias = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
-
-            if (seletorDataReserva) {
-                seletorDataReserva.destroy();
+            campoModalDataReserva.dataset.dias = diasRaw;
+            campoModalDataReserva.value = "";
+            campoModalDataReserva.setCustomValidity("");
+        });
+        campoModalDataReserva.addEventListener("change", validarDiaReserva);
+        campoModalDataReserva.form?.addEventListener("submit", function (evento) {
+            validarDiaReserva();
+            if (!campoModalDataReserva.checkValidity()) {
+                evento.preventDefault();
+                campoModalDataReserva.reportValidity();
             }
-
-            seletorDataReserva = flatpickr(campoModalDataReserva, {
-                locale: "pt",
-                dateFormat: "Y-m-d",
-                altInput: true,
-                altFormat: "d/m/Y",
-                minDate: "today",
-                maxDate: new Date().fp_incr(90),
-                disable: [
-                    (date) => {
-                        const diaSemana = mapaDias[date.getDay()];
-                        return !diasPermitidosEspaco.includes(diaSemana);
-                    },
-                ],
-            });
-
-            seletorDataReserva.clear();
         });
     }
 </script>

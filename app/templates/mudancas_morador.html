@@ -48,8 +48,8 @@
 
                     <div class="mb-3">
                         <label class="form-label" for="data_mudanca">Data da Mudança</label>
-                        <input type="text" class="form-control datepicker" id="data_mudanca"
-                               name="data_mudanca" placeholder="DD/MM/AAAA" required>
+                        <input type="date" class="form-control" id="data_mudanca"
+                               name="data_mudanca" min="{{ data_minima }}" required>
                         <div class="form-text">Mínimo de 3 dias de antecedência. Domingos não são permitidos.</div>
                     </div>
 
@@ -68,7 +68,7 @@
 
         <div class="card shadow-sm">
             <div class="card-body p-4">
-                <h2 class="h6 mb-3">Histórico de Solicitações</h2>
+                <h2 class="h6 mb-3">Histórico de Solicitações{% if historico %} ({{ historico|length }}){% endif %}</h2>
                 {% if historico %}
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
@@ -94,10 +94,14 @@
                                 <td>
                                     {% if item.status == 'Aprovada' %}
                                     <span class="badge text-bg-success">{{ item.status }}</span>
+                                    {% elif item.status == 'Concluída' %}
+                                    <span class="badge text-bg-primary">{{ item.status }}</span>
                                     {% elif item.status in status_pendentes %}
                                     <span class="badge text-bg-warning">{{ item.status }}</span>
                                     {% elif item.status == 'Rejeitada' %}
                                     <span class="badge text-bg-danger">{{ item.status }}</span>
+                                    {% elif item.status == 'Pendente Administração' %}
+                                    <span class="badge text-bg-info">{{ item.status }}</span>
                                     {% else %}
                                     <span class="badge text-bg-secondary">{{ item.status }}</span>
                                     {% endif %}
@@ -150,17 +154,23 @@
     tipoEntrada.addEventListener("change", atualizarAlertas);
     tipoSaida.addEventListener("change", atualizarAlertas);
 
-    flatpickr(".datepicker", {
-        locale: "pt",
-        dateFormat: "Y-m-d",
-        altInput: true,
-        altFormat: "d/m/Y",
-        minDate: new Date().fp_incr(3),
-        disable: [
-            function(date) {
-                return (date.getDay() === 0);
-            }
-        ]
+    const formMudanca = document.getElementById("formMudanca");
+    const campoDataMudanca = document.getElementById("data_mudanca");
+    formMudanca.addEventListener("submit", function (evento) {
+        if (!campoDataMudanca.value) {
+            return;
+        }
+        const escolhida = new Date(campoDataMudanca.value + "T12:00:00");
+        if (escolhida.getDay() === 0) {
+            evento.preventDefault();
+            campoDataMudanca.setCustomValidity("Mudanças não são permitidas aos domingos.");
+            campoDataMudanca.reportValidity();
+            return;
+        }
+        campoDataMudanca.setCustomValidity("");
+    });
+    campoDataMudanca.addEventListener("input", function () {
+        campoDataMudanca.setCustomValidity("");
     });
 </script>
 {% endblock %}

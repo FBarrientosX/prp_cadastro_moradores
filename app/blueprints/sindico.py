@@ -98,11 +98,11 @@ def sindico_logout():
 
 @sindico_required
 def sindico_dashboard():
-    from app.routes import _blocos_codigo_sindico, _label_agrupamentos_sindico
+    from app.routes import _label_agrupamentos_sindico, _recorte_blocos_consulta
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
+    blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
 
     unidades_cadastradas = (
         Unidade.query.filter(
@@ -145,7 +145,11 @@ def sindico_dashboard():
         )
     ]
 
-    from app.blueprints.admin import encomendas_pendentes_setores
+    encomendas_setores = []
+    if usuario.perm_configuracoes:
+        from app.blueprints.admin import encomendas_pendentes_setores
+
+        encomendas_setores = encomendas_pendentes_setores(condominio_id)
 
     return render_template(
         "dashboard_sindico.html",
@@ -155,7 +159,9 @@ def sindico_dashboard():
         unidades_pendentes=unidades_pendentes,
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
-        encomendas_setores=encomendas_pendentes_setores(condominio_id),
+        encomendas_setores=encomendas_setores,
+        blocos_opcoes=blocos_opcoes,
+        bloco_filtro=bloco_filtro,
     )
 
 
@@ -433,15 +439,15 @@ def sindico_validar_unidade(unidade_id):
 def sindico_mudancas():
     from app.routes import (
         _agendamento_do_tenant,
-        _blocos_codigo_sindico,
         _label_agrupamentos_sindico,
+        _recorte_blocos_consulta,
         _registrar_auditoria,
         _sindico_gerencia_bloco,
     )
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
+    blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
 
     if request.method == "POST":
         agendamento_id = request.form.get("agendamento_id", type=int)
@@ -549,6 +555,8 @@ def sindico_mudancas():
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
         status_pendente_sindico=StatusAgendamentoMudanca.PENDENTE_SINDICO,
+        blocos_opcoes=blocos_opcoes,
+        bloco_filtro=bloco_filtro,
     )
 
 

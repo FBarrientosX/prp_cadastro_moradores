@@ -56,12 +56,13 @@
     }
 </style>
 
-<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
     <div>
         <h1 class="h4 mb-1">Gestão de Ocorrências</h1>
         <p class="text-muted mb-0">Painel Kanban dos chamados abertos pelos moradores.</p>
     </div>
 </div>
+{% include "includes/filtro_blocos_sindico.html" %}
 
 <div class="kanban-board">
     {% set colunas_ui = [

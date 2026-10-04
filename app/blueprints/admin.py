@@ -444,6 +444,7 @@ def admin_index():
         equipe_acessos=equipe_acessos,
         current_user=usuario,
         aba_ativa=aba_ativa,
+        blocos_residenciais=_blocos_residenciais(),
     )
 
 
@@ -993,17 +994,91 @@ def admin_salvar_proprietario(unidade_id):
     return redirect(url_for("admin_index"))
 
 
+def _blocos_residenciais():
+    from app.utils import get_blocos
+
+    return list(get_blocos())
+
+
+def _ler_escopo_sindico_form():
+    """Retorna ('*', True), ('1,2', True) ou (None, False) se nada foi marcado."""
+    validos = _blocos_residenciais()
+    if request.form.get("escopo_todos") == "1":
+        return "*", True
+    escolhidos = []
+    for codigo in request.form.getlist("blocos_escopo"):
+        codigo = str(codigo).strip()
+        if codigo in validos and codigo not in escolhidos:
+            escolhidos.append(codigo)
+    if not escolhidos:
+        return None, False
+    return ",".join(escolhidos), True
+
+
+def _ler_permissoes_sindico_form():
+    return (
+        request.form.get("perm_portaria") == "1",
+        request.form.get("perm_reservas_geral") == "1",
+        request.form.get("perm_configuracoes") == "1",
+    )
+
+
+def _sincronizar_agrupamentos_sindico(usuario):
+    """Espelha blocos_escopo em SindicoAgrupamento (um registro por bloco)."""
+    SindicoAgrupamento.query.filter_by(
+        usuario_id=usuario.id,
+        condominio_id=usuario.condominio_id,
+    ).delete(synchronize_session=False)
+    codigos = usuario.get_blocos_permitidos()
+    if codigos is None:
+        codigos = _blocos_residenciais()
+    for codigo in codigos:
+        db.session.add(
+            SindicoAgrupamento(
+                usuario_id=usuario.id,
+                condominio_id=usuario.condominio_id,
+                nome_agrupamento=codigo,
+            )
+        )
+
+
+def _aplicar_escopo_sindico(usuario):
+    escopo, ok = _ler_escopo_sindico_form()
+    if not ok:
+        return "Selecione ao menos um bloco ou marque Todos os Blocos (Síndico Geral)."
+    usuario.blocos_escopo = escopo
+    (
+        usuario.perm_portaria,
+        usuario.perm_reservas_geral,
+        usuario.perm_configuracoes,
+    ) = _ler_permissoes_sindico_form()
+    _sincronizar_agrupamentos_sindico(usuario)
+    return None
+
+
+def _bloquear_sindico_sem_configuracao():
+    usuario = get_current_user()
+    if usuario and usuario.role == Role.SINDICO and not usuario.perm_configuracoes:
+        flash(
+            "Seu acesso de síndico não inclui configurações e setores administrativos.",
+            "warning",
+        )
+        return redirect(url_for("sindico_dashboard"))
+    return None
+
+
 @admin_required
 def admin_criar_usuario():
+    from app.routes import _registrar_auditoria
+
     usuario_logado = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario_logado)
-    blocos = [f"Bloco {indice}" for indice in range(1, 9)]
+    blocos = _blocos_residenciais()
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         senha = request.form.get("senha", "")
         tipo_acesso = request.form.get("tipo_acesso", "").strip()
-        bloco_responsavel = request.form.get("bloco_responsavel", "").strip()
 
         if not username:
             flash("Informe o login do usuário.", "danger")
@@ -1022,10 +1097,6 @@ def admin_criar_usuario():
             flash("Tipo de acesso inválido.", "danger")
             return render_template("criar_usuario.html", blocos=blocos)
 
-        if role == Role.SINDICO and bloco_responsavel not in blocos:
-            flash("Selecione um bloco válido para o síndico.", "danger")
-            return render_template("criar_usuario.html", blocos=blocos)
-
         if Usuario.query.filter_by(username=username).first():
             flash("Já existe um usuário com esse login.", "warning")
             return render_template("criar_usuario.html", blocos=blocos)
@@ -1034,26 +1105,56 @@ def admin_criar_usuario():
             username=username,
             role=role,
             condominio_id=condominio_id,
+            perm_portaria=False,
+            perm_reservas_geral=False,
+            perm_configuracoes=False,
         )
         novo_usuario.set_password(senha)
         db.session.add(novo_usuario)
         db.session.flush()
 
         if role == Role.SINDICO:
-            db.session.add(
-                SindicoAgrupamento(
-                    usuario_id=novo_usuario.id,
-                    condominio_id=condominio_id,
-                    nome_agrupamento=bloco_responsavel,
-                )
-            )
+            erro = _aplicar_escopo_sindico(novo_usuario)
+            if erro:
+                db.session.rollback()
+                flash(erro, "danger")
+                return render_template("criar_usuario.html", blocos=blocos)
 
+        _registrar_auditoria(
+            usuario_logado,
+            f"Criou acesso de {role} '{username}'.",
+        )
         db.session.commit()
 
         flash("Usuário criado com sucesso.", "success")
         return _redirect_equipe_acessos()
 
     return render_template("criar_usuario.html", blocos=blocos)
+
+
+@admin_required
+def admin_editar_escopo_sindico(usuario_id):
+    from app.routes import _registrar_auditoria, _usuario_do_tenant
+
+    usuario_logado = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario_logado)
+    alvo = _usuario_do_tenant(usuario_id, condominio_id)
+    if alvo.role != Role.SINDICO:
+        flash("O escopo de blocos vale apenas para síndicos.", "warning")
+        return _redirect_equipe_acessos()
+
+    erro = _aplicar_escopo_sindico(alvo)
+    if erro:
+        flash(erro, "danger")
+        return _redirect_equipe_acessos()
+
+    _registrar_auditoria(
+        usuario_logado,
+        f"Atualizou escopo e permissões do síndico '{alvo.username}'.",
+    )
+    db.session.commit()
+    flash("Escopo e permissões do síndico atualizados.", "success")
+    return _redirect_equipe_acessos()
 
 
 @admin_required
@@ -1095,7 +1196,7 @@ def admin_excluir_usuario(usuario_id):
 @admin_or_sindico_required
 def admin_ocorrencias():
     """Kanban de ocorrências do condomínio do admin/síndico logado."""
-    from app.routes import _blocos_codigo_sindico, _redirect_login_tenant
+    from app.routes import _recorte_blocos_consulta, _redirect_login_tenant
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
@@ -1103,11 +1204,11 @@ def admin_ocorrencias():
         flash("Conta sem condomínio vinculado.", "danger")
         return _redirect_login_tenant()
 
+    blocos_opcoes = []
+    bloco_filtro = ""
     query = Ocorrencia.query.filter_by(condominio_id=condominio_id)
     if usuario.role == Role.SINDICO:
-        # Síndico só vê ocorrências das unidades do(s) próprio(s) bloco(s) —
-        # mesmo recorte de jurisdição aplicado em todo o resto do app.
-        blocos_sindico = _blocos_codigo_sindico(usuario)
+        blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
         query = query.join(Unidade, Ocorrencia.unidade_id == Unidade.id).filter(
             Unidade.bloco.in_(blocos_sindico or [""])
         )
@@ -1126,6 +1227,8 @@ def admin_ocorrencias():
         colunas=colunas,
         status_ocorrencia=StatusOcorrencia,
         current_user=usuario,
+        blocos_opcoes=blocos_opcoes,
+        bloco_filtro=bloco_filtro,
     )
 
 
@@ -1498,6 +1601,9 @@ def _email_contato_valido(email):
 
 @admin_or_sindico_required
 def admin_setores():
+    bloqueio = _bloquear_sindico_sem_configuracao()
+    if bloqueio:
+        return bloqueio
     condominio_id = condominio_id_obrigatorio()
     setores = (
         Unidade.query.filter_by(
@@ -1525,6 +1631,9 @@ def admin_setores():
 
 @admin_or_sindico_required
 def admin_setores_criar():
+    bloqueio = _bloquear_sindico_sem_configuracao()
+    if bloqueio:
+        return bloqueio
     from secrets import token_urlsafe
 
     from werkzeug.security import generate_password_hash
@@ -1570,6 +1679,9 @@ def admin_setores_criar():
 
 @admin_or_sindico_required
 def admin_setores_excluir(setor_id):
+    bloqueio = _bloquear_sindico_sem_configuracao()
+    if bloqueio:
+        return bloqueio
     from sqlalchemy.exc import IntegrityError
 
     from app.routes import _registrar_auditoria
@@ -1622,6 +1734,9 @@ def admin_setores_excluir(setor_id):
 
 @admin_or_sindico_required
 def admin_setores_contato_salvar(setor_id):
+    bloqueio = _bloquear_sindico_sem_configuracao()
+    if bloqueio:
+        return bloqueio
     from app.routes import _registrar_auditoria
 
     condominio_id = condominio_id_obrigatorio()
@@ -1697,6 +1812,9 @@ def admin_setores_contato_salvar(setor_id):
 
 @admin_or_sindico_required
 def admin_setores_contato_excluir(setor_id, pessoa_id):
+    bloqueio = _bloquear_sindico_sem_configuracao()
+    if bloqueio:
+        return bloqueio
     from app.routes import _registrar_auditoria
 
     condominio_id = condominio_id_obrigatorio()
@@ -2076,6 +2194,12 @@ def admin_condominio():
     if usuario.role != Role.SUPERADMIN and not usuario.condominio_id:
         flash("Conta sem condomínio vinculado. Contate a administração.", "danger")
         return redirect(url_for("index"))
+    if usuario.role == Role.SINDICO and not usuario.perm_configuracoes:
+        flash(
+            "Seu acesso de síndico não inclui configurações e setores administrativos.",
+            "warning",
+        )
+        return redirect(url_for("sindico_dashboard"))
 
     condominio = _condominio_para_dados(usuario)
     if condominio is None:
@@ -2205,6 +2329,12 @@ def register(app):
         "admin_criar_usuario",
         admin_criar_usuario,
         methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/admin/usuarios/<int:usuario_id>/escopo",
+        "admin_editar_escopo_sindico",
+        admin_editar_escopo_sindico,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/admin/usuarios/excluir/<int:usuario_id>",

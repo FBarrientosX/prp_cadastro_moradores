@@ -4,7 +4,8 @@
 
 {% block content %}
 <h1 class="h4 mb-3">Agendamento de Mudanças — {{ agrupamentos_label }}</h1>
-<p class="text-muted mb-4">Solicitações das unidades do seu bloco.</p>
+<p class="text-muted mb-3">Solicitações das unidades do seu escopo.</p>
+{% include "includes/filtro_blocos_sindico.html" %}
 
 {% if solicitacoes %}
 <div class="table-responsive card shadow-sm">

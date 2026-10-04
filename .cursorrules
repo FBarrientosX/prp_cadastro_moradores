@@ -287,10 +287,20 @@ Somente Admin local:
 - atalho para `/portaria/dashboard` com botao "Voltar ao Painel Admin"
 
 Somente Sindico:
-- dashboard do bloco (mapa + validacao unificada)
-- `GET|POST /sindico/mudancas` (JOIN unidade; so agrupamentos do sindico)
-- ocorrencias do proprio recorte (`admin_ocorrencias` com filtro de bloco)
-- reservas de espacos vinculados ao(s) bloco(s)
+- Escopo em `Usuario.blocos_escopo`: `"1"`, `"1,2"` ou `"*"` (sindico geral).
+  `get_blocos_permitidos()` devolve a lista ou `None` (todos). Consultas usam
+  `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
+  mapa, mudancas e ocorrencias.
+- Sem permissao extra, so Aprovacao de Moradores, Mudancas e Ocorrencias
+  do proprio escopo. Flags default False:
+  `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
+- Sem `perm_portaria`: sidebar sem Portaria e rotas `/portaria` e
+  `/api/portaria` redirecionam ao painel do sindico.
+- Sem `perm_configuracoes`: sem Dados do Condominio nem Setores ADM
+  (`/admin/condominio`, `/admin/setores`).
+- Sem `perm_reservas_geral`: sem Reservas (`/reservas`).
+- Equipe (`/admin?tab=equipe`): admin define escopo e as tres permissoes
+  ao criar ou editar o sindico.
 
 Porteiro:
 - `/portaria`, `/portaria/dashboard`, `/portaria/acesso`, `/portaria/encomendas`
@@ -341,6 +351,10 @@ Parceiro logado:
 - `condominio_id` (NULL so para superadmin)
 - `senha_atualizada_em` (invalida tokens antigos)
 - `set_password()` atualiza hash e timestamp
+- Sindico: `blocos_escopo` (`"1"`, `"1,2"` ou `"*"`), `perm_portaria`,
+  `perm_reservas_geral`, `perm_configuracoes` (default False).
+  Boot copia agrupamentos/`bloco_responsavel` para `blocos_escopo` vazio
+  e nao liga as flags. `SindicoAgrupamento` continua espelhado na gravacao.
 
 `Unidade`:
 - (`bloco`, `apartamento`) unico no banco atual; sempre filtrar por `condominio_id`
@@ -448,8 +462,13 @@ Agendamento de Mudancas:
   Aprovar avanca para `Pendente Administração` com UPDATE condicional (anti-corrida).
 - Admin: aprova/rejeita pendentes da administracao (UPDATE condicional);
   pode criar mudanca avulsa ja `Aprovada` (bypass).
-- Portaria: check-in so se `Aprovada`, na data do dia (timezone America/Sao_Paulo)
-  e sem `data_chegada` previa.
+- Portaria: início (`data_chegada`) só se `Aprovada`, na data do dia
+  (America/Sao_Paulo) e sem chegada prévia. Finalizar grava `data_termino`,
+  observação opcional e status `Concluída`.
+- Histórico do morador lista todos os status da unidade, do mais recente
+  ao mais antigo. Cancelar só enquanto pendente.
+- Data da mudança no morador: `input type="date"` com `min` em D+3.
+  Domingo continua rejeitado no servidor.
 
 Reservas:
 - `GET /reservas` — morador solicita (so espacos `ativo=True`); admin/assistente/sindico gerenciam na jurisdicao.
@@ -458,12 +477,26 @@ Reservas:
   (`@gestao_espacos_required` + `_espaco_do_tenant` + `_usuario_pode_gerenciar_espaco`)
 - Exclusao aborta se houver historico de `Reserva`; usar desativar.
 - `GET /api/reservas/eventos` — FullCalendar
+- Morador edita `lista_convidados` enquanto a reserva está Pendente ou Aprovada
+  (`POST /reservas/<id>/convidados`). Saldo pendente aparece como `Falta: R$`.
+- Portaria `/portaria/reservas`: eventos de hoje e próximas aprovadas,
+  WhatsApp só com consentimento, entrega/devolução de chaves
+  (`chaves_entregue_em`, `chaves_devolvida_em` + porteiro).
 - E-mails: `enviar_email_nova_reserva`, `enviar_email_resposta_reserva`
 
 Portaria (`app/blueprints/portaria.py`):
 - dashboard do dia (mudancas aprovadas + contexto operacional)
+- `/portaria/mudancas` mostra `horario_mudancas` e todas as aprovadas futuras
+  (sem teto de 7 dias). WhatsApp do morador só com `autoriza_interfone`.
+- Livro: com plantão aberto, anotações rápidas (pílulas) gravam carimbo
+  de hora em `ocorrencias` antes do fechamento.
 - controle de acesso: entrada avulsa, baixa de autorizacao, saida
 - encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador.
+  A tela `/portaria/encomendas` coloca o recebimento ao lado da fila pendente.
+  Atalhos preenchem a descricao (`transportadora`). Chips usam moradores
+  `eh_morador`. WhatsApp (`wa.me`) so para quem tem `autoriza_interfone` e
+  telefone valido; pacote com 3 dias ou mais usa texto de lembrete. O
+  historico de entregues fica recolhido.
   Se a unidade for setor interno, apos o commit avisa por e-mail os contatos
   do setor que tiverem e-mail (`enviar_email_encomenda_setor`). Falha de SMTP
   nao desfaz a encomenda. Pendencias desses setores aparecem no dashboard

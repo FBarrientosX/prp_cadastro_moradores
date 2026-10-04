@@ -3,7 +3,7 @@ import os
 
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, text
 
 db = SQLAlchemy()
 
@@ -18,13 +18,36 @@ def _garantir_colunas_usuarios():
         return
 
     colunas = {coluna["name"] for coluna in inspetor.get_columns("usuarios")}
-    if "senha_atualizada_em" in colunas:
-        return
+    if "senha_atualizada_em" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE usuarios ADD COLUMN senha_atualizada_em DATETIME")
+        )
+        db.session.commit()
+        colunas.add("senha_atualizada_em")
 
-    db.session.execute(
-        text("ALTER TABLE usuarios ADD COLUMN senha_atualizada_em DATETIME")
-    )
-    db.session.commit()
+    alteracoes = []
+    if "blocos_escopo" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN blocos_escopo VARCHAR(120)"
+        )
+    if "perm_portaria" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN perm_portaria BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "perm_reservas_geral" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN perm_reservas_geral "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "perm_configuracoes" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN perm_configuracoes "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    for sql in alteracoes:
+        db.session.execute(text(sql))
+    if alteracoes:
+        db.session.commit()
 
 
 def _garantir_colunas_unidades():
@@ -341,6 +364,22 @@ def _garantir_colunas_reservas():
         )
     if "motivo_reserva" not in colunas:
         alteracoes.append("ALTER TABLE reservas ADD COLUMN motivo_reserva VARCHAR(255)")
+    if "lista_convidados" not in colunas:
+        alteracoes.append("ALTER TABLE reservas ADD COLUMN lista_convidados TEXT")
+    if "chaves_entregue_em" not in colunas:
+        alteracoes.append("ALTER TABLE reservas ADD COLUMN chaves_entregue_em DATETIME")
+    if "chaves_devolvida_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE reservas ADD COLUMN chaves_devolvida_em DATETIME"
+        )
+    if "porteiro_entrega_chaves_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE reservas ADD COLUMN porteiro_entrega_chaves_id INTEGER"
+        )
+    if "porteiro_devolucao_chaves_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE reservas ADD COLUMN porteiro_devolucao_chaves_id INTEGER"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -416,7 +455,28 @@ def _garantir_colunas_reservas():
     # WHERE status IN ('Pendente', 'Aprovada') — válido só no SQLite.
     # A exclusão de duplo-booking é feita na aplicação antes do commit
     # (solicitar_reserva / criar_reserva_gestao / responder_reserva).
-    pass
+    colunas_finais = {
+        coluna["name"] for coluna in inspect(db.engine).get_columns("reservas")
+    }
+    extras = []
+    if "lista_convidados" not in colunas_finais:
+        extras.append("ALTER TABLE reservas ADD COLUMN lista_convidados TEXT")
+    if "chaves_entregue_em" not in colunas_finais:
+        extras.append("ALTER TABLE reservas ADD COLUMN chaves_entregue_em DATETIME")
+    if "chaves_devolvida_em" not in colunas_finais:
+        extras.append("ALTER TABLE reservas ADD COLUMN chaves_devolvida_em DATETIME")
+    if "porteiro_entrega_chaves_id" not in colunas_finais:
+        extras.append(
+            "ALTER TABLE reservas ADD COLUMN porteiro_entrega_chaves_id INTEGER"
+        )
+    if "porteiro_devolucao_chaves_id" not in colunas_finais:
+        extras.append(
+            "ALTER TABLE reservas ADD COLUMN porteiro_devolucao_chaves_id INTEGER"
+        )
+    for sql in extras:
+        db.session.execute(text(sql))
+    if extras:
+        db.session.commit()
 
 
 def _garantir_coluna_condominio_espacos_comuns():
@@ -647,6 +707,18 @@ def _garantir_tabela_agendamentos_mudanca():
             "ALTER TABLE agendamentos_mudanca ADD COLUMN porteiro_id INTEGER"
         )
         adicionou_porteiro = True
+    if "data_termino" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN data_termino DATETIME"
+        )
+    if "observacao_portaria" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN observacao_portaria TEXT"
+        )
+    if "porteiro_termino_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE agendamentos_mudanca ADD COLUMN porteiro_termino_id INTEGER"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -1153,6 +1225,90 @@ def _migrar_sindico_agrupamentos():
     db.session.commit()
 
 
+def _backfill_blocos_escopo_sindico():
+    """Preenche blocos_escopo vazio a partir dos agrupamentos ou do bloco legado.
+
+    Não sobrescreve um escopo já gravado. Flags de permissão nascem False
+    no ALTER e não são alteradas aqui.
+    """
+    from app.utils import get_blocos, normalizar_bloco_codigo
+
+    inspetor = inspect(db.engine)
+    tabelas = set(inspetor.get_table_names())
+    if "usuarios" not in tabelas:
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("usuarios")}
+    if "blocos_escopo" not in colunas:
+        return
+
+    validos = set(get_blocos())
+
+    def _codigos(texto):
+        saida = []
+        for parte in str(texto or "").replace(";", ",").split(","):
+            codigo = normalizar_bloco_codigo(parte.strip())
+            if codigo in validos and codigo not in saida:
+                saida.append(codigo)
+        return saida
+
+    por_usuario = {}
+    if "sindico_agrupamento" in tabelas:
+        linhas = db.session.execute(
+            text(
+                "SELECT usuario_id, nome_agrupamento FROM sindico_agrupamento "
+                "ORDER BY id"
+            )
+        ).fetchall()
+        for usuario_id, nome in linhas:
+            por_usuario.setdefault(usuario_id, [])
+            for codigo in _codigos(nome):
+                if codigo not in por_usuario[usuario_id]:
+                    por_usuario[usuario_id].append(codigo)
+
+    for usuario_id, codigos in por_usuario.items():
+        if not codigos:
+            continue
+        db.session.execute(
+            text(
+                "UPDATE usuarios SET blocos_escopo = :escopo "
+                "WHERE id = :id AND role = 'sindico' "
+                "AND (blocos_escopo IS NULL OR blocos_escopo = '')"
+            ),
+            {"escopo": ",".join(codigos), "id": usuario_id},
+        )
+
+    for coluna_legada in ("bloco_responsavel", "bloco"):
+        if coluna_legada not in colunas:
+            continue
+        linhas = db.session.execute(
+            text(
+                "SELECT id, "
+                + coluna_legada
+                + " FROM usuarios "
+                "WHERE role = 'sindico' "
+                "AND (blocos_escopo IS NULL OR blocos_escopo = '') "
+                "AND "
+                + coluna_legada
+                + " IS NOT NULL AND "
+                + coluna_legada
+                + " != ''"
+            )
+        ).fetchall()
+        for usuario_id, bloco in linhas:
+            codigos = _codigos(bloco)
+            if not codigos:
+                continue
+            db.session.execute(
+                text(
+                    "UPDATE usuarios SET blocos_escopo = :escopo "
+                    "WHERE id = :id AND (blocos_escopo IS NULL OR blocos_escopo = '')"
+                ),
+                {"escopo": ",".join(codigos), "id": usuario_id},
+            )
+
+    db.session.commit()
+
+
 def _hex_para_rgb(hex_color):
     """Converte '#RRGGBB' em string 'r, g, b' para CSS --bs-primary-rgb."""
     valor = str(hex_color or "").strip().lstrip("#")
@@ -1258,14 +1414,22 @@ def create_app(config=None):
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
             if usuario.condominio_id:
                 query = query.filter(EspacoComum.condominio_id == usuario.condominio_id)
-            if usuario.role == "sindico":
-                blocos_sindico = [
-                    agrup.nome_agrupamento for agrup in usuario.agrupamentos
-                ]
-                if blocos_sindico:
-                    reservas_pendentes_count = query.filter(
-                        EspacoComum.bloco_vinculado.in_(blocos_sindico)
-                    ).count()
+            if usuario.role == "sindico" and usuario.perm_reservas_geral:
+                from app.utils import get_blocos
+
+                codigos = usuario.get_blocos_permitidos()
+                if codigos is None:
+                    codigos = list(get_blocos())
+                chaves = []
+                for codigo in codigos:
+                    chaves.extend([codigo, f"Bloco {codigo}"])
+                reservas_pendentes_count = query.filter(
+                    or_(
+                        EspacoComum.bloco_vinculado.in_(chaves or [""]),
+                        EspacoComum.bloco_vinculado.is_(None),
+                        EspacoComum.bloco_vinculado == "",
+                    )
+                ).count()
             elif usuario.role in ("admin", "assistente"):
                 reservas_pendentes_count = query.filter(
                     Reserva.espaco.has(gerenciado_por="admin")
@@ -1345,6 +1509,7 @@ def create_app(config=None):
         _seed_condominio_transicao()
         _seed_dados_condominio_prp()
         _migrar_sindico_agrupamentos()
+        _backfill_blocos_escopo_sindico()
         _garantir_colunas_unidades()
         _garantir_unicidade_unidade_por_tenant()
         _garantir_setores_internos()

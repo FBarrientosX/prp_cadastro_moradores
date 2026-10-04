@@ -15,7 +15,8 @@ import json
 import os
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from urllib.parse import quote
+from datetime import datetime
 
 from flask import current_app, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy.exc import IntegrityError
@@ -607,6 +608,65 @@ def portaria_acesso_saida(registro_id):
     return redirect(url_for("portaria_acesso"))
 
 
+def _telefone_whatsapp_valido(telefone):
+    """DDI 55 com DDD e número (10 ou 11 dígitos nacionais). Sem isso, não há link."""
+    whatsapp, _formatado = _telefones_interfone(telefone)
+    if len(whatsapp) not in (12, 13):
+        return ""
+    return whatsapp
+
+
+def _href_whatsapp_morador(unidade, texto):
+    """Link wa.me só para morador com consentimento de interfone e telefone válido."""
+    if unidade is None:
+        return None
+    pessoas = (
+        Pessoa.query.filter_by(
+            unidade_id=unidade.id,
+            eh_morador=True,
+            autoriza_interfone=True,
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
+        .all()
+    )
+    for pessoa in pessoas:
+        numero = _telefone_whatsapp_valido(pessoa.telefone)
+        if not numero:
+            continue
+        corpo = texto
+        if "{nome}" in texto:
+            corpo = texto.replace("{nome}", pessoa.nome_completo)
+        return f"https://wa.me/{numero}?text={quote(corpo)}"
+    return None
+
+
+PILULAS_LIVRO = (
+    "Passagem de Plantão",
+    "Portões / Controle de Acesso",
+    "CFTV / Câmeras",
+    "Manutenção / Zeladoria",
+    "Barulho / Conduta",
+)
+
+HORARIO_MUDANCAS_PADRAO = (
+    "2ª a 6ª feira, das 08:00 às 17:00, e sábados, das 08:00 às 12:00."
+)
+
+
+def _texto_busca_unidade(unidade, nomes):
+    partes = [
+        unidade.identificador or "",
+        unidade.bloco or "",
+        unidade.apartamento or "",
+        " ".join(nomes),
+    ]
+    if unidade.eh_setor_interno:
+        partes.append("adm setor")
+        if _sem_acento(unidade.apartamento or "").startswith("administra"):
+            partes.append("administracao")
+    return " ".join(parte for parte in partes if parte)
+
+
 @portaria_required
 def portaria_encomendas():
     from app.routes import _condominio_id_portaria
@@ -632,17 +692,6 @@ def portaria_encomendas():
         .order_by(Encomenda.data_recebimento.asc())
         .all()
     )
-    # Unidade.pessoas é lazy="dynamic" (não aceita joinedload); pré-carrega em lote.
-    pessoas_por_unidade = {}
-    unidade_ids = {item.unidade_id for item in pendentes if item.unidade_id}
-    if unidade_ids:
-        for pessoa in (
-            Pessoa.query.filter(Pessoa.unidade_id.in_(unidade_ids))
-            .order_by(Pessoa.nome_completo.asc())
-            .all()
-        ):
-            pessoas_por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa)
-
     historico = (
         Encomenda.query.join(Unidade)
         .filter(
@@ -661,13 +710,59 @@ def portaria_encomendas():
         )
         .all()
     )
+    pessoas = (
+        Pessoa.query.join(Unidade)
+        .filter(
+            Unidade.condominio_id == condominio_id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
+        .all()
+    )
+    nomes_por_unidade = {}
+    contatos_por_unidade = {}
+    for pessoa in pessoas:
+        nomes_por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa.nome_completo)
+        telefone = _telefone_whatsapp_valido(pessoa.telefone) if pessoa.autoriza_interfone else ""
+        if telefone:
+            contatos_por_unidade.setdefault(pessoa.unidade_id, []).append(
+                {"nome": pessoa.nome_completo, "telefone": telefone}
+            )
+    busca_unidades = {
+        unidade.id: _texto_busca_unidade(
+            unidade, nomes_por_unidade.get(unidade.id, [])
+        )
+        for unidade in unidades
+    }
+    nova_id = request.args.get("nova", type=int)
+    encomenda_nova = None
+    if nova_id:
+        candidata = Encomenda.query.options(joinedload(Encomenda.unidade)).filter_by(
+            id=nova_id, condominio_id=condominio_id
+        ).first()
+        if candidata and candidata.status == StatusEncomenda.PENDENTE:
+            encomenda_nova = candidata
+    contatos_aviso = []
+    if encomenda_nova:
+        todos = contatos_por_unidade.get(encomenda_nova.unidade_id, [])
+        escolhido = (encomenda_nova.destinatario or "").casefold()
+        if escolhido:
+            contatos_aviso = [
+                contato for contato in todos if contato["nome"].casefold() == escolhido
+            ]
+        else:
+            contatos_aviso = list(todos)
     return render_template(
         "portaria/encomendas.html",
         current_user=usuario,
         pendentes=pendentes,
         historico=historico,
         unidades=unidades,
-        pessoas_por_unidade=pessoas_por_unidade,
+        nomes_por_unidade=nomes_por_unidade,
+        contatos_por_unidade=contatos_por_unidade,
+        busca_unidades=busca_unidades,
+        encomenda_nova=encomenda_nova,
+        contatos_aviso=contatos_aviso,
         agora_entrega=_agora_sao_paulo(),
     )
 
@@ -776,12 +871,7 @@ def portaria_encomendas_receber():
                 "todos os e-mails do setor.",
                 "warning",
             )
-    flash(
-        f"Encomenda recebida para {unidade.identificador} "
-        f"às {agora.strftime('%H:%M')}.",
-        "success",
-    )
-    return redirect(url_for("portaria_encomendas"))
+    return redirect(url_for("portaria_encomendas", nova=encomenda.id))
 
 
 @portaria_required
@@ -1022,6 +1112,53 @@ def portaria_mudanca_chegar(agendamento_id):
 
 
 @portaria_required
+def portaria_mudanca_finalizar(agendamento_id):
+    from app.routes import (
+        _agendamento_do_tenant,
+        _condominio_id_portaria,
+        _registrar_auditoria,
+    )
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
+    if agendamento.status != StatusAgendamentoMudanca.APROVADA:
+        flash("Somente uma mudança aprovada e em andamento pode ser finalizada.", "warning")
+        return redirect(url_for("portaria_mudancas"))
+    if not agendamento.data_chegada:
+        flash("Registre o início da mudança antes de finalizá-la.", "warning")
+        return redirect(url_for("portaria_mudancas"))
+    if agendamento.data_termino:
+        flash("Esta mudança já foi finalizada.", "info")
+        return redirect(url_for("portaria_mudancas"))
+
+    observacao = (request.form.get("observacao_portaria") or "").strip() or None
+    agendamento.data_termino = _agora_sao_paulo()
+    agendamento.observacao_portaria = observacao
+    agendamento.porteiro_termino_id = usuario.id
+    agendamento.status = StatusAgendamentoMudanca.CONCLUIDA
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' finalizou a mudança {agendamento.tipo} "
+        f"da unidade {agendamento.unidade.identificador} às "
+        f"{agendamento.data_termino.strftime('%d/%m/%Y %H:%M')}.",
+    )
+    db.session.commit()
+    flash(
+        f"Mudança finalizada às {agendamento.data_termino.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_mudancas"))
+
+
+@portaria_required
 def portaria_mudancas():
     from app.routes import _condominio_id_portaria, _nome_responsavel_unidade
 
@@ -1035,13 +1172,19 @@ def portaria_mudancas():
         return redirect(url_for("portaria_dashboard"))
 
     hoje = _hoje_sao_paulo()
-    limite = hoje + timedelta(days=7)
-    consulta = AgendamentoMudanca.query.filter(
-        AgendamentoMudanca.condominio_id == condominio_id,
-        AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
-    )
+    condominio = Condominio.query.filter_by(id=condominio_id).first()
+    horario = (condominio.horario_mudancas or "").strip() if condominio else ""
     mudancas_hoje = (
-        consulta.filter(AgendamentoMudanca.data_mudanca == hoje)
+        AgendamentoMudanca.query.filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
+            AgendamentoMudanca.data_mudanca == hoje,
+            AgendamentoMudanca.status.in_(
+                (
+                    StatusAgendamentoMudanca.APROVADA,
+                    StatusAgendamentoMudanca.CONCLUIDA,
+                )
+            ),
+        )
         .order_by(AgendamentoMudanca.id.asc())
         .all()
     )
@@ -1050,11 +1193,20 @@ def portaria_mudancas():
             AgendamentoMudanca.condominio_id == condominio_id,
             AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
             AgendamentoMudanca.data_mudanca > hoje,
-            AgendamentoMudanca.data_mudanca <= limite,
         )
         .order_by(AgendamentoMudanca.data_mudanca.asc(), AgendamentoMudanca.id.asc())
         .all()
     )
+
+    def _href_mudanca(item):
+        texto = (
+            "Olá, {nome}! Aqui é da Portaria do condomínio. "
+            f"Confirmamos a mudança ({item.tipo}) da unidade "
+            f"{item.unidade.identificador} em "
+            f"{item.data_mudanca.strftime('%d/%m/%Y')}."
+        )
+        return _href_whatsapp_morador(item.unidade, texto)
+
     return render_template(
         "portaria_mudancas.html",
         current_user=usuario,
@@ -1062,6 +1214,9 @@ def portaria_mudancas():
         mudancas_hoje=mudancas_hoje,
         mudancas_proximos=mudancas_proximos,
         nome_responsavel=_nome_responsavel_unidade,
+        horario_mudancas=horario or HORARIO_MUDANCAS_PADRAO,
+        href_whatsapp_mudanca=_href_mudanca,
+        status_concluida=StatusAgendamentoMudanca.CONCLUIDA,
     )
 
 
@@ -1079,6 +1234,8 @@ def portaria_reservas():
         return redirect(url_for("portaria_dashboard"))
 
     hoje = _hoje_sao_paulo()
+    from app.routes import _nome_responsavel_unidade
+
     reservas = (
         Reserva.query.join(EspacoComum)
         .filter(
@@ -1089,12 +1246,91 @@ def portaria_reservas():
         .order_by(Reserva.data_reserva.asc(), EspacoComum.nome.asc())
         .all()
     )
+    reservas_hoje = [item for item in reservas if item.data_reserva == hoje]
+    reservas_proximas = [item for item in reservas if item.data_reserva > hoje]
+
+    def _href_reserva(item):
+        if item.unidade is None:
+            return None
+        texto = (
+            "Olá, {nome}! Aqui é da Portaria do condomínio. "
+            f"Confirmamos a reserva de {item.espaco.nome} em "
+            f"{item.data_reserva.strftime('%d/%m/%Y')} para a unidade "
+            f"{item.unidade.identificador}."
+        )
+        return _href_whatsapp_morador(item.unidade, texto)
+
     return render_template(
         "portaria/reservas.html",
         current_user=usuario,
-        reservas=reservas,
+        reservas_hoje=reservas_hoje,
+        reservas_proximas=reservas_proximas,
         hoje=hoje,
+        nome_responsavel=_nome_responsavel_unidade,
+        href_whatsapp_reserva=_href_reserva,
     )
+
+
+def _reserva_aprovada_do_tenant(reserva_id, condominio_id):
+    return (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            Reserva.id == reserva_id,
+            EspacoComum.condominio_id == condominio_id,
+            Reserva.status == "Aprovada",
+        )
+        .first_or_404()
+    )
+
+
+@portaria_required
+def portaria_reserva_chaves(reserva_id):
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    reserva = _reserva_aprovada_do_tenant(reserva_id, condominio_id)
+    acao = (request.form.get("acao") or "").strip()
+    agora = _agora_sao_paulo()
+    if acao == "entrega":
+        if reserva.chaves_entregue_em:
+            flash("A entrega das chaves já foi registrada.", "info")
+            return redirect(url_for("portaria_reservas"))
+        reserva.chaves_entregue_em = agora
+        reserva.porteiro_entrega_chaves_id = usuario.id
+        _registrar_auditoria(
+            usuario,
+            f"Portaria registrou entrega de chaves da reserva #{reserva.id} "
+            f"({reserva.espaco.nome}) às {agora.strftime('%d/%m/%Y %H:%M')}.",
+        )
+        flash(f"Entrega de chaves registrada às {agora.strftime('%H:%M')}.", "success")
+    elif acao == "devolucao":
+        if not reserva.chaves_entregue_em:
+            flash("Registre a entrega das chaves antes da devolução.", "warning")
+            return redirect(url_for("portaria_reservas"))
+        if reserva.chaves_devolvida_em:
+            flash("A devolução das chaves já foi registrada.", "info")
+            return redirect(url_for("portaria_reservas"))
+        reserva.chaves_devolvida_em = agora
+        reserva.porteiro_devolucao_chaves_id = usuario.id
+        _registrar_auditoria(
+            usuario,
+            f"Portaria registrou devolução de chaves da reserva #{reserva.id} "
+            f"({reserva.espaco.nome}) às {agora.strftime('%d/%m/%Y %H:%M')}.",
+        )
+        flash(f"Devolução de chaves registrada às {agora.strftime('%H:%M')}.", "success")
+    else:
+        flash("Ação de chaves inválida.", "danger")
+        return redirect(url_for("portaria_reservas"))
+    db.session.commit()
+    return redirect(url_for("portaria_reservas"))
 
 
 def _guarita_do_tenant(guarita_id, condominio_id):
@@ -1288,6 +1524,7 @@ def portaria_livro():
         condominio=condominio,
         permitir_apoio=bool(condominio and condominio.permitir_apoio),
         permitir_ronda=bool(condominio and condominio.permitir_ronda),
+        pilulas_livro=PILULAS_LIVRO,
         itens_checklist=[],
         porteiros=porteiros,
         guaritas=guaritas,
@@ -1507,12 +1744,22 @@ def portaria_plantao_evento():
         return redirect(url_for("portaria_dashboard"))
 
     plantao_id = request.form.get("plantao_id", type=int)
-    texto = (request.form.get("evento") or request.form.get("texto") or "").strip()
+    pilula = (request.form.get("pilula") or "").strip()
+    texto_livre = (request.form.get("evento") or request.form.get("texto") or "").strip()
+    if pilula and pilula not in PILULAS_LIVRO:
+        flash("Anotação rápida inválida.", "danger")
+        return redirect(url_for("portaria_livro"))
+    if pilula and texto_livre:
+        texto = f"{pilula}: {texto_livre}"
+    elif pilula:
+        texto = pilula
+    else:
+        texto = texto_livre
     if not plantao_id:
         flash("Plantão inválido.", "danger")
         return redirect(url_for("portaria_livro"))
     if not texto:
-        flash("Informe o texto do evento.", "danger")
+        flash("Informe o texto do evento ou escolha uma anotação rápida.", "danger")
         return redirect(url_for("portaria_livro"))
 
     plantao = _plantao_do_tenant(plantao_id, condominio_id)
@@ -1520,8 +1767,8 @@ def portaria_plantao_evento():
         flash("Só é possível registrar evento em plantão aberto.", "warning")
         return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
 
-    hora_atual = _agora_sao_paulo().strftime("%H:%M")
-    linha = f"[{hora_atual}] - {texto}\n"
+    carimbo = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
+    linha = f"[{carimbo}] - {texto}\n"
     plantao.ocorrencias = f"{plantao.ocorrencias or ''}{linha}"
 
     _registrar_auditoria(
@@ -2018,6 +2265,12 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/portaria/mudanca/<int:agendamento_id>/finalizar",
+        "portaria_mudanca_finalizar",
+        portaria_mudanca_finalizar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/portaria/mudancas",
         "portaria_mudancas",
         portaria_mudancas,
@@ -2028,6 +2281,12 @@ def register(app):
         "portaria_reservas",
         portaria_reservas,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/reservas/<int:reserva_id>/chaves",
+        "portaria_reserva_chaves",
+        portaria_reserva_chaves,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/portaria/livro",

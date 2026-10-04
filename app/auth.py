@@ -296,6 +296,17 @@ def unidade_required(view):
     return wrapped
 
 
+def _negar_sindico_sem_portaria(usuario):
+    """Síndico só entra na portaria com a permissão extra marcada."""
+    if usuario and usuario.role == Role.SINDICO and not usuario.perm_portaria:
+        flash(
+            "Seu acesso de síndico não inclui a portaria e o controle de acesso.",
+            "warning",
+        )
+        return redirect(url_for("sindico_dashboard"))
+    return None
+
+
 def interfone_required(view):
     """Interfone da guarita: portaria, admin local, síndico do tenant ou Super Admin."""
 
@@ -320,6 +331,9 @@ def interfone_required(view):
                 "danger",
             )
             return _redirect_login_tenant()
+        negado = _negar_sindico_sem_portaria(usuario)
+        if negado:
+            return negado
         _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
 
@@ -355,6 +369,9 @@ def portaria_required(view):
             )
             return _redirect_login_tenant()
 
+        negado = _negar_sindico_sem_portaria(usuario)
+        if negado:
+            return negado
         # Isolamento: sessão sempre no condominio_id do próprio usuário.
         _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)
