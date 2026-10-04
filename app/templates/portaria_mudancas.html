@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "portaria_base.html" %}
 
 {% block title %}Portaria — Mudanças{% endblock %}
 
@@ -38,6 +38,18 @@
                 <div class="text-muted">
                     <i class="bi bi-person me-1"></i>
                     {{ nome_responsavel(item.unidade) }}
+                </div>
+                <div class="mt-3">
+                    {% if item.data_chegada %}
+                    <span class="badge text-bg-success">
+                        Chegada às {{ item.data_chegada.strftime('%H:%M') }}
+                    </span>
+                    {% else %}
+                    <form method="post" action="{{ url_for('portaria_mudanca_chegar', agendamento_id=item.id) }}"
+                          onsubmit="return confirm('Confirmar chegada do caminhão nesta unidade?');">
+                        <button type="submit" class="btn btn-success">Registrar chegada</button>
+                    </form>
+                    {% endif %}
                 </div>
             </div>
         </div>

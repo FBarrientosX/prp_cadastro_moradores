@@ -3,56 +3,43 @@
 {% block title %}Dashboard do Administrador{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+{% set aba = aba_ativa if aba_ativa is defined else 'aguardando' %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
     <div>
+        {% if aba == 'equipe' %}
+        <h1 class="h3 mb-1">Equipe e Acessos</h1>
+        <p class="text-muted mb-0">Síndicos, assistentes e porteiros deste condomínio</p>
+        {% else %}
         <h1 class="h3 mb-1">Gestão de Cadastros</h1>
-        <p class="text-muted mb-0">Aprovações, registros e gestão de acessos</p>
-    </div>
-    <div class="d-flex gap-2">
-        {% if current_user and current_user.role == 'admin' %}
-        <a href="{{ url_for('admin_criar_usuario') }}" class="btn btn-outline-primary">
-            Criar Usuário
-        </a>
+        <p class="text-muted mb-0">Unidades, moradores e registros do condomínio</p>
         {% endif %}
-        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
     </div>
+    {% if aba == 'equipe' and current_user and current_user.role == 'admin' %}
+    <a href="{{ url_for('admin_criar_usuario') }}" class="btn btn-outline-primary">
+        Criar Usuário
+    </a>
+    {% endif %}
 </div>
 
-{% set aba = aba_ativa if aba_ativa is defined else 'aguardando' %}
+{% if aba != 'equipe' %}
 <ul class="nav nav-tabs" id="adminTabs" role="tablist">
     <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'aguardando' %}active{% endif %}" id="aguardando-tab" data-bs-toggle="tab"
-                data-bs-target="#aguardando" type="button" role="tab">
+        <a class="nav-link {% if aba == 'aguardando' %}active{% endif %}" href="{{ url_for('admin_index', tab='aguardando') }}">
             Aguardando Registro
             <span class="badge bg-warning text-dark ms-1">{{ aguardando_registro|length }}</span>
-        </button>
+        </a>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'finalizados' %}active{% endif %}" id="finalizados-tab" data-bs-toggle="tab"
-                data-bs-target="#finalizados" type="button" role="tab">
+        <a class="nav-link {% if aba == 'finalizados' %}active{% endif %}" href="{{ url_for('admin_index', tab='finalizados') }}">
             Cadastros Finalizados
             <span class="badge bg-primary ms-1">{{ finalizados|length }}</span>
-        </button>
+        </a>
     </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'sindicos' %}active{% endif %}" id="sindicos-tab" data-bs-toggle="tab"
-                data-bs-target="#sindicos" type="button" role="tab">
-            Gestão de Síndicos
-            <span class="badge bg-secondary ms-1">{{ sindicos|length }}</span>
-        </button>
-    </li>
-    {% if current_user and current_user.role == 'admin' %}
-    <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'equipe' %}active{% endif %}" id="equipe-tab" data-bs-toggle="tab"
-                data-bs-target="#equipe" type="button" role="tab">
-            Equipe e Acessos
-            <span class="badge bg-dark ms-1">{{ equipe_acessos|length }}</span>
-        </button>
-    </li>
-    {% endif %}
 </ul>
+{% endif %}
 
 <div class="tab-content pt-3" id="adminTabsContent">
+{% if aba != 'equipe' %}
     <!-- Aba 1: Aguardando Registro -->
     <div class="tab-pane fade {% if aba == 'aguardando' %}show active{% endif %}" id="aguardando" role="tabpanel">
         {% if aguardando_registro %}
@@ -228,6 +215,7 @@
         <div class="alert alert-info">Nenhum síndico cadastrado.</div>
         {% endif %}
     </div>
+{% endif %}
 
     {% if current_user and current_user.role == 'admin' %}
     <div class="tab-pane fade {% if aba == 'equipe' %}show active{% endif %}" id="equipe" role="tabpanel">
@@ -341,6 +329,7 @@
     {% endif %}
 </div>
 
+{% if aba != 'equipe' %}
 <!-- Modais de Detalhes -->
 {% set todas_unidades = aguardando_registro + finalizados %}
 {% for unidade in todas_unidades %}
@@ -728,18 +717,20 @@
     </div>
 </div>
 {% endfor %}
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
     (function () {
         const hash = (window.location.hash || "").replace("#", "");
-        if (!hash) {
+        const abas = ["aguardando", "finalizados", "sindicos", "equipe"];
+        if (abas.indexOf(hash) === -1) {
             return;
         }
-        const trigger = document.querySelector('[data-bs-target="#' + hash + '"]');
-        if (trigger) {
-            bootstrap.Tab.getOrCreateInstance(trigger).show();
+        const destino = window.location.pathname + "?tab=" + encodeURIComponent(hash);
+        if (window.location.search.indexOf("tab=" + hash) === -1) {
+            window.location.replace(destino);
         }
     })();
 </script>

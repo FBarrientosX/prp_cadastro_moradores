@@ -334,10 +334,20 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
+                {% set logo_carteirinha = logo_publica(unidade.condominio if unidade else none) %}
                 {% if carteirinha_aprovada %}
                 <div class="carteirinha">
-                    <div class="small text-white-50 mb-1">Condomínio</div>
-                    <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        {% if logo_carteirinha %}
+                        <img src="{{ url_for('static', filename='uploads/logos/' ~ logo_carteirinha) }}"
+                             alt="" width="48" height="48"
+                             style="width:48px;height:48px;object-fit:contain;border-radius:0.5rem;background:#fff;flex-shrink:0;">
+                        {% endif %}
+                        <div>
+                            <div class="small text-white-50 mb-1">Condomínio</div>
+                            <div class="fw-semibold">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                        </div>
+                    </div>
                     <div class="small text-white-50">Titular</div>
                     <div class="fs-5 fw-bold {% if not dependentes %}mb-3{% endif %}">{{ morador.nome_completo if morador else 'Nenhum morador ativo' }}</div>
                     {% if dependentes %}
@@ -358,8 +368,17 @@
                 </div>
                 {% else %}
                 <div class="carteirinha carteirinha-pendente">
-                    <div class="small mb-1">Condomínio</div>
-                    <div class="fw-semibold mb-3">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        {% if logo_carteirinha %}
+                        <img src="{{ url_for('static', filename='uploads/logos/' ~ logo_carteirinha) }}"
+                             alt="" width="48" height="48"
+                             style="width:48px;height:48px;object-fit:contain;border-radius:0.5rem;background:#fff;flex-shrink:0;">
+                        {% endif %}
+                        <div>
+                            <div class="small mb-1">Condomínio</div>
+                            <div class="fw-semibold">{{ unidade.condominio.nome if unidade.condominio else 'Condomínio' }}</div>
+                        </div>
+                    </div>
                     <div class="small">Titular</div>
                     <div class="fs-5 fw-bold {% if not dependentes %}mb-3{% endif %}">{{ morador.nome_completo if morador else 'Nenhum morador ativo' }}</div>
                     {% if dependentes %}

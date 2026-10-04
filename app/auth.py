@@ -327,7 +327,7 @@ def interfone_required(view):
 
 
 def portaria_required(view):
-    """Acesso à portaria: porteiro, admin do tenant ou Super Admin da plataforma."""
+    """Acesso à portaria: porteiro, admin, síndico do tenant ou Super Admin."""
 
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -337,6 +337,7 @@ def portaria_required(view):
         if usuario.role not in (
             Role.PORTEIRO,
             Role.ADMIN,
+            Role.SINDICO,
             Role.SUPERADMIN,
         ):
             flash("Acesso restrito à portaria.", "danger")

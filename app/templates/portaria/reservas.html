@@ -1,0 +1,34 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Reservas — Portaria{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Reservas</h1>
+    <p class="text-muted mb-0">Eventos aprovados a partir de hoje. Consulta da guarita.</p>
+</div>
+
+{% if reservas %}
+<div class="vstack gap-3">
+    {% for reserva in reservas %}
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between gap-2 mb-1">
+                <div class="fw-semibold">{{ reserva.espaco.nome }}</div>
+                <div>{{ reserva.data_reserva.strftime('%d/%m/%Y') }}</div>
+            </div>
+            <div class="text-muted">
+                {% if reserva.unidade %}
+                {{ reserva.unidade.identificador }}
+                {% else %}
+                Condomínio{% if reserva.motivo_reserva %} — {{ reserva.motivo_reserva }}{% endif %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-secondary mb-0">Nenhuma reserva aprovada a partir de hoje.</div>
+{% endif %}
+{% endblock %}

@@ -101,6 +101,10 @@
                                     title="Editar">
                                 <i class="bi bi-pencil"></i>
                             </button>
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="{{ url_for('admin_condominio', id=condo.id) }}">
+                                <i class="bi bi-building-gear me-1"></i>Dados
+                            </a>
                             <button type="button" class="btn btn-sm btn-outline-secondary"
                                     data-bs-toggle="modal"
                                     data-bs-target="#modalWhitelabel{{ condo.id }}">

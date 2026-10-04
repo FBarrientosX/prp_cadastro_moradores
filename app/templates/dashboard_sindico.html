@@ -11,6 +11,10 @@
     <a href="{{ url_for('sindico_logout') }}" class="btn btn-outline-secondary">Sair</a>
 </div>
 
+{% if encomendas_setores %}
+{% include "includes/encomendas_setores.html" %}
+{% endif %}
+
 {% macro tabela_unidades(itens) %}
 <div class="table-responsive">
     <table class="table table-striped align-middle">

@@ -142,9 +142,20 @@ Transicao de schema:
 - Tabelas novas (`visitantes`, `registros_acesso`, `encomendas`,
   `autorizacoes_acesso`, `notificacoes`, `ocorrencias`) nascem com
   `condominio_id` NOT NULL.
-- Constraint atual de `Unidade`: `UniqueConstraint("bloco", "apartamento")`
-  (sem tenant). Lookups de negocio sempre filtram `condominio_id`; nao assumir
-  unicidade por condominio no banco.
+- Constraint de `Unidade`: `UniqueConstraint("condominio_id", "bloco", "apartamento")`.
+ Lookups de negocio sempre filtram `condominio_id`.
+- Setor interno: `eh_setor_interno=True`, `bloco="ADM"`, `apartamento` = nome
+ do setor (ex.: "Administração"). O boot cria Administração em todo condomínio
+ (`garantir_setor_administracao`), status `Aprovada`, senha aleatória.
+ Nao entra no login/cadastro do morador (planta 1-8), na fila residencial do
+ admin nem na carteirinha/API de credenciais. `identificador` vira
+ `Setor: {nome}`. Admin e sindico gerenciam setores e contatos em
+ `GET|POST /admin/setores` (assistente nao acessa). O setor Administração
+ nao e excluido. Contato de setor nao pede CPF nem nascimento: grava
+ `eh_morador=True` e `autoriza_interfone=True`.
+ Salvar `/admin/condominio` com telefone e e-mail sincroniza o contato
+ institucional "Administração Geral" nesse setor quando ele esta vazio
+ ou quando esse contato ja existe.
 
 Estrutura fisica de blocos (`app/utils.py`):
 - `BLOCOS_ANDARES` / `validar_unidade()` descrevem a planta do PRP (blocos 1-8).
@@ -239,7 +250,7 @@ Decorators (`app/auth.py`, extras em `routes.py` / `parceiro.py`):
 - `@admin_or_assistente_required` — admin ou assistente, com tenant.
 - `@admin_or_sindico_required` — kanban de ocorrencias (admin ou sindico do tenant).
 - `@sindico_required` — so sindico com tenant.
-- `@portaria_required` — porteiro, admin local ou Super Admin.
+- `@portaria_required` — porteiro, admin local, sindico do tenant ou Super Admin.
 - `@unidade_required` — sessao de unidade; injeta `unidade` na view.
 - `@parceiro_required` — `session['parceiro_id']` (`app/blueprints/parceiro.py`).
 - `@acesso_reservas_required` — unidade ou equipe, bloqueia porteiro.
@@ -296,6 +307,22 @@ Parceiro logado:
 
 `Condominio`:
 - `nome`, `slug` (unico), `cnpj`, `ativo` (soft delete), `data_cadastro`
+- Dados do cliente em `GET|POST /admin/condominio`: `razao_social`, `plano`
+  (default Profissional), `fuso_horario` (default America/Sao_Paulo),
+  `criado_em`, contato (`telefone_fixo`, `telefone_whatsapp`, `email_contato`),
+  endereco e governanca (`tipo_divisao` bloco_apto|quadra_casa|torre_unica,
+  `total_unidades_previsto`, `nome_responsavel_gestao`, `fim_mandato`,
+  `horario_mudancas`). Super Admin edita tambem razao, CNPJ, slug e plano.
+  Admin local edita nome, fuso, contato, endereco e governanca. Sindico
+  edita so contato e endereco. Assistente nao acessa. Ao salvar com telefone
+  e e-mail, cria ou atualiza o contato "Administração Geral" no setor ADM
+  se o setor ainda nao tiver outro contato.
+- Arquivos do tenant: `logo_filename`, `regimento_filename`, `convencao_filename`
+  (opcionais). Upload so Admin e Super Admin. A logo aparece na sidebar
+  (admin, sindico, portaria e morador) e no cabecalho da carteirinha; se
+  vazia, a UI usa `ConfiguracaoCondominio.logo_filename`. PDFs saem por
+  rota autenticada do tenant. `GET /c/<slug>` redireciona ao login do
+  morador e e a URL do QR de divulgacao.
 
 `ConfiguracaoCondominio` (1:1):
 - `label_agrupamento` (default "Bloco"), `label_unidade` (default "Apto")
@@ -436,14 +463,32 @@ Reservas:
 Portaria (`app/blueprints/portaria.py`):
 - dashboard do dia (mudancas aprovadas + contexto operacional)
 - controle de acesso: entrada avulsa, baixa de autorizacao, saida
-- encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador
+- encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador.
+  Se a unidade for setor interno, apos o commit avisa por e-mail os contatos
+  do setor que tiverem e-mail (`enviar_email_encomenda_setor`). Falha de SMTP
+  nao desfaz a encomenda. Pendencias desses setores aparecem no dashboard
+  do admin e do sindico.
 - QR html5-qrcode na tela de encomendas
+- Sidebar unica da guarita (porteiro, admin e sindico): Visitantes & Acesso,
+  Interfone / Contatos, Encomendas, Mudancas, Reservas e Livro de Servico.
+  Um unico item `active`. `/portaria/acesso` marca so Visitantes & Acesso.
+  Admin, sindico e superadmin tem o botao de volta no topo dessa sidebar.
+  Nao ha sub-barra de pilulas no corpo da pagina.
+- Check-in em `GET /portaria/acesso`: formulario no topo, ao lado de quem
+  esta no condominio e das pre-autorizacoes de hoje. Saida e confirmacao
+  de chegada sao um clique. `GET /api/portaria/visitante-historico?doc=`
+  devolve nome, tipo e ultima placa so do tenant (`@portaria_required`).
+  Ao escolher a unidade, o mesmo check-in consulta o interfone
+  (`autoriza_interfone`) sem sair da tela.
 - Interfone / Contatos: `GET /portaria/contatos` e
   `GET /api/portaria/buscar-unidade` (`@interfone_required`: porteiro, admin,
   sindico do tenant ou superadmin). So pessoas com `eh_morador=True`.
   Sindico limitado aos proprios agrupamentos. Telefone so sai no JSON se
   `autoriza_interfone=True` (digitos com prefixo 55 + numero formatado).
   Sem consentimento: nome, vinculo/parentesco e `autoriza_interfone: false`.
+  Setores internos (`eh_setor_interno`) aparecem no bloco `ADM` e na busca
+  `adm` / `administracao` / `zeladoria` / `sindico`. O sindico ve esses
+  setores mesmo fora dos agrupamentos residenciais.
   Cada unidade inclui `autorizacoes_ativas`: pre-autorizacoes com status
   Pendente e `data_prevista` igual a hoje em America/Sao_Paulo
   (nome, tipo, documento, placa e validade). Cancelada, Concluida e outra
@@ -486,11 +531,20 @@ Separacao de contextos (obrigatorio):
 - `auth_base.html` — login, cadastro inicial, recuperacao, condominio suspenso.
 - Nao misturar navegacao de contextos no mesmo base.
 - Novo portal: base dedicado + cor de destaque distinta.
-- Sidebars: `nav-pills`, ativo via `request.endpoint`, offcanvas no mobile.
+- Sidebars: `nav-pills`, um unico `active` por rota, offcanvas no mobile.
+  O corpo do menu rola sozinho; a marca e o botao Sair ficam fixos.
+  Admin e sindico usam secoes colapsaveis; a secao do item ativo abre sozinha.
+  Admin agrupa Visao geral, Condominio, Portaria & acesso e Configuracoes.
+  `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre
+  `/admin?tab=equipe`.   Admin e sindico entram na guarita por um item
+  `Portaria & Interfone`, que abre `/portaria/acesso`. Dentro da portaria
+  a sidebar lista Visitantes, Interfone, Encomendas, Mudancas, Reservas
+  e Livro, sem sub-barra no corpo da pagina.
 
 Anti Dead-End:
 - Portaria NAO deve ser o unico caminho sem volta para Admin/Super Admin.
 - `portaria_base.html`: se `role == 'admin'` botao "Voltar ao Painel Admin";
+  se `role == 'sindico'` botao "Voltar ao Painel do Síndico";
   se `role == 'superadmin'` botao "Voltar à Plataforma".
 - Condicionar por `role`, nao por `current_user.perfil` (esse atributo nao existe).
 

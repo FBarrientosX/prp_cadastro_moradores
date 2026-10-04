@@ -4,7 +4,7 @@
 
 {% block content %}
 {% set aba_ativa = active_tab if active_tab is defined else 'morador' %}
-{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
+{% set brand_logo = logo_publica(condominio) %}
 
 <div class="card auth-card shadow-lg">
     <div class="card-body p-4 p-md-5">

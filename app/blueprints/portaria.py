@@ -14,7 +14,8 @@ morador, admin, síndico) — são só importadas aqui, dentro de cada view.
 import json
 import os
 import re
-from datetime import datetime
+import unicodedata
+from datetime import datetime, timedelta
 
 from flask import current_app, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy.exc import IntegrityError
@@ -43,12 +44,14 @@ from app.models import (
     AutorizacaoAcesso,
     Condominio,
     Encomenda,
+    EspacoComum,
     Guarita,
     ItemChecklist,
     PerfilDestinoNotificacao,
     Pessoa,
     Plantao,
     RegistroAcesso,
+    Reserva,
     Role,
     StatusAgendamentoMudanca,
     StatusAutorizacaoAcesso,
@@ -67,6 +70,14 @@ def _normalizar_documento_visitante(documento):
     bruto = (documento or "").strip().upper()
     limpo = "".join(ch for ch in bruto if ch.isalnum())
     return limpo[:20]
+
+
+def _rotulo_chegada(tipo):
+    if tipo == TipoVisitante.PRESTADOR:
+        return "prestador"
+    if tipo == TipoVisitante.DELIVERY:
+        return "entregador"
+    return "visitante"
 
 
 def _entrada_aberta_visitante(condominio_id, visitante_id):
@@ -282,9 +293,20 @@ def portaria_acesso():
     )
     unidades = (
         Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
+        .order_by(
+            Unidade.eh_setor_interno.desc(),
+            Unidade.bloco,
+            Unidade.apartamento,
+        )
         .all()
     )
+    permitidos = _blocos_permitidos_interfone(usuario)
+    if permitidos is not None:
+        unidades = [
+            unidade
+            for unidade in unidades
+            if _bloco_permitido(unidade.bloco, permitidos)
+        ]
     hoje_brasil = _hoje_sao_paulo()
     autorizacoes_hoje = (
         AutorizacaoAcesso.query.join(Unidade)
@@ -372,7 +394,7 @@ def portaria_acesso_entrada():
         flash("Unidade inválida para este condomínio.", "danger")
         return redirect(url_for("portaria_acesso"))
 
-    if tipo != TipoVisitante.PRESTADOR:
+    if tipo not in (TipoVisitante.PRESTADOR, TipoVisitante.DELIVERY):
         empresa = None
 
     visitante = Visitante.query.filter_by(
@@ -422,7 +444,7 @@ def portaria_acesso_entrada():
         f"Portaria '{usuario.username}' registrou entrada de {visitante.nome} "
         f"({visitante.tipo}) na unidade {unidade.identificador}.",
     )
-    rotulo = "prestador" if visitante.tipo == TipoVisitante.PRESTADOR else "visitante"
+    rotulo = _rotulo_chegada(visitante.tipo)
     _criar_notificacao(
         condominio_id=condominio_id,
         perfil_destino=PerfilDestinoNotificacao.MORADOR,
@@ -524,7 +546,7 @@ def portaria_acesso_autorizada(auth_id):
         f"Portaria '{usuario.username}' confirmou chegada autorizada de "
         f"{visitante.nome} ({visitante.tipo}) na unidade {unidade.identificador}.",
     )
-    rotulo = "prestador" if visitante.tipo == TipoVisitante.PRESTADOR else "visitante"
+    rotulo = _rotulo_chegada(visitante.tipo)
     _criar_notificacao(
         condominio_id=condominio_id,
         perfil_destino=PerfilDestinoNotificacao.MORADOR,
@@ -632,7 +654,11 @@ def portaria_encomendas():
     )
     unidades = (
         Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
+        .order_by(
+            Unidade.eh_setor_interno.desc(),
+            Unidade.bloco,
+            Unidade.apartamento,
+        )
         .all()
     )
     return render_template(
@@ -644,6 +670,32 @@ def portaria_encomendas():
         pessoas_por_unidade=pessoas_por_unidade,
         agora_entrega=_agora_sao_paulo(),
     )
+
+
+def _avisar_emails_setor(unidade, quando, destinatario, codigo_rastreio):
+    """E-mail aos contatos do setor que tiverem endereço. Falha não desfaz a encomenda."""
+    from app.email_service import enviar_email_encomenda_setor
+
+    vistos = set()
+    falhas = 0
+    contatos = unidade.pessoas.filter(Pessoa.eh_morador.is_(True)).all()
+    for pessoa in contatos:
+        email = (pessoa.email or "").strip()
+        chave = email.casefold()
+        if not email or chave in vistos:
+            continue
+        vistos.add(chave)
+        try:
+            enviar_email_encomenda_setor(
+                email,
+                unidade.identificador,
+                quando.strftime("%d/%m/%Y %H:%M"),
+                destinatario=destinatario,
+                codigo_rastreio=codigo_rastreio,
+            )
+        except Exception:
+            falhas += 1
+    return falhas
 
 
 @portaria_required
@@ -716,6 +768,14 @@ def portaria_encomendas_receber():
         unidade_id=unidade.id,
     )
     db.session.commit()
+    if unidade.eh_setor_interno:
+        falhas = _avisar_emails_setor(unidade, agora, destinatario, codigo_rastreio)
+        if falhas:
+            flash(
+                "Encomenda registrada, mas não foi possível avisar "
+                "todos os e-mails do setor.",
+                "warning",
+            )
     flash(
         f"Encomenda recebida para {unidade.identificador} "
         f"às {agora.strftime('%H:%M')}.",
@@ -932,15 +992,15 @@ def portaria_mudanca_chegar(agendamento_id):
 
     if agendamento.status != StatusAgendamentoMudanca.APROVADA:
         flash("Somente mudanças aprovadas podem ter chegada registrada.", "warning")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     if agendamento.data_mudanca != hoje:
         flash("O check-in de chegada só é permitido no dia da mudança.", "warning")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     if agendamento.data_chegada:
         flash("A chegada deste caminhão já foi registrada.", "info")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     agendamento.data_chegada = _agora_sao_paulo()
     # Registra o usuário logado (porteiro nominal ou admin em atuação).
@@ -958,12 +1018,83 @@ def portaria_mudanca_chegar(agendamento_id):
         f"às {agendamento.data_chegada.strftime('%H:%M')}.",
         "success",
     )
-    return redirect(url_for("portaria_dashboard"))
+    return redirect(url_for("portaria_mudancas"))
 
 
 @portaria_required
 def portaria_mudancas():
-    return redirect(url_for("portaria_dashboard"))
+    from app.routes import _condominio_id_portaria, _nome_responsavel_unidade
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    hoje = _hoje_sao_paulo()
+    limite = hoje + timedelta(days=7)
+    consulta = AgendamentoMudanca.query.filter(
+        AgendamentoMudanca.condominio_id == condominio_id,
+        AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
+    )
+    mudancas_hoje = (
+        consulta.filter(AgendamentoMudanca.data_mudanca == hoje)
+        .order_by(AgendamentoMudanca.id.asc())
+        .all()
+    )
+    mudancas_proximos = (
+        AgendamentoMudanca.query.filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
+            AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
+            AgendamentoMudanca.data_mudanca > hoje,
+            AgendamentoMudanca.data_mudanca <= limite,
+        )
+        .order_by(AgendamentoMudanca.data_mudanca.asc(), AgendamentoMudanca.id.asc())
+        .all()
+    )
+    return render_template(
+        "portaria_mudancas.html",
+        current_user=usuario,
+        hoje=hoje,
+        mudancas_hoje=mudancas_hoje,
+        mudancas_proximos=mudancas_proximos,
+        nome_responsavel=_nome_responsavel_unidade,
+    )
+
+
+@portaria_required
+def portaria_reservas():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    hoje = _hoje_sao_paulo()
+    reservas = (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            EspacoComum.condominio_id == condominio_id,
+            Reserva.status == "Aprovada",
+            Reserva.data_reserva >= hoje,
+        )
+        .order_by(Reserva.data_reserva.asc(), EspacoComum.nome.asc())
+        .all()
+    )
+    return render_template(
+        "portaria/reservas.html",
+        current_user=usuario,
+        reservas=reservas,
+        hoje=hoje,
+    )
 
 
 def _guarita_do_tenant(guarita_id, condominio_id):
@@ -1423,10 +1554,60 @@ def _blocos_permitidos_interfone(usuario):
     return _blocos_codigo_sindico(usuario)
 
 
+def _sem_acento(texto):
+    base = unicodedata.normalize("NFD", str(texto or ""))
+    return "".join(
+        caractere for caractere in base if unicodedata.category(caractere) != "Mn"
+    ).casefold().strip()
+
+
+_ATALHOS_SETOR = {
+    "adm": "adm",
+    "administracao": "administracao",
+    "zeladoria": "zeladoria",
+    "sindico": "sindico",
+}
+
+
 def _bloco_permitido(bloco, permitidos):
-    if permitidos is None:
+    if permitidos is None or normalizar_bloco_codigo(bloco) == "ADM":
         return True
     return normalizar_bloco_codigo(bloco) in set(permitidos)
+
+
+def _atalho_setor(texto):
+    return _ATALHOS_SETOR.get(_sem_acento(texto))
+
+
+def _setores_internos(condominio_id):
+    return (
+        Unidade.query.filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.eh_setor_interno.is_(True),
+        )
+        .order_by(Unidade.apartamento.asc())
+        .all()
+    )
+
+
+def _setores_por_atalho(condominio_id, atalho):
+    setores = _setores_internos(condominio_id)
+
+    def nome(unidade):
+        return _sem_acento(unidade.apartamento)
+
+    if atalho == "adm":
+        return setores
+    if atalho == "administracao":
+        return [unidade for unidade in setores if nome(unidade).startswith("administra")]
+    if atalho == "zeladoria":
+        return [unidade for unidade in setores if "zeladoria" in nome(unidade)]
+    if atalho == "sindico":
+        diretos = [unidade for unidade in setores if "sindico" in nome(unidade)]
+        if diretos:
+            return diretos
+        return [unidade for unidade in setores if nome(unidade).startswith("administra")]
+    return []
 
 
 def _interpretar_busca_rapida(texto):
@@ -1538,6 +1719,7 @@ def _card_unidade(unidade, nome=""):
     return {
         "bloco": unidade.bloco,
         "apartamento": unidade.apartamento,
+        "eh_setor_interno": bool(unidade.eh_setor_interno),
         "moradores": moradores,
         "autorizacoes_ativas": _autorizacoes_ativas_unidade(unidade),
     }
@@ -1549,6 +1731,19 @@ def _unidades_interfone(condominio_id, bloco, apartamento, consulta, permitidos)
     bloco_q, apto_q, nome = _interpretar_busca_rapida(consulta)
     bloco = normalizar_bloco_codigo(bloco) if bloco else bloco_q
     apartamento = str(apartamento or "").strip() or apto_q
+    atalho = _atalho_setor(consulta) if consulta else None
+    if atalho and not apartamento and (not bloco or bloco == "ADM"):
+        return (
+            [_card_unidade(unidade) for unidade in _setores_por_atalho(condominio_id, atalho)],
+            False,
+        )
+
+    if bloco == "ADM" and not apartamento:
+        return (
+            [_card_unidade(unidade) for unidade in _setores_internos(condominio_id)],
+            False,
+        )
+
     if bloco and not _bloco_permitido(bloco, permitidos):
         return [], False
 
@@ -1607,14 +1802,87 @@ def portaria_contatos():
 
     usuario = get_current_user()
     condominio_id = _condominio_id_portaria(usuario)
-    layout = "base.html" if usuario.role == Role.SINDICO else "portaria_base.html"
+    layout = "portaria_base.html"
+    setores = _setores_internos(condominio_id) if condominio_id else []
     return render_template(
         "portaria/contatos.html",
         layout=layout,
         current_user=usuario,
         condominio_estrutura=get_condominio_estrutura(),
+        setores_internos=[setor.apartamento for setor in setores],
         sem_condominio=not condominio_id,
     )
+
+
+def _payload_visitante_historico(visitante):
+    """Nome, tipo e última placa. Sem telefone e sem dados de outro condomínio."""
+    registro = (
+        RegistroAcesso.query.filter(
+            RegistroAcesso.condominio_id == visitante.condominio_id,
+            RegistroAcesso.visitante_id == visitante.id,
+            RegistroAcesso.placa_veiculo.isnot(None),
+            RegistroAcesso.placa_veiculo != "",
+        )
+        .order_by(RegistroAcesso.data_entrada.desc())
+        .first()
+    )
+    tipo = (
+        visitante.tipo
+        if visitante.tipo in TipoVisitante.CHOICES
+        else TipoVisitante.VISITANTE
+    )
+    return {
+        "documento": visitante.documento,
+        "nome": visitante.nome,
+        "tipo": tipo,
+        "placa": (registro.placa_veiculo if registro else "") or "",
+    }
+
+
+@portaria_required
+def api_portaria_visitante_historico():
+    """Autopreenche o check-in com quem já entrou neste condomínio."""
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "visitantes": []})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    documento = _normalizar_documento_visitante(request.args.get("doc", ""))
+    nome = (request.args.get("nome") or "").replace("%", "").replace("_", "").strip()
+    encontrados = []
+    if len(documento) >= 3:
+        visitante = Visitante.query.filter_by(
+            condominio_id=condominio_id,
+            documento=documento,
+        ).first()
+        if visitante:
+            encontrados = [visitante]
+    elif len(nome) >= 3:
+        encontrados = (
+            Visitante.query.filter(
+                Visitante.condominio_id == condominio_id,
+                Visitante.nome.ilike(f"%{nome}%"),
+            )
+            .order_by(Visitante.nome.asc())
+            .limit(8)
+            .all()
+        )
+
+    resposta = jsonify(
+        {
+            "ok": True,
+            "visitantes": [
+                _payload_visitante_historico(item) for item in encontrados
+            ],
+        }
+    )
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
 
 
 @interfone_required
@@ -1675,6 +1943,12 @@ def register(app):
         "/api/portaria/buscar-unidade",
         "api_portaria_buscar_unidade",
         api_portaria_buscar_unidade,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/portaria/visitante-historico",
+        "api_portaria_visitante_historico",
+        api_portaria_visitante_historico,
         methods=["GET"],
     )
     app.add_url_rule(
@@ -1747,6 +2021,12 @@ def register(app):
         "/portaria/mudancas",
         "portaria_mudancas",
         portaria_mudancas,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/reservas",
+        "portaria_reservas",
+        portaria_reservas,
         methods=["GET"],
     )
     app.add_url_rule(

@@ -3,21 +3,14 @@
 {% block title %}Dashboard — Administração{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h1 class="h3 mb-1">Dashboard Estratégico</h1>
-        <p class="text-muted mb-0">Visão geral dos cadastros e pendências do condomínio</p>
-    </div>
-    <div class="d-flex gap-2">
-        <a href="{{ url_for('admin_index') }}" class="btn btn-outline-primary">
-            <i class="bi bi-people me-1"></i>Gestão de Cadastros
-        </a>
-        <a href="{{ url_for('portaria_dashboard') }}" class="btn btn-outline-dark">
-            <i class="bi bi-shield-check me-1"></i>Portaria
-        </a>
-        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
-    </div>
+<div class="mb-4">
+    <h1 class="h3 mb-1">Dashboard Estratégico</h1>
+    <p class="text-muted mb-0">Visão geral dos cadastros e pendências do condomínio</p>
 </div>
+
+{% if encomendas_setores %}
+{% include "includes/encomendas_setores.html" %}
+{% endif %}
 
 <div class="row g-3 mb-4">
     <div class="col-md-4">

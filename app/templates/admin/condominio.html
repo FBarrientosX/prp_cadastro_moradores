@@ -1,0 +1,434 @@
+{% extends "base.html" %}
+{% set url_portal = url_for('portal_morador', slug=condominio.slug, _external=True) if condominio.slug else '' %}
+{% set logo_divulgacao = logo_publica(condominio) %}
+
+{% block title %}Dados do Condomínio{% endblock %}
+
+{% block head %}
+<style>
+    .logo-preview {
+        width: 72px;
+        height: 72px;
+        object-fit: contain;
+        border-radius: 0.75rem;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+    }
+    .logo-preview-vazio {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #6c757d;
+        font-size: 0.75rem;
+        text-align: center;
+        padding: 0.25rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Dados do Condomínio</h1>
+        <p class="text-muted mb-0">Identificação, contato oficial e governança.</p>
+    </div>
+    {% if current_user.role == 'superadmin' %}
+    <a href="{{ url_for('superadmin_condominios') }}" class="btn btn-outline-dark btn-sm">
+        <i class="bi bi-arrow-left-circle me-1"></i>Voltar à Plataforma
+    </a>
+    {% endif %}
+</div>
+
+{% if url_portal %}
+<div class="card border-primary border-2 shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-4 align-items-center">
+            <div class="col-lg-8">
+                <h2 class="h5 mb-1">Link exclusivo e QR Code dos moradores</h2>
+                <p class="text-muted mb-3">
+                    Endereço público de acesso e cadastro deste condomínio. Use no mural, no elevador ou no grupo de moradores.
+                </p>
+                <label class="form-label" for="link-portal">URL do portal</label>
+                <input type="text" class="form-control mb-3" id="link-portal" value="{{ url_portal }}" readonly>
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-primary" id="btn-copiar-link" data-url="{{ url_portal }}">
+                        📋 Copiar Link
+                    </button>
+                    <button type="button" class="btn btn-outline-primary" id="btn-imprimir-qr">
+                        🖨️ Imprimir QR Code p/ Mural
+                    </button>
+                </div>
+            </div>
+            <div class="col-lg-4 text-center">
+                <div id="qr-tela" class="d-inline-block bg-white p-2 border rounded"></div>
+                <div id="qr-grande" class="visually-hidden" aria-hidden="true"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<form method="post" enctype="multipart/form-data"
+      action="{{ url_for('admin_condominio', id=condominio.id) if current_user.role == 'superadmin' else url_for('admin_condominio') }}">
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Identidade visual e documentos oficiais</h2>
+            <div class="row g-4">
+                <div class="col-md-4">
+                    <div class="d-flex align-items-center gap-3 mb-3">
+                        {% if logo_divulgacao %}
+                        <img src="{{ url_for('static', filename='uploads/logos/' ~ logo_divulgacao) }}"
+                             alt="Logo atual" class="logo-preview">
+                        {% else %}
+                        <div class="logo-preview logo-preview-vazio">Sem logo</div>
+                        {% endif %}
+                        <div>
+                            <div class="fw-semibold">Logo / brasão</div>
+                            <div class="small text-muted">PNG, JPG ou WEBP, até 2 MB.</div>
+                        </div>
+                    </div>
+                    {% if editar_operacao %}
+                    <input type="file" class="form-control" name="logo" aria-label="Logo ou brasão do condomínio" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
+                    {% elif not condominio.logo_filename and not logo_divulgacao %}
+                    <p class="small text-muted mb-0">Nenhuma logo enviada.</p>
+                    {% endif %}
+                </div>
+                <div class="col-md-4">
+                    <div class="fw-semibold mb-2">Regimento Interno</div>
+                    {% if condominio.regimento_filename %}
+                    <a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener"
+                       href="{{ url_for('condominio_documento', tipo='regimento', id=condominio.id) if current_user.role == 'superadmin' else url_for('condominio_documento', tipo='regimento') }}">
+                        <i class="bi bi-file-earmark-pdf me-1"></i>Ver PDF atual
+                    </a>
+                    {% else %}
+                    <p class="small text-muted">Nenhum arquivo anexado.</p>
+                    {% endif %}
+                    {% if editar_operacao %}
+                    <input type="file" class="form-control" name="regimento" aria-label="Regimento Interno em PDF" accept=".pdf,application/pdf">
+                    <div class="form-text">PDF de até 8 MB. Enviar substitui o arquivo atual.</div>
+                    {% endif %}
+                </div>
+                <div class="col-md-4">
+                    <div class="fw-semibold mb-2">Convenção do Condomínio</div>
+                    {% if condominio.convencao_filename %}
+                    <a class="btn btn-sm btn-outline-secondary mb-2" target="_blank" rel="noopener"
+                       href="{{ url_for('condominio_documento', tipo='convencao', id=condominio.id) if current_user.role == 'superadmin' else url_for('condominio_documento', tipo='convencao') }}">
+                        <i class="bi bi-file-earmark-pdf me-1"></i>Ver PDF atual
+                    </a>
+                    {% else %}
+                    <p class="small text-muted">Nenhum arquivo anexado.</p>
+                    {% endif %}
+                    {% if editar_operacao %}
+                    <input type="file" class="form-control" name="convencao" aria-label="Convenção do condomínio em PDF" accept=".pdf,application/pdf">
+                    <div class="form-text">PDF de até 8 MB. Enviar substitui o arquivo atual.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Identificação e contrato</h2>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="nome">Nome do estabelecimento</label>
+                    <input type="text" class="form-control" id="nome" name="nome" maxlength="200"
+                           value="{{ condominio.nome }}"
+                           {% if not editar_operacao %}readonly disabled{% else %}required{% endif %}>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="razao_social">
+                        Nome empresarial
+                        {% if not editar_saas %}<i class="bi bi-lock-fill text-muted" title="Somente o Super Admin altera este dado"></i>{% endif %}
+                    </label>
+                    <input type="text" class="form-control {% if not editar_saas %}bg-light{% endif %}"
+                           id="razao_social" name="razao_social" maxlength="200"
+                           value="{{ condominio.razao_social or '' }}"
+                           {% if not editar_saas %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="cnpj">
+                        CNPJ
+                        {% if not editar_saas %}<i class="bi bi-lock-fill text-muted" title="Somente o Super Admin altera este dado"></i>{% endif %}
+                    </label>
+                    <input type="text" class="form-control {% if not editar_saas %}bg-light{% endif %}"
+                           id="cnpj" name="cnpj" maxlength="18"
+                           value="{{ condominio.cnpj or '' }}"
+                           {% if not editar_saas %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="slug">
+                        Subdomínio
+                        {% if not editar_saas %}<i class="bi bi-lock-fill text-muted" title="Somente o Super Admin altera este dado"></i>{% endif %}
+                    </label>
+                    <div class="input-group">
+                        <span class="input-group-text">/c/</span>
+                        <input type="text" class="form-control {% if not editar_saas %}bg-light{% endif %}"
+                               id="slug" name="slug" maxlength="50"
+                               value="{{ condominio.slug or '' }}"
+                               {% if not editar_saas %}readonly disabled{% endif %}>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="plano">
+                        Plano
+                        {% if not editar_saas %}<i class="bi bi-lock-fill text-muted" title="Somente o Super Admin altera este dado"></i>{% endif %}
+                    </label>
+                    <select class="form-select {% if not editar_saas %}bg-light{% endif %}" id="plano" name="plano"
+                            {% if not editar_saas %}disabled{% endif %}>
+                        {% for plano in planos %}
+                        <option value="{{ plano }}" {% if (condominio.plano or 'Profissional') == plano %}selected{% endif %}>{{ plano }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="fuso_horario">Fuso horário</label>
+                    <select class="form-select {% if not editar_operacao %}bg-light{% endif %}" id="fuso_horario" name="fuso_horario"
+                            {% if not editar_operacao %}disabled{% endif %}>
+                        {% for fuso in fusos %}
+                        <option value="{{ fuso }}" {% if (condominio.fuso_horario or 'America/Sao_Paulo') == fuso %}selected{% endif %}>{{ fuso }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="criado_em">
+                        Criado em
+                        <i class="bi bi-lock-fill text-muted" title="Data de cadastro do cliente"></i>
+                    </label>
+                    <input type="text" class="form-control bg-light" id="criado_em" readonly disabled
+                           value="{{ criado_em.strftime('%d/%m/%Y %H:%M') if criado_em else '—' }}">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Contatos e endereço da administração</h2>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label" for="telefone_fixo">Telefone fixo</label>
+                    <input type="text" class="form-control" id="telefone_fixo" name="telefone_fixo" maxlength="30"
+                           value="{{ condominio.telefone_fixo or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="telefone_whatsapp">WhatsApp da administração</label>
+                    <input type="text" class="form-control" id="telefone_whatsapp" name="telefone_whatsapp" maxlength="30"
+                           value="{{ condominio.telefone_whatsapp or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="email_contato">E-mail oficial</label>
+                    <input type="email" class="form-control" id="email_contato" name="email_contato" maxlength="120"
+                           value="{{ condominio.email_contato or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="cep">CEP</label>
+                    <input type="text" class="form-control" id="cep" name="cep" maxlength="9" inputmode="numeric"
+                           value="{{ condominio.cep or '' }}" placeholder="00000-000"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-7">
+                    <label class="form-label" for="logradouro">Logradouro</label>
+                    <input type="text" class="form-control" id="logradouro" name="logradouro" maxlength="200"
+                           value="{{ condominio.logradouro or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="numero">Número</label>
+                    <input type="text" class="form-control" id="numero" name="numero" maxlength="20"
+                           value="{{ condominio.numero or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="complemento">Complemento</label>
+                    <input type="text" class="form-control" id="complemento" name="complemento" maxlength="120"
+                           value="{{ condominio.complemento or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="bairro">Bairro</label>
+                    <input type="text" class="form-control" id="bairro" name="bairro" maxlength="120"
+                           value="{{ condominio.bairro or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="cidade">Cidade</label>
+                    <input type="text" class="form-control" id="cidade" name="cidade" maxlength="120"
+                           value="{{ condominio.cidade or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="uf">UF</label>
+                    <input type="text" class="form-control" id="uf" name="uf" maxlength="2"
+                           value="{{ condominio.uf or '' }}"
+                           {% if not editar_contatos %}readonly disabled{% endif %}>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Governança e estrutura operacional</h2>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label" for="tipo_divisao">Tipo de divisão</label>
+                    <select class="form-select {% if not editar_operacao %}bg-light{% endif %}" id="tipo_divisao" name="tipo_divisao"
+                            {% if not editar_operacao %}disabled{% endif %}>
+                        {% for valor, rotulo in tipos_divisao %}
+                        <option value="{{ valor }}" {% if (condominio.tipo_divisao or 'bloco_apto') == valor %}selected{% endif %}>{{ rotulo }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="total_unidades_previsto">Total de unidades</label>
+                    <input type="number" class="form-control" id="total_unidades_previsto" name="total_unidades_previsto"
+                           min="0" max="100000" value="{{ condominio.total_unidades_previsto if condominio.total_unidades_previsto is not none else '' }}"
+                           {% if not editar_operacao %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="fim_mandato">Fim do mandato</label>
+                    <input type="text" class="form-control {% if editar_operacao %}datepicker{% endif %}" id="fim_mandato" name="fim_mandato"
+                           value="{{ condominio.fim_mandato.strftime('%Y-%m-%d') if condominio.fim_mandato else '' }}"
+                           placeholder="DD/MM/AAAA" autocomplete="off"
+                           {% if not editar_operacao %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="nome_responsavel_gestao">Responsável legal / administrador geral</label>
+                    <input type="text" class="form-control" id="nome_responsavel_gestao" name="nome_responsavel_gestao" maxlength="200"
+                           value="{{ condominio.nome_responsavel_gestao or '' }}"
+                           {% if not editar_operacao %}readonly disabled{% endif %}>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="horario_mudancas">Horário padrão de mudanças</label>
+                    <input type="text" class="form-control" id="horario_mudancas" name="horario_mudancas" maxlength="200"
+                           value="{{ condominio.horario_mudancas or '' }}"
+                           placeholder="Seg a Sex das 08h às 17h | Sáb das 08h às 12h"
+                           {% if not editar_operacao %}readonly disabled{% endif %}>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if editar_contatos or editar_operacao or editar_saas %}
+    <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check2-circle me-1"></i>Salvar dados
+    </button>
+    {% endif %}
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr(".datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+
+    const cep = document.getElementById("cep");
+    if (!cep || cep.disabled) return;
+    cep.addEventListener("blur", async function () {
+        const digitos = (cep.value || "").replace(/\D/g, "");
+        if (digitos.length !== 8) return;
+        cep.value = digitos.slice(0, 5) + "-" + digitos.slice(5);
+        try {
+            const resposta = await fetch("https://viacep.com.br/ws/" + digitos + "/json/");
+            if (!resposta.ok) return;
+            const dados = await resposta.json();
+            if (!dados || dados.erro) return;
+            const preencher = function (id, valor) {
+                const campo = document.getElementById(id);
+                if (campo && !campo.disabled && valor) campo.value = valor;
+            };
+            preencher("logradouro", dados.logradouro);
+            preencher("bairro", dados.bairro);
+            preencher("cidade", dados.localidade);
+            preencher("uf", dados.uf);
+        } catch (erro) {
+            return;
+        }
+    });
+})();
+</script>
+{% if url_portal %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+(function () {
+    const url = {{ url_portal|tojson }};
+    const nome = {{ condominio.nome|tojson }};
+    const logo = {{ (url_for('static', filename='uploads/logos/' ~ logo_divulgacao) if logo_divulgacao else '')|tojson }};
+    const opcoes = { correctLevel: QRCode.CorrectLevel.M };
+    new QRCode(document.getElementById("qr-tela"), Object.assign({ text: url, width: 180, height: 180 }, opcoes));
+    new QRCode(document.getElementById("qr-grande"), Object.assign({ text: url, width: 360, height: 360 }, opcoes));
+
+    function escapar(texto) {
+        return String(texto).replace(/[&<>"']/g, function (caractere) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[caractere];
+        });
+    }
+
+    function imagemQr() {
+        const caixa = document.getElementById("qr-grande");
+        const canvas = caixa.querySelector("canvas");
+        if (canvas) return canvas.toDataURL("image/png");
+        const img = caixa.querySelector("img");
+        return img ? img.src : "";
+    }
+
+    document.getElementById("btn-copiar-link").addEventListener("click", function () {
+        const botao = this;
+        const original = botao.dataset.rotulo || botao.textContent;
+        botao.dataset.rotulo = original;
+        const confirmar = function () {
+            botao.textContent = "Copiado!";
+            window.setTimeout(function () { botao.textContent = original; }, 2000);
+        };
+        const fallback = function () {
+            const campo = document.createElement("textarea");
+            campo.value = url;
+            document.body.appendChild(campo);
+            campo.select();
+            document.execCommand("copy");
+            campo.remove();
+            confirmar();
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(confirmar).catch(fallback);
+        } else {
+            fallback();
+        }
+    });
+
+    document.getElementById("btn-imprimir-qr").addEventListener("click", function () {
+        const qr = imagemQr();
+        const janela = window.open("", "_blank", "width=720,height=900");
+        if (!janela) return;
+        const blocoLogo = logo
+            ? '<img class="logo" src="' + escapar(logo) + '" alt="">'
+            : "";
+        janela.document.write(
+            "<!DOCTYPE html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><title>QR Code</title>" +
+            "<style>body{font-family:Arial,sans-serif;text-align:center;margin:2.5rem;color:#111;}" +
+            "img.logo{width:120px;height:120px;object-fit:contain;}h1{font-size:2rem;margin:1rem 0 1.5rem;}" +
+            "img.qr{width:320px;height:320px;}p{font-size:1.25rem;max-width:32rem;margin:1.5rem auto;line-height:1.4;}</style></head><body>" +
+            blocoLogo +
+            "<h1>" + escapar(nome) + "</h1>" +
+            (qr ? '<img class="qr" src="' + qr + '" alt="QR Code">' : "") +
+            "<p>Acesse o Portal do Morador, atualize seu cadastro e acesse o Clube de Vantagens</p>" +
+            "<script>window.addEventListener('load',function(){window.print();});<\/script></body></html>"
+        );
+        janela.document.close();
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

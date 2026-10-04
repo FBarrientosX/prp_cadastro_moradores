@@ -53,6 +53,8 @@ def credenciais_ativas(condominio):
         if morador is None or not morador.eh_morador:
             continue
         unidade = morador.unidade
+        if unidade is not None and unidade.eh_setor_interno:
+            continue
         credenciais.append(
             {
                 "tipo": credencial.tipo,

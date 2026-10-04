@@ -32,6 +32,9 @@
                 <label class="form-label fs-5" for="filtro-busca">Busca rápida</label>
                 <input class="form-control form-control-lg" id="filtro-busca" type="search"
                        placeholder="Ex.: 6 703, 703 ou nome do morador" autocomplete="off">
+                <button type="button" class="btn btn-outline-dark btn-lg w-100 mt-2" id="atalho-administracao">
+                    🏢 Administração / Setores
+                </button>
             </div>
         </div>
     </div>
@@ -54,6 +57,9 @@
 {% if not sem_condominio %}
 <script>
     const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const SETORES_INTERNOS = {{ setores_internos | tojson }};
+    const BLOCO_SETORES = "ADM";
+    const SETOR_ADMINISTRACAO = "Administração";
     const URL_BUSCA = {{ url_for("api_portaria_buscar_unidade") | tojson }};
     const blocoSelect = document.getElementById("filtro-bloco");
     const aptoSelect = document.getElementById("filtro-apartamento");
@@ -70,6 +76,10 @@
             option.textContent = "Bloco " + bloco;
             blocoSelect.appendChild(option);
         });
+        const setores = document.createElement("option");
+        setores.value = BLOCO_SETORES;
+        setores.textContent = "ADM — Setores Internos";
+        blocoSelect.appendChild(setores);
     }
 
     function popularApartamentos(bloco) {
@@ -79,6 +89,15 @@
         vazio.textContent = bloco ? "Selecione" : "Selecione o bloco";
         aptoSelect.appendChild(vazio);
         aptoSelect.disabled = !bloco;
+        if (bloco === BLOCO_SETORES) {
+            SETORES_INTERNOS.forEach((setor) => {
+                const option = document.createElement("option");
+                option.value = setor;
+                option.textContent = setor;
+                aptoSelect.appendChild(option);
+            });
+            return;
+        }
         if (!bloco || !CONDOMINIO_ESTRUTURA[bloco]) {
             return;
         }
@@ -111,8 +130,24 @@
         return "Bloco " + bloco + " - Apto " + apto;
     }
 
-    function mensagemWhatsapp(tipo, nome, bloco, apto) {
+    function mensagemWhatsapp(tipo, nome, bloco, apto, setorInterno) {
         const identificacao = identificacaoInput.value.trim();
+        if (setorInterno) {
+            const saudacaoSetor = "Olá, " + nome + "! Aqui é da Portaria. ";
+            if (tipo === "visitante") {
+                if (identificacao) {
+                    return saudacaoSetor + "*" + identificacao + "* encontra-se na portaria procurando pela *" + apto + "*. Podemos autorizar a entrada?";
+                }
+                return saudacaoSetor + "Há um visitante/prestador na portaria procurando pela *" + apto + "*. Podemos autorizar a entrada?";
+            }
+            if (tipo === "delivery") {
+                if (identificacao) {
+                    return saudacaoSetor + "Há um entregador (*" + identificacao + "*) na portaria para o setor *" + apto + "*. Você pode vir receber?";
+                }
+                return saudacaoSetor + "Há um entregador de delivery na portaria para o setor *" + apto + "*. Você pode vir receber?";
+            }
+            return "Olá, " + nome + "! Aqui é da Portaria (ref. setor " + apto + ").";
+        }
         const referencia = referenciaUnidade(bloco, apto);
         const saudacao = "Olá, " + nome + "! Aqui é da Portaria do condomínio. ";
         if (tipo === "visitante") {
@@ -140,6 +175,7 @@
         link.dataset.waNome = morador.nome || "Morador";
         link.dataset.waBloco = unidade.bloco;
         link.dataset.waApto = unidade.apartamento;
+        link.dataset.waSetor = unidade.eh_setor_interno ? "1" : "0";
         link.dataset.waTelefone = morador.telefone;
         link.href = "#";
         return link;
@@ -151,7 +187,8 @@
                 link.dataset.waTipo,
                 link.dataset.waNome,
                 link.dataset.waBloco,
-                link.dataset.waApto
+                link.dataset.waApto,
+                link.dataset.waSetor === "1"
             );
             link.href = "https://wa.me/" + link.dataset.waTelefone + "?text=" + encodeURIComponent(texto);
         });
@@ -218,7 +255,9 @@
         header.className = "card-header bg-white py-3";
         const titulo = document.createElement("h2");
         titulo.className = "h4 mb-0";
-        titulo.textContent = "Bloco " + unidade.bloco + " — Apartamento " + unidade.apartamento;
+        titulo.textContent = unidade.eh_setor_interno
+            ? "🏢 Setor: " + unidade.apartamento
+            : "Bloco " + unidade.bloco + " — Apartamento " + unidade.apartamento;
         header.appendChild(titulo);
         card.appendChild(header);
 
@@ -230,10 +269,14 @@
         }
         const lista = document.createElement("h3");
         lista.className = "h6 text-uppercase text-muted mb-0";
-        lista.textContent = "Moradores residentes";
+        lista.textContent = unidade.eh_setor_interno ? "Contatos" : "Moradores residentes";
         body.appendChild(lista);
         if (!unidade.moradores || !unidade.moradores.length) {
-            body.appendChild(mensagem("Nenhum morador residente encontrado."));
+            body.appendChild(mensagem(
+                unidade.eh_setor_interno
+                    ? "Nenhum contato cadastrado neste setor."
+                    : "Nenhum morador residente encontrado."
+            ));
         } else {
             unidade.moradores.forEach((morador) => body.appendChild(desenharMorador(morador, unidade)));
         }
@@ -354,6 +397,13 @@
     aptoSelect.addEventListener("change", executarBusca);
     buscaInput.addEventListener("input", agendarBusca);
     identificacaoInput.addEventListener("input", aplicarLinksWhatsapp);
+    document.getElementById("atalho-administracao").addEventListener("click", () => {
+        blocoSelect.value = BLOCO_SETORES;
+        popularApartamentos(BLOCO_SETORES);
+        aptoSelect.value = SETOR_ADMINISTRACAO;
+        buscaInput.value = "";
+        executarBusca();
+    });
     resultado.appendChild(mensagem("Selecione o bloco e o apartamento ou digite a busca."));
 </script>
 {% endif %}

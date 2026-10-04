@@ -92,4 +92,30 @@
         </div>
     </div>
 </div>
+
+{% if condominio and (condominio.regimento_filename or condominio.convencao_filename) %}
+<div class="card border-0 shadow-sm mt-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <i class="bi bi-file-earmark-text text-primary"></i>
+            <h2 class="h6 mb-0">Documentos oficiais</h2>
+        </div>
+        <p class="text-muted mb-3">Consulte o regimento e a convenção do condomínio.</p>
+        <div class="d-flex flex-wrap gap-2">
+            {% if condominio.regimento_filename %}
+            <a class="btn btn-outline-primary" target="_blank" rel="noopener"
+               href="{{ url_for('condominio_documento', tipo='regimento') }}">
+                <i class="bi bi-file-earmark-pdf me-1"></i>Regimento Interno
+            </a>
+            {% endif %}
+            {% if condominio.convencao_filename %}
+            <a class="btn btn-outline-primary" target="_blank" rel="noopener"
+               href="{{ url_for('condominio_documento', tipo='convencao') }}">
+                <i class="bi bi-file-earmark-pdf me-1"></i>Convenção
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

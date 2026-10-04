@@ -193,6 +193,9 @@ def superadmin_condominios():
                 logo_filename=logo_filename,
             )
         )
+        from app import garantir_setor_administracao
+
+        garantir_setor_administracao(condominio)
         db.session.commit()
         flash(
             f"Condomínio '{nome}' cadastrado. Porta de entrada: /c/{slug}/login",

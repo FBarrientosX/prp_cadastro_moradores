@@ -3,9 +3,16 @@
 {% block title %}Painel da Portaria{% endblock %}
 
 {% block content %}
-<div class="mb-4">
-    <h1 class="h3 mb-1">Painel da Portaria</h1>
-    <p class="text-muted mb-0">Controle operacional de acesso e encomendas.</p>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Painel da Portaria</h1>
+        <p class="text-muted mb-0">Controle operacional de acesso e encomendas.</p>
+    </div>
+    {% if current_user and current_user.role == 'porteiro' %}
+    <a href="{{ url_for('portaria_livro') }}" class="btn btn-outline-dark">
+        <i class="bi bi-journal-text me-1"></i>Livro de Serviço
+    </a>
+    {% endif %}
 </div>
 
 <div class="row g-3">

@@ -25,6 +25,9 @@ def gerar_api_key():
     return secrets.token_hex(32)
 
 
+BLOCO_SETORES = "ADM"
+SETOR_ADMINISTRACAO = "Administração"
+
 BLOCOS_ANDARES = {
     "1": 7,
     "2": 7,

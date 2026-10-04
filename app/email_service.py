@@ -92,6 +92,22 @@ def enviar_email_validacao_parcial(email_destino, moradores_recusados):
     _enviar_email(email_destino, assunto, corpo)
 
 
+def enviar_email_encomenda_setor(email_destino, setor, quando, destinatario=None, codigo_rastreio=None):
+    """Avisa um contato do setor interno de que chegou encomenda na portaria."""
+    assunto = f"Encomenda na portaria — {setor}"
+    linhas = [
+        f"A portaria recebeu uma encomenda para {setor}.",
+        f"Recebida em: {quando}",
+    ]
+    if destinatario:
+        linhas.append(f"Destinatário informado: {destinatario}")
+    if codigo_rastreio:
+        linhas.append(f"Código de rastreio: {codigo_rastreio}")
+    linhas.append("")
+    linhas.append("O pacote está aguardando retirada na portaria.")
+    _enviar_email(email_destino, assunto, "\n".join(linhas))
+
+
 def enviar_email_nova_reserva(email_destino, nome_espaco, bloco, apartamento, data_reserva):
     assunto = "PRP Condomínio - Nova Solicitação de Reserva"
     corpo = (

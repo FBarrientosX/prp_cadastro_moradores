@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Setores / Contatos ADM{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h1 class="h3 mb-1">Setores / Contatos ADM</h1>
+        <p class="text-muted mb-0">Administração, zeladoria e outros destinos da portaria</p>
+    </div>
+</div>
+
+{% if encomendas_setores %}
+{% include "includes/encomendas_setores.html" %}
+{% endif %}
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h6 mb-3">Novo setor</h2>
+        <form method="post" action="{{ url_for('admin_setores_criar') }}" class="row g-2 align-items-end">
+            <div class="col-md-8">
+                <label class="form-label" for="nome-setor">Nome do setor</label>
+                <input class="form-control" id="nome-setor" name="nome" maxlength="20" required placeholder="Zeladoria, Manutenção, Síndico Geral">
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-primary w-100">Criar setor</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% for setor in setores %}
+{% set principal = setor.apartamento|lower == setor_principal|lower %}
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+            <div>
+                <h2 class="h5 mb-1">{{ setor.identificador }}</h2>
+                {% if principal %}
+                <span class="badge text-bg-secondary">Setor permanente</span>
+                {% endif %}
+            </div>
+            {% if principal %}
+            <button type="button" class="btn btn-outline-danger btn-sm" disabled title="O setor Administração não pode ser excluído">Remover setor</button>
+            {% else %}
+            <form method="post" action="{{ url_for('admin_setores_excluir', setor_id=setor.id) }}" onsubmit="return confirm('Excluir o setor ' + {{ setor.apartamento|tojson }} + ' e os contatos dele?');">
+                <button type="submit" class="btn btn-outline-danger btn-sm">Remover setor</button>
+            </form>
+            {% endif %}
+        </div>
+
+        {% set contatos = setor.contatos_ordenados %}
+        {% if contatos %}
+        <div class="vstack gap-3 mb-4">
+            {% for contato in contatos %}
+            <div class="border rounded p-3">
+                <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                    <div>
+                        <div class="fw-semibold">{{ contato.nome_completo }}</div>
+                        <div class="small text-muted">
+                            {{ contato.telefone }}
+                            {% if contato.email %} · {{ contato.email }}{% else %} · sem e-mail{% endif %}
+                        </div>
+                        {% if contato.is_responsavel %}
+                        <span class="badge text-bg-primary mt-1">Contato principal</span>
+                        {% endif %}
+                    </div>
+                    <form method="post" action="{{ url_for('admin_setores_contato_excluir', setor_id=setor.id, pessoa_id=contato.id) }}" onsubmit="return confirm('Remover este contato?');">
+                        <button type="submit" class="btn btn-outline-danger btn-sm">Remover</button>
+                    </form>
+                </div>
+                <details class="mt-3">
+                    <summary class="small">Editar contato</summary>
+                    <form method="post" action="{{ url_for('admin_setores_contato_salvar', setor_id=setor.id) }}" class="row g-2 mt-2">
+                        <input type="hidden" name="pessoa_id" value="{{ contato.id }}">
+                        <div class="col-md-4">
+                            <label class="form-label">Nome / Cargo</label>
+                            <input class="form-control" name="nome" maxlength="200" required value="{{ contato.nome_completo }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Telefone / WhatsApp</label>
+                            <input class="form-control" name="telefone" maxlength="20" required value="{{ contato.telefone }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">E-mail</label>
+                            <input class="form-control" name="email" maxlength="120" value="{{ contato.email or '' }}">
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" name="responsavel" value="1" id="principal-{{ contato.id }}" {% if contato.is_responsavel %}checked{% endif %}>
+                                <label class="form-check-label" for="principal-{{ contato.id }}">Principal</label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <button type="submit" class="btn btn-outline-primary btn-sm">Salvar contato</button>
+                        </div>
+                    </form>
+                </details>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted">Nenhum contato cadastrado neste setor.</p>
+        {% endif %}
+
+        <h3 class="h6">Adicionar contato</h3>
+        <form method="post" action="{{ url_for('admin_setores_contato_salvar', setor_id=setor.id) }}" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label">Nome / Cargo</label>
+                <input class="form-control" name="nome" maxlength="200" required placeholder="Recepção ADM">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Telefone / WhatsApp</label>
+                <input class="form-control" name="telefone" maxlength="20" required placeholder="11988887777">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">E-mail</label>
+                <input class="form-control" name="email" maxlength="120" placeholder="opcional">
+            </div>
+            <div class="col-md-2">
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="checkbox" name="responsavel" value="1" id="novo-principal-{{ setor.id }}">
+                    <label class="form-check-label" for="novo-principal-{{ setor.id }}">Principal</label>
+                </div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary btn-sm">Adicionar contato</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
+<p class="text-muted">Nenhum setor interno neste condomínio.</p>
+{% endfor %}
+{% endblock %}

@@ -58,8 +58,9 @@ class VinculoPessoa:
 class TipoVisitante:
     VISITANTE = "Visitante"
     PRESTADOR = "Prestador"
+    DELIVERY = "Delivery/Entrega"
 
-    CHOICES = (VISITANTE, PRESTADOR)
+    CHOICES = (VISITANTE, PRESTADOR, DELIVERY)
 
 
 class StatusEncomenda:
@@ -118,6 +119,30 @@ class Condominio(db.Model):
     permitir_apoio = db.Column(db.Boolean, nullable=False, default=False)
     permitir_ronda = db.Column(db.Boolean, nullable=False, default=False)
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    razao_social = db.Column(db.String(200), nullable=True)
+    plano = db.Column(db.String(40), nullable=False, default="Profissional")
+    fuso_horario = db.Column(
+        db.String(64), nullable=False, default="America/Sao_Paulo"
+    )
+    criado_em = db.Column(db.DateTime, nullable=True, default=datetime.utcnow)
+    telefone_fixo = db.Column(db.String(30), nullable=True)
+    telefone_whatsapp = db.Column(db.String(30), nullable=True)
+    email_contato = db.Column(db.String(120), nullable=True)
+    cep = db.Column(db.String(9), nullable=True)
+    logradouro = db.Column(db.String(200), nullable=True)
+    numero = db.Column(db.String(20), nullable=True)
+    complemento = db.Column(db.String(120), nullable=True)
+    bairro = db.Column(db.String(120), nullable=True)
+    cidade = db.Column(db.String(120), nullable=True)
+    uf = db.Column(db.String(2), nullable=True)
+    tipo_divisao = db.Column(db.String(20), nullable=False, default="bloco_apto")
+    total_unidades_previsto = db.Column(db.Integer, nullable=True)
+    nome_responsavel_gestao = db.Column(db.String(200), nullable=True)
+    fim_mandato = db.Column(db.Date, nullable=True)
+    horario_mudancas = db.Column(db.String(200), nullable=True)
+    logo_filename = db.Column(db.String(255), nullable=True)
+    regimento_filename = db.Column(db.String(255), nullable=True)
+    convencao_filename = db.Column(db.String(255), nullable=True)
 
     configuracao = db.relationship(
         "ConfiguracaoCondominio",
@@ -246,7 +271,12 @@ class Usuario(db.Model):
 class Unidade(db.Model):
     __tablename__ = "unidades"
     __table_args__ = (
-        db.UniqueConstraint("bloco", "apartamento", name="uq_bloco_apartamento"),
+        db.UniqueConstraint(
+            "condominio_id",
+            "bloco",
+            "apartamento",
+            name="uq_condominio_bloco_apartamento",
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
@@ -284,6 +314,8 @@ class Unidade(db.Model):
     notificacao_sindico = db.Column(db.Text, nullable=True)
     # Soft flag: atualização crítica aguarda síndico sem derrubar o login.
     atualizacao_pendente = db.Column(db.Boolean, nullable=False, default=False)
+    # Administração, zeladoria e outros destinos da portaria. Não é unidade residencial.
+    eh_setor_interno = db.Column(db.Boolean, nullable=False, default=False)
     # Marca a última troca de senha; usado para invalidar tokens de
     # redefinição já consumidos (evita reuso do mesmo link).
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
@@ -335,6 +367,8 @@ class Unidade(db.Model):
 
     @property
     def identificador(self):
+        if self.eh_setor_interno:
+            return f"Setor: {self.apartamento}"
         return f"{self.bloco} - {self.apartamento}"
 
     def __repr__(self):

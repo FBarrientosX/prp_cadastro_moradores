@@ -145,6 +145,8 @@ def sindico_dashboard():
         )
     ]
 
+    from app.blueprints.admin import encomendas_pendentes_setores
+
     return render_template(
         "dashboard_sindico.html",
         mapa_bloco=mapa_bloco,
@@ -153,6 +155,7 @@ def sindico_dashboard():
         unidades_pendentes=unidades_pendentes,
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
+        encomendas_setores=encomendas_pendentes_setores(condominio_id),
     )
 
 

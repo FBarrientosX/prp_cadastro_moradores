@@ -1,406 +1,303 @@
 {% extends "portaria_base.html" %}
 
-{% block title %}Controle de Acesso{% endblock %}
+{% block title %}Visitantes e Acesso{% endblock %}
 
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-    <div>
-        <h1 class="h3 mb-1">Controle de Acesso</h1>
-        <p class="text-muted mb-0">Check-in e check-out de visitantes e prestadores.</p>
-    </div>
-    <span class="badge text-bg-secondary fs-6">
-        {{ registros_abertos|length }} no condomínio
-    </span>
-</div>
-
-{% macro badge_tipo_autorizacao(tipo) %}
+{% macro badge_tipo(tipo) %}
     {% if tipo == 'Prestador' %}
     <span class="badge text-bg-warning">Prestador</span>
+    {% elif tipo == 'Delivery/Entrega' %}
+    <span class="badge text-bg-info">Delivery</span>
     {% else %}
     <span class="badge text-bg-primary">Visitante</span>
     {% endif %}
 {% endmacro %}
 
-{% macro badge_placa(placa) %}
-    {% if placa %}
-    <span class="badge bg-secondary"><i class="bi bi-car-front"></i> {{ placa }}</span>
-    {% endif %}
-{% endmacro %}
+<div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+    <h1 class="h4 mb-0">Visitantes &amp; Acesso</h1>
+    <span class="badge text-bg-dark">{{ registros_abertos|length }} no condomínio</span>
+</div>
 
-{% macro badge_status_autorizacao(item) %}
-    {% if item.status == 'Concluída' %}
-    <span class="badge text-bg-success">Compareceu</span>
-    {% elif item.status == 'Cancelada' %}
-    <span class="badge text-bg-secondary">Cancelada</span>
-    {% else %}
-    <span class="badge text-bg-danger">Expirada / Não compareceu</span>
-    {% endif %}
-{% endmacro %}
-
-<div class="card border-0 shadow-sm mb-4 border-start border-success border-4">
-    <div class="card-header bg-white border-0 pt-3 pb-0">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-            <div>
-                <h2 class="h5 mb-0">
-                    <i class="bi bi-calendar-check text-success me-1"></i>
-                    Autorizações
+<div class="row g-3 align-items-start">
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">
+                    <i class="bi bi-box-arrow-in-right me-1"></i>Registrar Entrada (Check-in)
                 </h2>
-                <p class="text-muted small mb-0">Hoje no Brasil: {{ data_hoje.strftime('%d/%m/%Y') }}</p>
-            </div>
-        </div>
-        <ul class="nav nav-tabs card-header-tabs" id="autorizacoesTabs" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link active fw-semibold" id="auth-hoje-tab" data-bs-toggle="tab"
-                        data-bs-target="#auth-hoje" type="button" role="tab"
-                        aria-controls="auth-hoje" aria-selected="true">
-                    Hoje
-                    <span class="badge text-bg-success ms-1">{{ autorizacoes_hoje|length }}</span>
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link fw-semibold" id="auth-futuras-tab" data-bs-toggle="tab"
-                        data-bs-target="#auth-futuras" type="button" role="tab"
-                        aria-controls="auth-futuras" aria-selected="false">
-                    Próximos Dias
-                    <span class="badge text-bg-info ms-1">{{ autorizacoes_futuras|length }}</span>
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link fw-semibold" id="auth-historico-tab" data-bs-toggle="tab"
-                        data-bs-target="#auth-historico" type="button" role="tab"
-                        aria-controls="auth-historico" aria-selected="false">
-                    Histórico / Expirados
-                    <span class="badge text-bg-secondary ms-1">{{ autorizacoes_historico|length }}</span>
-                </button>
-            </li>
-        </ul>
-    </div>
-    <div class="card-body">
-        <div class="tab-content" id="autorizacoesTabsContent">
-            <div class="tab-pane fade show active" id="auth-hoje" role="tabpanel" aria-labelledby="auth-hoje-tab">
-                {% if autorizacoes_hoje %}
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Unidade destino</th>
-                                <th>Nome</th>
-                                <th>Tipo</th>
-                                <th>Documento</th>
-                                <th class="text-end">Ação</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in autorizacoes_hoje %}
-                            <tr>
-                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>
-                                    <div>{{ item.nome_visitante }}</div>
-                                    {{ badge_placa(item.placa_veiculo) }}
-                                </td>
-                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
-                                <td>{{ item.documento or '—' }}</td>
-                                <td class="text-end">
-                                    {% if item.status == 'Pendente' %}
-                                    <form method="post"
-                                          action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}"
-                                          class="d-inline-flex flex-wrap align-items-center justify-content-end gap-2 form-confirmar"
-                                          data-confirm-mensagem="Confirmar chegada de {{ item.nome_visitante }} na unidade {{ item.unidade.identificador }}?">
-                                        <input type="text" class="form-control form-control-sm"
-                                               name="placa_veiculo" maxlength="10"
-                                               value="{{ item.placa_veiculo or '' }}"
-                                               placeholder="Placa (opcional)"
-                                               aria-label="Placa do veículo"
-                                               style="width: 8rem; text-transform: uppercase;"
-                                               autocomplete="off">
-                                        <button type="submit" class="btn btn-sm btn-success">
-                                            <i class="bi bi-check2-circle me-1"></i>Confirmar Chegada
-                                        </button>
-                                    </form>
-                                    {% elif item.status == 'Concluída' %}
-                                    <span class="badge text-bg-success">Compareceu</span>
-                                    {% elif item.status == 'Cancelada' %}
-                                    <span class="badge text-bg-secondary">Cancelada</span>
-                                    {% else %}
-                                    <span class="badge text-bg-secondary">{{ item.status }}</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
+                <form method="post" action="{{ url_for('portaria_acesso_entrada') }}" class="row g-2"
+                      id="form-entrada"
+                      data-historico-url="{{ url_for('api_portaria_visitante_historico') }}"
+                      data-interfone-url="{{ url_for('api_portaria_buscar_unidade') }}">
+                    <div class="col-md-5">
+                        <label class="form-label mb-1" for="documento">RG / CPF</label>
+                        <input type="text" class="form-control" id="documento" name="documento"
+                               maxlength="20" required autocomplete="off">
+                    </div>
+                    <div class="col-md-7 position-relative">
+                        <label class="form-label mb-1" for="nome">Nome</label>
+                        <input type="text" class="form-control" id="nome" name="nome"
+                               maxlength="200" required autocomplete="off">
+                        <div id="sugestoes-visitante" class="list-group position-absolute w-100 shadow-sm"
+                             style="z-index: 5; top: 100%;" hidden></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label mb-1" for="tipo">Tipo</label>
+                        <select class="form-select" id="tipo" name="tipo" required>
+                            {% for tipo in tipos_visitante %}
+                            <option value="{{ tipo }}">{{ tipo }}</option>
                             {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% else %}
-                <p class="text-muted mb-0">Nenhuma visita autorizada para hoje.</p>
-                {% endif %}
-            </div>
-
-            <div class="tab-pane fade" id="auth-futuras" role="tabpanel" aria-labelledby="auth-futuras-tab">
-                {% if autorizacoes_futuras %}
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Data prevista</th>
-                                <th>Unidade destino</th>
-                                <th>Nome</th>
-                                <th>Tipo</th>
-                                <th>Documento</th>
-                                <th class="text-end">Situação</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in autorizacoes_futuras %}
-                            <tr>
-                                <td>
-                                    <span class="badge text-bg-info fs-6 fw-semibold">
-                                        {{ item.data_prevista.strftime('%d/%m/%Y') }}
-                                    </span>
-                                </td>
-                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>
-                                    <div>{{ item.nome_visitante }}</div>
-                                    {{ badge_placa(item.placa_veiculo) }}
-                                </td>
-                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
-                                <td>{{ item.documento or '—' }}</td>
-                                <td class="text-end">
-                                    {% if item.status == 'Cancelada' %}
-                                    <span class="badge text-bg-secondary">Cancelada</span>
-                                    {% else %}
-                                    <span class="badge text-bg-light text-muted border">Aguardando a data</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% else %}
-                <p class="text-muted mb-0">Nenhuma autorização agendada para os próximos dias.</p>
-                {% endif %}
-            </div>
-
-            <div class="tab-pane fade" id="auth-historico" role="tabpanel" aria-labelledby="auth-historico-tab">
-                {% if autorizacoes_historico %}
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Data prevista</th>
-                                <th>Unidade destino</th>
-                                <th>Nome</th>
-                                <th>Tipo</th>
-                                <th>Documento</th>
-                                <th class="text-end">Situação</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in autorizacoes_historico %}
-                            <tr>
-                                <td class="text-nowrap">{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
-                                <td class="fw-semibold">{{ item.unidade.identificador }}</td>
-                                <td>
-                                    <div>{{ item.nome_visitante }}</div>
-                                    {{ badge_placa(item.placa_veiculo) }}
-                                </td>
-                                <td>{{ badge_tipo_autorizacao(item.tipo) }}</td>
-                                <td>{{ item.documento or '—' }}</td>
-                                <td class="text-end">{{ badge_status_autorizacao(item) }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% if autorizacoes_historico|length >= 50 %}
-                <p class="text-muted small mb-0 mt-2">Exibindo as 50 autorizações mais recentes anteriores a hoje.</p>
-                {% endif %}
-                {% else %}
-                <p class="text-muted mb-0">Nenhuma autorização anterior encontrada.</p>
-                {% endif %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label mb-1" for="placa_veiculo">Placa (opcional)</label>
+                        <input type="text" class="form-control" id="placa_veiculo" name="placa_veiculo"
+                               maxlength="10" placeholder="ABC1D23" autocomplete="off"
+                               style="text-transform: uppercase;">
+                    </div>
+                    <div class="col-md-4 d-none" id="campo-empresa">
+                        <label class="form-label mb-1" for="empresa">Empresa</label>
+                        <input type="text" class="form-control" id="empresa" name="empresa"
+                               maxlength="200" placeholder="Opcional">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label mb-1" for="filtro-unidade">Unidade de destino</label>
+                        <input type="search" class="form-control form-control-sm mb-1" id="filtro-unidade"
+                               placeholder="Filtrar bloco, apto ou setor" autocomplete="off">
+                        <select class="form-select" id="unidade_id" name="unidade_id" required>
+                            <option value="" selected disabled>Selecione a unidade...</option>
+                            {% set setores = unidades | selectattr('eh_setor_interno') | list %}
+                            {% set residenciais = unidades | rejectattr('eh_setor_interno') | list %}
+                            {% if setores %}
+                            <optgroup label="Setores internos">
+                                {% for unidade in setores %}
+                                <option value="{{ unidade.id }}"
+                                        data-bloco="{{ unidade.bloco }}"
+                                        data-apto="{{ unidade.apartamento }}">{{ unidade.identificador }}</option>
+                                {% endfor %}
+                            </optgroup>
+                            {% endif %}
+                            {% if residenciais %}
+                            <optgroup label="Unidades">
+                                {% for unidade in residenciais %}
+                                <option value="{{ unidade.id }}"
+                                        data-bloco="{{ unidade.bloco }}"
+                                        data-apto="{{ unidade.apartamento }}">{{ unidade.identificador }}</option>
+                                {% endfor %}
+                            </optgroup>
+                            {% endif %}
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <div id="box-interfone" class="border rounded p-2 bg-light d-none"></div>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check2-circle me-1"></i>Registrar entrada
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
-</div>
 
-<div class="card border-0 shadow-sm mb-4">
-    <div class="card-body">
-        <h2 class="h5 mb-3">
-            <i class="bi bi-box-arrow-in-right me-1"></i>Registrar entrada
-        </h2>
-        <form method="post" action="{{ url_for('portaria_acesso_entrada') }}" class="row g-3">
-            <div class="col-md-3">
-                <label class="form-label" for="documento">RG / CPF</label>
-                <input type="text" class="form-control" id="documento" name="documento"
-                       maxlength="20" required autocomplete="off">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label" for="nome">Nome</label>
-                <input type="text" class="form-control" id="nome" name="nome"
-                       maxlength="200" required>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label" for="tipo">Tipo</label>
-                <select class="form-select" id="tipo" name="tipo" required>
-                    {% for tipo in tipos_visitante %}
-                    <option value="{{ tipo }}">{{ tipo }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-4 d-none" id="campo-empresa">
-                <label class="form-label" for="empresa">Empresa</label>
-                <input type="text" class="form-control" id="empresa" name="empresa"
-                       maxlength="200" placeholder="Opcional para prestadores">
-            </div>
-            <div class="col-md-4">
-                <label class="form-label" for="unidade_id">Unidade de destino</label>
-                <select class="form-select" id="unidade_id" name="unidade_id" required>
-                    <option value="" selected disabled>Selecione a unidade...</option>
-                    {% for unidade in unidades %}
-                    <option value="{{ unidade.id }}">{{ unidade.identificador }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label" for="placa_veiculo">Placa do Veículo (Opcional)</label>
-                <input type="text" class="form-control" id="placa_veiculo" name="placa_veiculo"
-                       maxlength="10" placeholder="ABC1D23" autocomplete="off"
-                       style="text-transform: uppercase;">
-            </div>
-            <div class="col-md-5 d-flex align-items-end">
-                <button type="submit" class="btn btn-primary">
-                    <i class="bi bi-check2-circle me-1"></i>Registrar entrada
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<ul class="nav nav-tabs" id="acessoTabs" role="tablist">
-    <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="atuais-tab" data-bs-toggle="tab"
-                data-bs-target="#atuais" type="button" role="tab">
-            Visitantes atuais
-            <span class="badge bg-secondary ms-1">{{ registros_abertos|length }}</span>
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="historico-acesso-tab" data-bs-toggle="tab"
-                data-bs-target="#historico-acesso" type="button" role="tab">
-            Histórico de acessos
-            <span class="badge bg-secondary ms-1">{{ registros_historico|length }}</span>
-        </button>
-    </li>
-</ul>
-
-<div class="tab-content pt-3">
-    <div class="tab-pane fade show active" id="atuais" role="tabpanel">
-        {% if registros_abertos %}
-        <div class="table-responsive card shadow-sm">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Nome</th>
-                        <th>Tipo</th>
-                        <th>Documento</th>
-                        <th>Unidade destino</th>
-                        <th>Data/hora de entrada</th>
-                        <th>Porteiro (entrada)</th>
-                        <th class="text-end">Ação</th>
-                    </tr>
-                </thead>
-                <tbody>
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h6 mb-2">
+                    No condomínio agora
+                    <span class="badge text-bg-secondary">{{ registros_abertos|length }}</span>
+                </h2>
+                <div class="overflow-auto" style="max-height: 220px;">
+                    {% if registros_abertos %}
                     {% for registro in registros_abertos %}
-                    <tr>
-                        <td>
-                            <div class="fw-semibold">{{ registro.visitante.nome }}</div>
-                            {% if registro.visitante.empresa %}
-                            <div class="small text-muted">{{ registro.visitante.empresa }}</div>
-                            {% endif %}
-                            {{ badge_placa(registro.placa_veiculo) }}
-                        </td>
-                        <td>
-                            {% if registro.visitante.tipo == 'Prestador' %}
-                            <span class="badge text-bg-warning">Prestador</span>
-                            {% else %}
-                            <span class="badge text-bg-primary">Visitante</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ registro.visitante.documento }}</td>
-                        <td>{{ registro.unidade.identificador }}</td>
-                        <td>{{ registro.data_entrada.strftime('%d/%m/%Y %H:%M') }}</td>
-                        <td>{{ registro.porteiro.username if registro.porteiro else '—' }}</td>
-                        <td class="text-end">
-                            <form method="post"
-                                  action="{{ url_for('portaria_acesso_saida', registro_id=registro.id) }}"
-                                  class="d-inline form-confirmar"
-                                  data-confirm-mensagem="Confirmar saída de {{ registro.visitante.nome }}?">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    <i class="bi bi-box-arrow-right me-1"></i>Registrar saída
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
+                    <div class="d-flex justify-content-between align-items-center gap-2 py-2 {% if not loop.last %}border-bottom{% endif %}">
+                        <div class="min-w-0">
+                            <div class="fw-semibold text-truncate">{{ registro.visitante.nome }}</div>
+                            <div class="small text-muted text-truncate">
+                                {{ badge_tipo(registro.visitante.tipo) }}
+                                {{ registro.unidade.identificador }}
+                                · {{ registro.data_entrada.strftime('%H:%M') }}
+                            </div>
+                        </div>
+                        <form method="post" action="{{ url_for('portaria_acesso_saida', registro_id=registro.id) }}" class="flex-shrink-0">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Registrar Saída</button>
+                        </form>
+                    </div>
                     {% endfor %}
-                </tbody>
-            </table>
+                    {% else %}
+                    <p class="text-muted small mb-0">Ninguém com entrada aberta.</p>
+                    {% endif %}
+                </div>
+            </div>
         </div>
-        {% else %}
-        <p class="text-muted mb-0">Nenhum visitante ou prestador no condomínio neste momento.</p>
-        {% endif %}
-    </div>
 
-    <div class="tab-pane fade" id="historico-acesso" role="tabpanel">
-        {% if registros_historico %}
-        <div class="table-responsive card shadow-sm">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Nome</th>
-                        <th>Tipo</th>
-                        <th>Unidade</th>
-                        <th>Data/hora de entrada</th>
-                        <th>Porteiro (entrada)</th>
-                        <th>Data/hora de saída</th>
-                        <th>Porteiro (saída)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for registro in registros_historico %}
-                    <tr>
-                        <td>
-                            <div class="fw-semibold">{{ registro.visitante.nome }}</div>
-                            {% if registro.visitante.empresa %}
-                            <div class="small text-muted">{{ registro.visitante.empresa }}</div>
-                            {% endif %}
-                            {{ badge_placa(registro.placa_veiculo) }}
-                        </td>
-                        <td>
-                            {% if registro.visitante.tipo == 'Prestador' %}
-                            <span class="badge text-bg-warning">Prestador</span>
+        <div class="card border-0 shadow-sm border-start border-success border-4">
+            <div class="card-body">
+                <h2 class="h6 mb-1">Autorizações para hoje</h2>
+                <p class="text-muted small mb-2">{{ data_hoje.strftime('%d/%m/%Y') }}</p>
+                <div class="overflow-auto" style="max-height: 240px;">
+                    {% if autorizacoes_hoje %}
+                    {% for item in autorizacoes_hoje %}
+                    <div class="py-2 {% if not loop.last %}border-bottom{% endif %}">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div class="min-w-0">
+                                <div class="fw-semibold text-truncate">{{ item.nome_visitante }}</div>
+                                <div class="small text-muted text-truncate">
+                                    {{ item.unidade.identificador }}
+                                    · {{ badge_tipo(item.tipo) }}
+                                </div>
+                            </div>
+                            {% if item.status == 'Pendente' %}
+                            <form method="post" action="{{ url_for('portaria_acesso_autorizada', auth_id=item.id) }}" class="flex-shrink-0">
+                                <button type="submit" class="btn btn-sm btn-success">Confirmar Entrada</button>
+                            </form>
+                            {% elif item.status == 'Concluída' %}
+                            <span class="badge text-bg-success">Compareceu</span>
+                            {% elif item.status == 'Cancelada' %}
+                            <span class="badge text-bg-secondary">Cancelada</span>
                             {% else %}
-                            <span class="badge text-bg-primary">Visitante</span>
+                            <span class="badge text-bg-secondary">{{ item.status }}</span>
                             {% endif %}
-                        </td>
-                        <td>{{ registro.unidade.identificador }}</td>
-                        <td>{{ registro.data_entrada.strftime('%d/%m/%Y %H:%M') }}</td>
-                        <td>{{ registro.porteiro.username if registro.porteiro else '—' }}</td>
-                        <td>
-                            {% if registro.data_saida %}
-                            {{ registro.data_saida.strftime('%d/%m/%Y %H:%M') }}
-                            {% else %}
-                            —
-                            {% endif %}
-                        </td>
-                        <td>{{ registro.porteiro_saida.username if registro.porteiro_saida else '—' }}</td>
-                    </tr>
+                        </div>
+                    </div>
                     {% endfor %}
-                </tbody>
-            </table>
+                    {% else %}
+                    <p class="text-muted small mb-0">Nenhuma visita autorizada para hoje.</p>
+                    {% endif %}
+                </div>
+                <div class="d-flex flex-wrap gap-1 mt-3">
+                    <button class="btn btn-sm btn-outline-secondary" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#painel-futuras"
+                            aria-expanded="false" aria-controls="painel-futuras">
+                        Próximos dias
+                        <span class="badge text-bg-info">{{ autorizacoes_futuras|length }}</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#painel-historico-auth"
+                            aria-expanded="false" aria-controls="painel-historico-auth">
+                        Histórico / Expirados
+                        <span class="badge text-bg-secondary">{{ autorizacoes_historico|length }}</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#painel-historico-acesso"
+                            aria-expanded="false" aria-controls="painel-historico-acesso">
+                        Saídas
+                        <span class="badge text-bg-secondary">{{ registros_historico|length }}</span>
+                    </button>
+                </div>
+            </div>
         </div>
-        {% else %}
-        <p class="text-muted mb-0">Nenhum check-out registrado ainda.</p>
-        {% endif %}
+    </div>
+</div>
+
+<div class="collapse mt-3" id="painel-futuras">
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h2 class="h6">Próximos dias</h2>
+            {% if autorizacoes_futuras %}
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Data</th>
+                            <th>Unidade</th>
+                            <th>Nome</th>
+                            <th>Tipo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in autorizacoes_futuras %}
+                        <tr>
+                            <td class="text-nowrap">{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
+                            <td>{{ item.unidade.identificador }}</td>
+                            <td>{{ item.nome_visitante }}</td>
+                            <td>{{ badge_tipo(item.tipo) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted small mb-0">Nenhuma autorização agendada.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="collapse mt-3" id="painel-historico-auth">
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h2 class="h6">Histórico / Expirados</h2>
+            {% if autorizacoes_historico %}
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Data</th>
+                            <th>Unidade</th>
+                            <th>Nome</th>
+                            <th>Situação</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in autorizacoes_historico %}
+                        <tr>
+                            <td class="text-nowrap">{{ item.data_prevista.strftime('%d/%m/%Y') }}</td>
+                            <td>{{ item.unidade.identificador }}</td>
+                            <td>{{ item.nome_visitante }}</td>
+                            <td>
+                                {% if item.status == 'Concluída' %}
+                                <span class="badge text-bg-success">Compareceu</span>
+                                {% elif item.status == 'Cancelada' %}
+                                <span class="badge text-bg-secondary">Cancelada</span>
+                                {% else %}
+                                <span class="badge text-bg-danger">Expirada / Não compareceu</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted small mb-0">Nenhuma autorização anterior.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="collapse mt-3" id="painel-historico-acesso">
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h2 class="h6">Saídas registradas</h2>
+            {% if registros_historico %}
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Nome</th>
+                            <th>Unidade</th>
+                            <th>Entrada</th>
+                            <th>Saída</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registro in registros_historico %}
+                        <tr>
+                            <td>{{ registro.visitante.nome }}</td>
+                            <td>{{ registro.unidade.identificador }}</td>
+                            <td>{{ registro.data_entrada.strftime('%d/%m/%Y %H:%M') }}</td>
+                            <td>{{ registro.data_saida.strftime('%d/%m/%Y %H:%M') if registro.data_saida else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted small mb-0">Nenhuma saída registrada.</p>
+            {% endif %}
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -408,34 +305,206 @@
 {% block scripts %}
 <script>
 (function () {
+    const form = document.getElementById("form-entrada");
     const tipo = document.getElementById("tipo");
     const campoEmpresa = document.getElementById("campo-empresa");
     const inputEmpresa = document.getElementById("empresa");
-    if (!tipo || !campoEmpresa) return;
+    const documento = document.getElementById("documento");
+    const nome = document.getElementById("nome");
+    const placa = document.getElementById("placa_veiculo");
+    const unidade = document.getElementById("unidade_id");
+    const filtro = document.getElementById("filtro-unidade");
+    const sugestoes = document.getElementById("sugestoes-visitante");
+    const box = document.getElementById("box-interfone");
+    if (!form || !tipo || !documento || !nome || !unidade || !box) return;
+
+    const historicoUrl = form.dataset.historicoUrl;
+    const interfoneUrl = form.dataset.interfoneUrl;
+    let buscaTimer = null;
+    let preenchidoPeloDocumento = false;
+    let contatosAtuais = [];
 
     function atualizarEmpresa() {
-        const ehPrestador = tipo.value === "Prestador";
-        campoEmpresa.classList.toggle("d-none", !ehPrestador);
-        if (!ehPrestador && inputEmpresa) inputEmpresa.value = "";
+        const mostra = tipo.value === "Prestador" || tipo.value === "Delivery/Entrega";
+        if (campoEmpresa) campoEmpresa.classList.toggle("d-none", !mostra);
+        if (!mostra && inputEmpresa) inputEmpresa.value = "";
     }
 
-    tipo.addEventListener("change", atualizarEmpresa);
-    atualizarEmpresa();
-})();
+    function aplicarVisitante(item) {
+        if (!item) return;
+        if (item.documento) documento.value = item.documento;
+        if (item.nome) nome.value = item.nome;
+        if (item.tipo && [...tipo.options].some(function (opcao) { return opcao.value === item.tipo; })) {
+            tipo.value = item.tipo;
+        }
+        if (item.placa && placa && !placa.value) placa.value = item.placa;
+        atualizarEmpresa();
+        desenharInterfone();
+    }
 
-(function () {
-    // Confirmação via data-attribute (não via string concatenada em onsubmit):
-    // o valor chega aqui já como texto puro do DOM, nunca como código JS,
-    // então nomes de visitante com aspas/caracteres especiais não conseguem
-    // escapar do diálogo de confirmação.
-    document.querySelectorAll("form.form-confirmar").forEach(function (form) {
-        form.addEventListener("submit", function (event) {
-            const mensagem = form.dataset.confirmMensagem || "Confirmar?";
-            if (!window.confirm(mensagem)) {
-                event.preventDefault();
-            }
+    function limparSugestoes() {
+        sugestoes.replaceChildren();
+        sugestoes.hidden = true;
+    }
+
+    function mostrarSugestoes(lista) {
+        limparSugestoes();
+        if (!lista || lista.length < 2) return;
+        lista.forEach(function (item) {
+            const botao = document.createElement("button");
+            botao.type = "button";
+            botao.className = "list-group-item list-group-item-action py-1 small";
+            botao.textContent = item.nome + " · " + item.documento;
+            botao.addEventListener("click", function () {
+                preenchidoPeloDocumento = true;
+                aplicarVisitante(item);
+                limparSugestoes();
+            });
+            sugestoes.appendChild(botao);
         });
+        sugestoes.hidden = false;
+    }
+
+    async function consultarHistorico(params) {
+        const resposta = await fetch(historicoUrl + "?" + params.toString(), {
+            headers: { "Accept": "application/json" },
+            credentials: "same-origin"
+        });
+        if (!resposta.ok) return [];
+        const dados = await resposta.json();
+        return dados.visitantes || [];
+    }
+
+    function agendarDocumento() {
+        clearTimeout(buscaTimer);
+        buscaTimer = setTimeout(async function () {
+            const doc = documento.value.trim();
+            if (doc.length < 3) return;
+            const lista = await consultarHistorico(new URLSearchParams({ doc: doc }));
+            limparSugestoes();
+            if (lista.length === 1) {
+                preenchidoPeloDocumento = true;
+                aplicarVisitante(lista[0]);
+            }
+        }, 300);
+    }
+
+    function agendarNome() {
+        if (preenchidoPeloDocumento || documento.value.trim()) return;
+        clearTimeout(buscaTimer);
+        buscaTimer = setTimeout(async function () {
+            const termo = nome.value.trim();
+            if (termo.length < 3) {
+                limparSugestoes();
+                return;
+            }
+            const lista = await consultarHistorico(new URLSearchParams({ nome: termo }));
+            if (lista.length === 1) {
+                aplicarVisitante(lista[0]);
+                limparSugestoes();
+            } else {
+                mostrarSugestoes(lista);
+            }
+        }, 300);
+    }
+
+    function filtrarUnidades() {
+        const termo = (filtro.value || "").trim().toLocaleLowerCase();
+        unidade.querySelectorAll("option").forEach(function (opcao) {
+            if (!opcao.value) return;
+            const visivel = !termo || opcao.textContent.toLocaleLowerCase().indexOf(termo) !== -1;
+            opcao.hidden = !visivel;
+        });
+    }
+
+    function textoWhatsapp(nomeMorador) {
+        const visitante = nome.value.trim() || "Uma pessoa";
+        return "Olá " + nomeMorador + ", " + visitante + " está na portaria.";
+    }
+
+    function desenharInterfone() {
+        box.replaceChildren();
+        const comTelefone = contatosAtuais.filter(function (morador) {
+            return morador.autoriza_interfone && morador.telefone;
+        });
+        if (!unidade.value) {
+            box.classList.add("d-none");
+            return;
+        }
+        box.classList.remove("d-none");
+        const titulo = document.createElement("div");
+        titulo.className = "small fw-semibold mb-1";
+        titulo.textContent = "Interfone desta unidade";
+        box.appendChild(titulo);
+        if (!comTelefone.length) {
+            const vazio = document.createElement("p");
+            vazio.className = "small text-muted mb-0";
+            vazio.textContent = "Nenhum morador autorizou o interfone nesta unidade.";
+            box.appendChild(vazio);
+            return;
+        }
+        comTelefone.forEach(function (morador) {
+            const linha = document.createElement("div");
+            linha.className = "d-flex justify-content-between align-items-center gap-2 py-1";
+            const rotulo = document.createElement("span");
+            rotulo.className = "small text-truncate";
+            rotulo.textContent = morador.nome || "Morador";
+            const link = document.createElement("a");
+            link.className = "btn btn-sm btn-success flex-shrink-0";
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = "WhatsApp";
+            link.href = "https://wa.me/" + morador.telefone + "?text=" + encodeURIComponent(textoWhatsapp(morador.nome || "Morador"));
+            linha.appendChild(rotulo);
+            linha.appendChild(link);
+            box.appendChild(linha);
+        });
+    }
+
+    async function carregarInterfone() {
+        contatosAtuais = [];
+        const opcao = unidade.selectedOptions[0];
+        if (!opcao || !opcao.value) {
+            desenharInterfone();
+            return;
+        }
+        const params = new URLSearchParams({
+            bloco: opcao.dataset.bloco || "",
+            apartamento: opcao.dataset.apto || ""
+        });
+        const resposta = await fetch(interfoneUrl + "?" + params.toString(), {
+            headers: { "Accept": "application/json" },
+            credentials: "same-origin"
+        });
+        if (!resposta.ok) {
+            desenharInterfone();
+            return;
+        }
+        const dados = await resposta.json();
+        const card = (dados.unidades || [])[0];
+        contatosAtuais = card && card.moradores ? card.moradores : [];
+        desenharInterfone();
+    }
+
+    tipo.addEventListener("change", function () {
+        atualizarEmpresa();
+        desenharInterfone();
     });
+    documento.addEventListener("input", function () {
+        preenchidoPeloDocumento = false;
+        agendarDocumento();
+    });
+    nome.addEventListener("input", function () {
+        preenchidoPeloDocumento = false;
+        agendarNome();
+    });
+    if (filtro) filtro.addEventListener("input", filtrarUnidades);
+    unidade.addEventListener("change", carregarInterfone);
+    nome.addEventListener("input", desenharInterfone);
+    document.addEventListener("click", function (evento) {
+        if (!sugestoes.contains(evento.target) && evento.target !== nome) limparSugestoes();
+    });
+    atualizarEmpresa();
 })();
 </script>
 {% endblock %}

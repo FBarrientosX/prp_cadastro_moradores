@@ -96,11 +96,152 @@ def _garantir_colunas_unidades():
             "ALTER TABLE unidades ADD COLUMN documento_status "
             "VARCHAR(20) NOT NULL DEFAULT 'Pendente'"
         )
+    if "eh_setor_interno" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN eh_setor_interno "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
         db.session.commit()
+
+
+def _garantir_unicidade_unidade_por_tenant():
+    """Um mesmo bloco/apto pode existir em condomínios diferentes.
+
+    O índice antigo era só (bloco, apartamento), gravado no CREATE TABLE.
+    No SQLite isso exige recriar a tabela; no MySQL basta remover o índice.
+    """
+    inspetor = inspect(db.engine)
+    if "unidades" not in inspetor.get_table_names():
+        return
+
+    if db.engine.dialect.name == "mysql":
+        unicos = {
+            item["name"] for item in inspetor.get_unique_constraints("unidades")
+        }
+        indexes = {item["name"] for item in inspetor.get_indexes("unidades")}
+        if "uq_bloco_apartamento" in unicos or "uq_bloco_apartamento" in indexes:
+            db.session.execute(text("ALTER TABLE unidades DROP INDEX uq_bloco_apartamento"))
+            db.session.commit()
+            inspetor = inspect(db.engine)
+        if not any(
+            set(item.get("column_names") or [])
+            == {"condominio_id", "bloco", "apartamento"}
+            for item in inspetor.get_indexes("unidades")
+        ):
+            db.session.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_condominio_bloco_apartamento "
+                    "ON unidades (condominio_id, bloco, apartamento)"
+                )
+            )
+            db.session.commit()
+        return
+
+    if "unidades_legadas" in inspetor.get_table_names():
+        colunas_novas = [
+            coluna["name"] for coluna in inspetor.get_columns("unidades")
+        ]
+        lista = ", ".join(colunas_novas)
+        with db.engine.begin() as conexao:
+            conexao.execute(text("PRAGMA foreign_keys=OFF"))
+            conexao.execute(
+                text(
+                    f"INSERT INTO unidades ({lista}) "
+                    f"SELECT {lista} FROM unidades_legadas"
+                )
+            )
+            conexao.execute(text("DROP TABLE unidades_legadas"))
+            for indice, coluna in (
+                ("ix_unidades_bloco", "bloco"),
+                ("ix_unidades_apartamento", "apartamento"),
+                ("ix_unidades_condominio_id", "condominio_id"),
+            ):
+                conexao.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS {indice} "
+                        f"ON unidades ({coluna})"
+                    )
+                )
+        return
+
+    definicao = db.session.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='unidades'")
+    ).scalar()
+    if not definicao or "uq_bloco_apartamento" not in definicao:
+        return
+
+    from app.models import Unidade
+
+    colunas = [coluna["name"] for coluna in inspetor.get_columns("unidades")]
+    lista = ", ".join(colunas)
+    with db.engine.begin() as conexao:
+        conexao.execute(text("PRAGMA foreign_keys=OFF"))
+        for indice in (
+            "ix_unidades_bloco",
+            "ix_unidades_apartamento",
+            "ix_unidades_condominio_id",
+            "uq_condominio_bloco_apartamento",
+            "uq_bloco_apartamento",
+        ):
+            conexao.execute(text(f"DROP INDEX IF EXISTS {indice}"))
+        conexao.execute(text("ALTER TABLE unidades RENAME TO unidades_legadas"))
+        Unidade.__table__.create(bind=conexao)
+        conexao.execute(
+            text(
+                f"INSERT INTO unidades ({lista}) "
+                f"SELECT {lista} FROM unidades_legadas"
+            )
+        )
+        conexao.execute(text("DROP TABLE unidades_legadas"))
+
+
+def garantir_setor_administracao(condominio):
+    """Cria a unidade interna Administração se o condomínio ainda não tiver.
+
+    Não grava contato inventado: usuário da equipe não tem telefone nem CPF.
+    A unidade fica pronta para receber pessoas com eh_morador e interfone.
+    """
+    from secrets import token_urlsafe
+
+    from werkzeug.security import generate_password_hash
+
+    from app.models import StatusUnidade, Unidade
+    from app.utils import BLOCO_SETORES, SETOR_ADMINISTRACAO
+
+    if condominio is None or not condominio.id:
+        return None
+    setor = Unidade.query.filter_by(
+        condominio_id=condominio.id,
+        bloco=BLOCO_SETORES,
+        apartamento=SETOR_ADMINISTRACAO,
+    ).first()
+    if setor is not None:
+        if not setor.eh_setor_interno:
+            setor.eh_setor_interno = True
+        return setor
+    setor = Unidade(
+        condominio_id=condominio.id,
+        bloco=BLOCO_SETORES,
+        apartamento=SETOR_ADMINISTRACAO,
+        password_hash=generate_password_hash(token_urlsafe(32)),
+        status=StatusUnidade.APROVADA,
+        eh_setor_interno=True,
+    )
+    db.session.add(setor)
+    db.session.flush()
+    return setor
+
+
+def _garantir_setores_internos():
+    from app.models import Condominio
+
+    for condominio in Condominio.query.all():
+        garantir_setor_administracao(condominio)
+    db.session.commit()
 
 
 def _garantir_colunas_pessoas():
@@ -780,6 +921,80 @@ def _garantir_colunas_livro_servico():
         db.session.commit()
 
 
+def _garantir_colunas_dados_condominio():
+    """Colunas fiscais, contato, endereço e governança em condomínios já existentes."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    definicoes = (
+        ("razao_social", "VARCHAR(200)"),
+        ("plano", "VARCHAR(40) NOT NULL DEFAULT 'Profissional'"),
+        ("fuso_horario", "VARCHAR(64) NOT NULL DEFAULT 'America/Sao_Paulo'"),
+        ("criado_em", "DATETIME"),
+        ("telefone_fixo", "VARCHAR(30)"),
+        ("telefone_whatsapp", "VARCHAR(30)"),
+        ("email_contato", "VARCHAR(120)"),
+        ("cep", "VARCHAR(9)"),
+        ("logradouro", "VARCHAR(200)"),
+        ("numero", "VARCHAR(20)"),
+        ("complemento", "VARCHAR(120)"),
+        ("bairro", "VARCHAR(120)"),
+        ("cidade", "VARCHAR(120)"),
+        ("uf", "VARCHAR(2)"),
+        ("tipo_divisao", "VARCHAR(20) NOT NULL DEFAULT 'bloco_apto'"),
+        ("total_unidades_previsto", "INTEGER"),
+        ("nome_responsavel_gestao", "VARCHAR(200)"),
+        ("fim_mandato", "DATE"),
+        ("horario_mudancas", "VARCHAR(200)"),
+        ("logo_filename", "VARCHAR(255)"),
+        ("regimento_filename", "VARCHAR(255)"),
+        ("convencao_filename", "VARCHAR(255)"),
+    )
+    for nome, tipo in definicoes:
+        if nome in colunas:
+            continue
+        db.session.execute(text(f"ALTER TABLE condominio ADD COLUMN {nome} {tipo}"))
+    db.session.commit()
+    db.session.execute(
+        text(
+            "UPDATE condominio SET criado_em = data_cadastro "
+            "WHERE criado_em IS NULL"
+        )
+    )
+    db.session.commit()
+
+
+def _seed_dados_condominio_prp():
+    """Preenche o cliente prp só nos campos ainda vazios."""
+    from app.models import Condominio
+
+    prp = Condominio.query.filter_by(slug="prp").first()
+    if prp is None:
+        return
+    conhecidos = {
+        "razao_social": "PARQUE RESIDENCIAL PIRAQUARA",
+        "cnpj": "00.915.409/0001-38",
+        "telefone_fixo": "(21) 2402-0202",
+        "telefone_whatsapp": "(21) 99533-7518",
+        "email_contato": "prpcondominioparqueresidencial@gmail.com",
+        "cep": "21755-270",
+        "logradouro": "R. Piraquara",
+        "numero": "593",
+        "bairro": "Realengo",
+        "cidade": "Rio de Janeiro",
+        "uf": "RJ",
+    }
+    alterou = False
+    for campo, valor in conhecidos.items():
+        atual = getattr(prp, campo)
+        if atual is None or (isinstance(atual, str) and not atual.strip()):
+            setattr(prp, campo, valor)
+            alterou = True
+    if alterou:
+        db.session.commit()
+
+
 def _seed_guaritas_padrao():
     """Garante ao menos uma guarita ativa por condomínio (Portaria Principal)."""
     from app.models import Condominio, Guarita
@@ -959,6 +1174,7 @@ def create_app(config=None):
     upload_parceiros = os.path.join(app.root_path, "static", "uploads", "parceiros")
     upload_ocorrencias = os.path.join(app.root_path, "static", "uploads", "ocorrencias")
     upload_encomendas = os.path.join(app.root_path, "static", "uploads", "encomendas")
+    upload_documentos = os.path.join(app.root_path, "static", "uploads", "documentos")
 
     secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
     if not secret_key:
@@ -982,10 +1198,33 @@ def create_app(config=None):
         UPLOAD_PARCEIROS_FOLDER=upload_parceiros,
         UPLOAD_OCORRENCIAS_FOLDER=upload_ocorrencias,
         UPLOAD_ENCOMENDAS_FOLDER=upload_encomendas,
+        UPLOAD_DOCUMENTOS_FOLDER=upload_documentos,
     )
 
     if config:
         app.config.update(config)
+
+    os.makedirs(app.config["UPLOAD_DOCUMENTOS_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["UPLOAD_LOGOS_FOLDER"], exist_ok=True)
+
+    @app.template_global()
+    def logo_publica(condominio):
+        """Nome seguro da logo do condomínio, com fallback para o white-label."""
+        nome = None
+        if condominio is not None:
+            proprio = getattr(condominio, "logo_filename", None)
+            if proprio:
+                nome = proprio
+            else:
+                config_condo = getattr(condominio, "configuracao", None)
+                if config_condo is not None:
+                    nome = getattr(config_condo, "logo_filename", None)
+        if not isinstance(nome, str):
+            return None
+        base = os.path.basename(nome)
+        if not base or base != nome or ".." in base:
+            return None
+        return base
 
     db.init_app(app)
 
@@ -1102,9 +1341,13 @@ def create_app(config=None):
         _garantir_coluna_ativo_condominio()
         _garantir_coluna_api_key_condominio()
         _garantir_colunas_livro_servico()
+        _garantir_colunas_dados_condominio()
         _seed_condominio_transicao()
+        _seed_dados_condominio_prp()
         _migrar_sindico_agrupamentos()
         _garantir_colunas_unidades()
+        _garantir_unicidade_unidade_por_tenant()
+        _garantir_setores_internos()
         _garantir_colunas_pessoas()
         _garantir_colunas_reservas()
         _garantir_coluna_condominio_espacos_comuns()

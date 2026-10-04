@@ -10,12 +10,14 @@ import traceback
 from types import SimpleNamespace
 
 from flask import (
+    abort,
     current_app,
     flash,
     jsonify,
     redirect,
     render_template,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -1811,6 +1813,9 @@ def _parceiro_visivel_no_condominio(parceiro, condominio_id):
 
 @unidade_required
 def clube_vantagens(unidade):
+    if unidade.eh_setor_interno:
+        flash("Setores internos não participam do Clube de Vantagens.", "warning")
+        return redirect(url_for("morador_inicio"))
     data_atual = datetime.utcnow().date()
     cupons_ativos = (
         Cupom.query.join(Parceiro)
@@ -1895,6 +1900,9 @@ def clube_vantagens(unidade):
 @unidade_required
 def morador_clube_vantagens(unidade):
     """Vitrine do morador: parceiros globais ou vinculados ao condomínio dele."""
+    if unidade.eh_setor_interno:
+        flash("Setores internos não participam do Clube de Vantagens.", "warning")
+        return redirect(url_for("morador_inicio"))
     candidatos = (
         Parceiro.query.options(selectinload(Parceiro.produtos))
         .filter_by(ativo=True)
@@ -2020,6 +2028,9 @@ def morador_clube_vantagens(unidade):
 
 @unidade_required
 def clube_vantagens_resgatar(unidade, cupom_id):
+    if unidade.eh_setor_interno:
+        flash("Setores internos não participam do Clube de Vantagens.", "warning")
+        return redirect(url_for("morador_inicio"))
     cupom = Cupom.query.get_or_404(cupom_id)
 
     if not cupom.ativo or not cupom.parceiro.ativo:
@@ -3357,6 +3368,67 @@ def notificacoes_ler(notificacao_id):
     return redirect(url_for("listar_notificacoes"))
 
 
+def portal_morador(slug):
+    """Porta curta do mural: /c/<slug> abre o login e o cadastro do morador."""
+    condominio, bloqueio = _carregar_condominio_entrada(slug)
+    if bloqueio is not None:
+        return bloqueio
+    return redirect(url_for("tenant_login", slug=condominio.slug))
+
+
+def _condominio_dos_documentos():
+    """Tenant dos PDFs oficiais a partir da sessão. Ignora ?id= fora do Super Admin."""
+    unidade = get_unidade_logada()
+    if unidade and unidade.condominio_id:
+        return db.session.get(Condominio, unidade.condominio_id)
+    usuario = get_current_user()
+    if not usuario:
+        return None
+    if usuario.role == Role.SUPERADMIN:
+        bruto = request.args.get("id", type=int)
+        if bruto is None:
+            bruto = session.get("condominio_id")
+        if not bruto:
+            return None
+        return db.session.get(Condominio, int(bruto))
+    if usuario.condominio_id and usuario.role in (
+        Role.ADMIN,
+        Role.SINDICO,
+        Role.PORTEIRO,
+        Role.ASSISTENTE,
+    ):
+        return db.session.get(Condominio, usuario.condominio_id)
+    return None
+
+
+def condominio_documento(tipo):
+    campos = {
+        "regimento": ("regimento_filename", "Regimento Interno.pdf"),
+        "convencao": ("convencao_filename", "Convencao do Condominio.pdf"),
+    }
+    if tipo not in campos:
+        abort(404)
+    condominio = _condominio_dos_documentos()
+    if condominio is None:
+        flash("Faça login para consultar os documentos do condomínio.", "warning")
+        return redirect(url_for("index"))
+    atributo, download_name = campos[tipo]
+    nome = getattr(condominio, atributo) or ""
+    base = os.path.basename(nome)
+    if not base or base != nome or ".." in base:
+        abort(404)
+    pasta = current_app.config["UPLOAD_DOCUMENTOS_FOLDER"]
+    if not os.path.isfile(os.path.join(pasta, base)):
+        abort(404)
+    return send_from_directory(
+        pasta,
+        base,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=download_name,
+    )
+
+
 def init_app(app):
     from app.blueprints import admin as admin_routes
     from app.blueprints import api as api_routes
@@ -3373,6 +3445,13 @@ def init_app(app):
     api_routes.register(app)
 
     app.add_url_rule("/", "index", index, methods=["GET"])
+    app.add_url_rule("/c/<slug>", "portal_morador", portal_morador, methods=["GET"])
+    app.add_url_rule(
+        "/condominio/documentos/<tipo>",
+        "condominio_documento",
+        condominio_documento,
+        methods=["GET"],
+    )
     app.add_url_rule(
         "/c/<slug>/login",
         "tenant_login",
