@@ -4,9 +4,9 @@
 {% set equipe_ativo = (ep == 'admin_index' and aba == 'equipe') or ep in ['admin_criar_usuario', 'admin_excluir_usuario', 'admin_alterar_senha_usuario'] %}
 {% set cadastros_ativo = ep == 'admin_index' and not equipe_ativo %}
 {% set portaria_ativo = ep.startswith('portaria_') %}
-{% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'admin_ocorrencias_atualizar_status'] %}
-{% set clube_ativo = ep in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics'] %}
-{% set acesso_ativo = ep in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar'] %}
+{% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'admin_ocorrencias_atualizar_status', 'admin_ocorrencias_responder', 'admin_ocorrencias_encaminhar'] %}
+{% set clube_ativo = ep in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics', 'admin_clube_sugerir_parceiro'] %}
+{% set acesso_ativo = ep in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar', 'admin_controle_acesso_sincronizar_faciais'] %}
 {% set config_portaria_ativo = ep in ['admin_portaria_configuracoes', 'admin_portaria_configuracoes_gerais', 'admin_portaria_guarita_salvar', 'admin_portaria_guarita_toggle', 'admin_portaria_checklist_salvar', 'admin_portaria_checklist_toggle'] %}
 {% set setores_ativo = ep.startswith('admin_setores') %}
 {% set dados_condominio_ativo = ep == 'admin_condominio' %}

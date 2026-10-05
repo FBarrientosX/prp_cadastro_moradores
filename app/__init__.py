@@ -267,6 +267,32 @@ def _garantir_setores_internos():
     db.session.commit()
 
 
+def _garantir_colunas_ocorrencias():
+    """Parecer e competência em bancos já criados (create_all não altera tabela)."""
+    inspetor = inspect(db.engine)
+    if "ocorrencias" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("ocorrencias")}
+    alteracoes = []
+    if "resposta" not in colunas:
+        alteracoes.append("ALTER TABLE ocorrencias ADD COLUMN resposta TEXT")
+    if "respondida_em" not in colunas:
+        alteracoes.append("ALTER TABLE ocorrencias ADD COLUMN respondida_em DATETIME")
+    if "respondida_por_id" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE ocorrencias ADD COLUMN respondida_por_id INTEGER"
+        )
+    if "competencia" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE ocorrencias ADD COLUMN competencia "
+            "VARCHAR(20) NOT NULL DEFAULT 'bloco'"
+        )
+    for alteracao in alteracoes:
+        db.session.execute(text(alteracao))
+    if alteracoes:
+        db.session.commit()
+
+
 def _garantir_colunas_pessoas():
     inspetor = inspect(db.engine)
     if "pessoas" not in inspetor.get_table_names():
@@ -296,6 +322,14 @@ def _garantir_colunas_pessoas():
     if adicionou_eh_morador:
         alteracoes.append(
             "ALTER TABLE pessoas ADD COLUMN eh_morador BOOLEAN NOT NULL DEFAULT 1"
+        )
+    if "foto_perfil" not in colunas:
+        alteracoes.append("ALTER TABLE pessoas ADD COLUMN foto_perfil VARCHAR(255)")
+    if "foto_facial" not in colunas:
+        alteracoes.append("ALTER TABLE pessoas ADD COLUMN foto_facial VARCHAR(255)")
+    if "foto_atualizada_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE pessoas ADD COLUMN foto_atualizada_em DATETIME"
         )
 
     for alteracao in alteracoes:
@@ -948,6 +982,58 @@ def _garantir_coluna_api_key_condominio():
         db.session.commit()
 
 
+def _garantir_colunas_agente_acesso():
+    """Token do agente e tabela de controladoras em bancos já existentes."""
+    from secrets import token_hex
+
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    alterou = False
+    if "agent_api_token" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE condominio ADD COLUMN agent_api_token VARCHAR(64)")
+        )
+        alterou = True
+    if "agent_ultimo_ping" not in colunas:
+        db.session.execute(
+            text("ALTER TABLE condominio ADD COLUMN agent_ultimo_ping DATETIME")
+        )
+        alterou = True
+    if alterou:
+        db.session.commit()
+
+    faltando = db.session.execute(
+        text(
+            "SELECT id FROM condominio "
+            "WHERE agent_api_token IS NULL OR agent_api_token = ''"
+        )
+    ).fetchall()
+    for (condominio_id,) in faltando:
+        db.session.execute(
+            text(
+                "UPDATE condominio SET agent_api_token = :token "
+                "WHERE id = :id AND (agent_api_token IS NULL OR agent_api_token = '')"
+            ),
+            {"token": token_hex(24), "id": condominio_id},
+        )
+    if faltando:
+        db.session.commit()
+
+    inspetor = inspect(db.engine)
+    indices = {indice["name"] for indice in inspetor.get_indexes("condominio")}
+    if "uq_condominio_agent_api_token" not in indices:
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_condominio_agent_api_token "
+                "ON condominio (agent_api_token)"
+            )
+        )
+        db.session.commit()
+
+
 def _garantir_colunas_livro_servico():
     """Colunas novas do livro de serviço em bancos já existentes."""
     inspetor = inspect(db.engine)
@@ -1331,6 +1417,7 @@ def create_app(config=None):
     upload_ocorrencias = os.path.join(app.root_path, "static", "uploads", "ocorrencias")
     upload_encomendas = os.path.join(app.root_path, "static", "uploads", "encomendas")
     upload_documentos = os.path.join(app.root_path, "static", "uploads", "documentos")
+    upload_faciais = os.path.join(app.root_path, "static", "uploads", "faciais")
 
     secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
     if not secret_key:
@@ -1355,6 +1442,7 @@ def create_app(config=None):
         UPLOAD_OCORRENCIAS_FOLDER=upload_ocorrencias,
         UPLOAD_ENCOMENDAS_FOLDER=upload_encomendas,
         UPLOAD_DOCUMENTOS_FOLDER=upload_documentos,
+        UPLOAD_FACIAIS_FOLDER=upload_faciais,
     )
 
     if config:
@@ -1362,6 +1450,18 @@ def create_app(config=None):
 
     os.makedirs(app.config["UPLOAD_DOCUMENTOS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_LOGOS_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["UPLOAD_FACIAIS_FOLDER"], exist_ok=True)
+
+    @app.template_global()
+    def foto_facial_url(pessoa):
+        """URL da foto facial já padronizada, ou None se o morador ainda não enviou."""
+        from flask import url_for
+        from app.utils import nome_foto_facial_seguro
+
+        nome = nome_foto_facial_seguro(getattr(pessoa, "foto_facial", None))
+        if not nome:
+            return None
+        return url_for("static", filename=f"uploads/faciais/{nome}")
 
     @app.template_global()
     def logo_publica(condominio):
@@ -1492,6 +1592,7 @@ def create_app(config=None):
         _garantir_colunas_whitelabel()
         _garantir_coluna_ativo_condominio()
         _garantir_coluna_api_key_condominio()
+        _garantir_colunas_agente_acesso()
         _garantir_colunas_livro_servico()
         _garantir_colunas_dados_condominio()
         _seed_condominio_transicao()
@@ -1502,6 +1603,7 @@ def create_app(config=None):
         _garantir_unicidade_unidade_por_tenant()
         _garantir_setores_internos()
         _garantir_colunas_pessoas()
+        _garantir_colunas_ocorrencias()
         _garantir_colunas_reservas()
         _garantir_coluna_condominio_espacos_comuns()
         _garantir_coluna_ativo_espacos_comuns()

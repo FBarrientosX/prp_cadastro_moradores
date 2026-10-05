@@ -200,6 +200,16 @@
 
         const topo = document.createElement("div");
         topo.className = "d-flex flex-wrap align-items-center gap-2 mb-2";
+        if (morador.foto_url) {
+            const foto = document.createElement("img");
+            foto.src = morador.foto_url;
+            foto.alt = "";
+            foto.width = 48;
+            foto.height = 48;
+            foto.className = "rounded-circle flex-shrink-0";
+            foto.style.objectFit = "cover";
+            topo.appendChild(foto);
+        }
         const nome = document.createElement("span");
         nome.className = "fs-5 fw-semibold";
         nome.textContent = morador.nome || "Morador";

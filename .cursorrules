@@ -367,6 +367,8 @@ Parceiro logado:
 `Pessoa`:
 - contato, vinculo (`Proprietário`/`Locatário`/`Morador`), nascimento
 - `is_responsavel`, `autoriza_interfone`
+- `foto_facial` (JPG em `static/uploads/faciais/`, no máximo 600x600) e
+  `foto_atualizada_em`. Morador aprovado com foto ganha credencial `Facial`.
 
 `Veiculo`: placa, marca, cor por unidade
 
@@ -419,7 +421,8 @@ Parceiro logado:
 `Notificacao`: `perfil_destino` MORADOR|PORTARIA; `unidade_id` so para morador
 
 `Ocorrencia`: helpdesk; categorias Manutenção/Reclamação/Sugestão/Outros;
-  status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional
+  status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional;
+  `resposta`/`respondida_em`/`respondida_por_id`; `competencia` `bloco` ou `geral`
 
 ==================================================
 6) ROTAS E FLUXOS PRINCIPAIS
@@ -543,7 +546,9 @@ Clube de Vantagens — Morador (`@unidade_required`):
 - `POST /clube_vantagens/resgatar/<cupom_id>` — UPDATE atomico em `total_resgatado`
   + limite por unidade na mesma transacao
 
-Clube — Admin local: so leitura/analytics do proprio tenant.
+Clube — Admin local: analytics do proprio tenant e aba de parceiros ativos.
+  Pode sugerir comercio local (status Pendente, vinculo so no condominio).
+  Ativar, editar e bloquear parceiro continua exclusivo do Super Admin.
 
 Portal do Parceiro (`@parceiro_required`, exceto login/recuperacao):
 - dashboard, validacao manual + QR, cupons criar/desativar, perfil
@@ -612,7 +617,14 @@ CRUD de parceiros: `superadmin_parceiros.html` (modals criar/editar + Quill).
 
 Portal Parceiro: paginas por funcao; pendente isolado.
 
-Ocorrencias: kanban `admin/ocorrencias_kanban.html`; morador em `morador/ocorrencias.html`.
+Ocorrencias: kanban `admin/ocorrencias_kanban.html` com filtro, parecer e
+  encaminhamento bloco/geral; morador ve a resposta em `morador/ocorrencias.html`.
+  Controle de acesso: resumo, filtro e sincronizacao facial a partir de
+  `foto_perfil`/`foto_facial`. Aba Equipamentos: `EquipamentoAcesso`
+  (Control iD / Intelbras, escopo geral ou bloco) e token
+  `Condominio.agent_api_token`. O Vizinsync Agent usa
+  `GET /api/v1/agent/sync-payload` e `POST /api/v1/agent/report`
+  com `Authorization: Bearer`. Script em `agent/vizinsync_agent.py`.
 
 ==================================================
 8) ARQUITETURA DE EMAIL
@@ -655,6 +667,9 @@ Mudancas SILENCIOSAS (mantem Aprovada/Registrada):
 - Dados pessoais ja existentes: CPF, nome, parentesco, nascimento, `autoriza_interfone`.
 - Atributos de veiculo existente (mesma placa): marca, cor.
 - Contato do proprietario externo sem troca de identidade.
+- Foto facial (`foto_facial`): rota `POST /atualizar-dados/foto-facial/<id>`
+  atualiza só a foto e não marca atualização pendente. O salvamento geral
+  copia `foto_facial` e as credenciais ao recriar a pessoa.
 
 Mudancas CRITICAS (status = Pendente):
 - Add/remove moradores (`_houve_add_remove_pessoas`).
@@ -738,7 +753,7 @@ Auditoria:
   - mudanca de status de ocorrencia
 
 Uploads:
-- Pastas em config: logos, parceiros, ocorrencias, encomendas.
+- Pastas em config: logos, parceiros, ocorrencias, encomendas, faciais.
 - Extensoes globais de documento: `ALLOWED_EXTENSIONS = {pdf, png, jpg, jpeg}`.
 - Logo de parceiro: png/jpg/jpeg/webp, max 2MB (`salvar_logo_parceiro`).
 - Fotos de ocorrencia/encomenda: helpers com blindagem de tipo/tamanho.

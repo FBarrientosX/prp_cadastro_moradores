@@ -116,6 +116,9 @@ class Condominio(db.Model):
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     # Chave M2M dos equipamentos de acesso (catraca, RFID, facial).
     api_key = db.Column(db.String(64), unique=True, nullable=True)
+    # Token do Vizinsync Agent na portaria. Não é a api_key dos equipamentos.
+    agent_api_token = db.Column(db.String(64), unique=True, nullable=True)
+    agent_ultimo_ping = db.Column(db.DateTime, nullable=True)
     # Livro de serviço: campos opcionais de apoio e ronda na abertura do plantão.
     permitir_apoio = db.Column(db.Boolean, nullable=False, default=False)
     permitir_ronda = db.Column(db.Boolean, nullable=False, default=False)
@@ -686,6 +689,9 @@ class Pessoa(db.Model):
     status = db.Column(
         db.String(20), nullable=False, default=StatusPessoa.PENDENTE
     )
+    foto_perfil = db.Column(db.String(255), nullable=True)
+    foto_facial = db.Column(db.String(255), nullable=True)
+    foto_atualizada_em = db.Column(db.DateTime, nullable=True)
 
     unidade = db.relationship("Unidade", back_populates="pessoas")
     credenciais = db.relationship(
@@ -703,7 +709,16 @@ class CredencialAcesso(db.Model):
 
     __tablename__ = "credencial_acesso"
 
-    TIPOS = ("Tag RFID", "Biometria Facial", "Controle Remoto", "Cartão")
+    TIPOS_FORMULARIO = (
+        "Facial",
+        "Tag Veicular",
+        "Cartão/Chaveiro RFID",
+        "Controle Remoto",
+    )
+    # Tipos antigos continuam válidos para credenciais já emitidas.
+    TIPOS = TIPOS_FORMULARIO + ("Biometria Facial", "Tag RFID", "Cartão")
+    TIPOS_FACIAL = ("Facial", "Biometria Facial")
+    TIPOS_TAG_CARTAO = ("Tag Veicular", "Cartão/Chaveiro RFID", "Tag RFID", "Cartão")
 
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(40), nullable=False)
@@ -722,6 +737,57 @@ class CredencialAcesso(db.Model):
 
     def __repr__(self):
         return f"<CredencialAcesso {self.tipo} {self.codigo_identificador}>"
+
+
+class EquipamentoAcesso(db.Model):
+    """Controladora física (Control iD ou Intelbras) de um condomínio."""
+
+    __tablename__ = "equipamento_acesso"
+
+    FABRICANTES = ("control_id", "intelbras")
+    ROTULOS_FABRICANTE = {
+        "control_id": "Control iD",
+        "intelbras": "Intelbras",
+    }
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(120), nullable=False)
+    fabricante = db.Column(db.String(20), nullable=False)
+    ip_local = db.Column(db.String(45), nullable=False)
+    porta = db.Column(db.Integer, nullable=False, default=80)
+    usuario_equipamento = db.Column(db.String(80), nullable=False, default="admin")
+    senha_equipamento = db.Column(db.String(120), nullable=False, default="admin")
+    # Vazio ou GERAL: portaria por onde passam todos os blocos.
+    bloco_escopo = db.Column(db.String(20), nullable=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+    ultima_sincronia = db.Column(db.DateTime, nullable=True)
+    status_ultimo_envio = db.Column(db.String(255), nullable=True)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref(
+            "equipamentos_acesso",
+            lazy="dynamic",
+            cascade="all, delete-orphan",
+        ),
+    )
+
+    @property
+    def rotulo_fabricante(self):
+        return self.ROTULOS_FABRICANTE.get(self.fabricante, self.fabricante)
+
+    @property
+    def rotulo_escopo(self):
+        escopo = (self.bloco_escopo or "").strip()
+        if not escopo or escopo.upper() == "GERAL":
+            return "Portaria geral"
+        return f"Bloco {escopo}"
+
+    def __repr__(self):
+        return f"<EquipamentoAcesso {self.nome}>"
 
 
 class Veiculo(db.Model):
@@ -1024,11 +1090,19 @@ class Ocorrencia(db.Model):
     )
     foto_arquivo = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    resposta = db.Column(db.Text, nullable=True)
+    respondida_em = db.Column(db.DateTime, nullable=True)
+    respondida_por_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True
+    )
+    # bloco = síndico do agrupamento; geral = administração do condomínio.
+    competencia = db.Column(db.String(20), nullable=False, default="bloco")
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("ocorrencias", lazy=True)
     )
     unidade = db.relationship("Unidade", back_populates="ocorrencias")
+    respondida_por = db.relationship("Usuario", foreign_keys=[respondida_por_id])
 
     def __repr__(self):
         return f"<Ocorrencia {self.id} ({self.status})>"

@@ -1,0 +1,5 @@
+{% set src_facial = foto_facial_url(pessoa) %}
+{% if src_facial %}
+<img src="{{ src_facial }}" alt="" width="36" height="36"
+     class="rounded-circle flex-shrink-0" style="object-fit: cover;">
+{% endif %}

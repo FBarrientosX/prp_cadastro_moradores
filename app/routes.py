@@ -2,6 +2,9 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 from html import escape
 from html.parser import HTMLParser
+from zoneinfo import ZoneInfo
+import base64
+import io
 import os
 import random
 import re
@@ -54,6 +57,7 @@ from app.models import (
     CategoriaOcorrencia,
     CategoriaParceiro,
     Condominio,
+    CredencialAcesso,
     Cupom,
     Encomenda,
     EspacoComum,
@@ -87,6 +91,7 @@ from app.utils import (
     get_blocos,
     get_condominio_estrutura,
     normalizar_bloco_apartamento,
+    nome_foto_facial_seguro,
     normalizar_bloco_codigo,
     validar_unidade,
     verificar_token_redefinicao,
@@ -199,6 +204,170 @@ def _salvar_foto_ocorrencia(arquivo, prefixo="ocorrencia"):
         current_app.root_path, "static", "uploads", "ocorrencias"
     )
     return _salvar_imagem_upload(arquivo, pasta, prefixo=prefixo)
+
+
+_FOTO_FACIAL_LADO = 600
+_FOTO_FACIAL_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _agora_foto_facial():
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+
+
+def _pasta_faciais():
+    pasta = current_app.config.get("UPLOAD_FACIAIS_FOLDER") or os.path.join(
+        current_app.root_path, "static", "uploads", "faciais"
+    )
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+
+def _apagar_arquivo_facial(nome):
+    base = nome_foto_facial_seguro(nome)
+    if not base:
+        return
+    caminho = os.path.join(_pasta_faciais(), base)
+    if os.path.isfile(caminho):
+        os.remove(caminho)
+
+
+def _bytes_para_jpg_facial(conteudo):
+    """Converte a imagem para JPG RGB de no máximo 600x600."""
+    if not conteudo:
+        return None, "Envie uma foto."
+    if len(conteudo) > _FOTO_FACIAL_MAX_BYTES:
+        return None, "A foto deve ter no máximo 8 MB."
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        if conteudo[:3] == b"\xff\xd8\xff":
+            return conteudo, None
+        return None, "Envie uma imagem JPG, PNG ou WEBP."
+    try:
+        imagem = ImageOps.exif_transpose(Image.open(io.BytesIO(conteudo)))
+        if imagem.mode != "RGB":
+            imagem = imagem.convert("RGB")
+        imagem.thumbnail((_FOTO_FACIAL_LADO, _FOTO_FACIAL_LADO), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        imagem.save(buffer, format="JPEG", quality=85, optimize=True)
+        return buffer.getvalue(), None
+    except Exception:
+        return None, "Não foi possível ler a imagem. Envie uma foto JPG, PNG ou WEBP."
+
+
+def _gravar_jpg_facial(conteudo):
+    jpg, erro = _bytes_para_jpg_facial(conteudo)
+    if erro or not jpg:
+        return None, erro or "Foto inválida."
+    token = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    nome = f"facial_{token}.jpg"
+    with open(os.path.join(_pasta_faciais(), nome), "wb") as arquivo:
+        arquivo.write(jpg)
+    return nome, None
+
+
+def _ler_foto_facial_requisicao(arquivo=None, base64_texto=None):
+    if arquivo is not None and getattr(arquivo, "filename", None):
+        arquivo.stream.seek(0)
+        return _gravar_jpg_facial(arquivo.read())
+    texto = (base64_texto or "").strip()
+    if not texto:
+        return None, None
+    if "," in texto and texto.lower().startswith("data:"):
+        texto = texto.split(",", 1)[1]
+    try:
+        conteudo = base64.b64decode(texto, validate=False)
+    except Exception:
+        return None, "A foto capturada é inválida."
+    return _gravar_jpg_facial(conteudo)
+
+
+def sincronizar_credencial_facial(pessoa):
+    """Cria ou atualiza a credencial Facial de um morador aprovado com foto."""
+    if pessoa is None or not pessoa.eh_morador or not pessoa.id:
+        return None
+    if pessoa.status != StatusPessoa.APROVADO:
+        return None
+    foto = nome_foto_facial_seguro(pessoa.foto_facial)
+    if not foto:
+        return None
+    unidade = pessoa.unidade
+    condominio_id = unidade.condominio_id if unidade is not None else None
+    if not condominio_id:
+        return None
+    codigo = f"facial-{pessoa.id}-{foto}"[:120]
+    existente = (
+        CredencialAcesso.query.filter(
+            CredencialAcesso.condominio_id == condominio_id,
+            CredencialAcesso.morador_id == pessoa.id,
+            CredencialAcesso.ativa.is_(True),
+            CredencialAcesso.tipo.in_(CredencialAcesso.TIPOS_FACIAL),
+        )
+        .order_by(CredencialAcesso.id.asc())
+        .first()
+    )
+    if existente is None:
+        credencial = CredencialAcesso(
+            tipo="Facial",
+            codigo_identificador=codigo,
+            morador_id=pessoa.id,
+            condominio_id=condominio_id,
+            ativa=True,
+        )
+        db.session.add(credencial)
+        return credencial
+    if existente.codigo_identificador != codigo or existente.tipo != "Facial":
+        existente.codigo_identificador = codigo
+        existente.tipo = "Facial"
+    return existente
+
+
+def _snapshot_acesso_pessoa(pessoa):
+    credenciais = []
+    for credencial in list(pessoa.credenciais):
+        credenciais.append(
+            {
+                "tipo": credencial.tipo,
+                "codigo_identificador": credencial.codigo_identificador,
+                "ativa": credencial.ativa,
+                "condominio_id": credencial.condominio_id,
+                "data_emissao": credencial.data_emissao,
+            }
+        )
+    return {
+        "foto_perfil": pessoa.foto_perfil,
+        "foto_facial": pessoa.foto_facial,
+        "foto_atualizada_em": pessoa.foto_atualizada_em,
+        "credenciais": credenciais,
+    }
+
+
+def _aplicar_fotos_faciais_moradores(pessoas, fotos_novas):
+    """Grava fotos enviadas no formulário e sincroniza a credencial se já aprovado."""
+    substituidos = []
+    for indice, pessoa in enumerate(pessoas):
+        if not getattr(pessoa, "eh_morador", False):
+            continue
+        arquivo = request.files.get(f"morador_{indice}_foto")
+        base64_texto = request.form.get(f"morador_{indice}_foto_base64", "")
+        tem_envio = bool(arquivo and arquivo.filename) or bool((base64_texto or "").strip())
+        if not tem_envio:
+            if pessoa.foto_facial and pessoa.status == StatusPessoa.APROVADO:
+                sincronizar_credencial_facial(pessoa)
+            continue
+        nome, erro = _ler_foto_facial_requisicao(arquivo, base64_texto)
+        if erro:
+            raise ValueError(erro)
+        if not nome:
+            continue
+        fotos_novas.append(nome)
+        antigo = pessoa.foto_facial
+        pessoa.foto_facial = nome
+        pessoa.foto_atualizada_em = _agora_foto_facial()
+        sincronizar_credencial_facial(pessoa)
+        if antigo and antigo != nome:
+            substituidos.append(antigo)
+    return substituidos
 
 
 def _buscar_unidade(bloco, apartamento, condominio_id=None):
@@ -1372,17 +1541,21 @@ def _reservas_pendentes_por_jurisdicao(usuario):
 def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data, *, modo_atualizacao=False):
     try:
         status_por_id = {}
+        preservados = {}
         if modo_atualizacao:
             for pessoa in unidade.pessoas.all():
                 status_por_id[pessoa.id] = (
                     pessoa.status or StatusPessoa.APROVADO
                 )
+                preservados[pessoa.id] = _snapshot_acesso_pessoa(pessoa)
 
-        for pessoa in unidade.pessoas.all():
+        for pessoa in list(unidade.pessoas.all()):
             db.session.delete(pessoa)
         for veiculo in unidade.veiculos.all():
             db.session.delete(veiculo)
 
+        criadas = []
+        credenciais_pendentes = []
         for dados in pessoas_data:
             campos_pessoa = {k: v for k, v in dados.items() if k != "id"}
             if "eh_morador" not in campos_pessoa:
@@ -1396,10 +1569,25 @@ def _salvar_pessoas_veiculos(unidade, pessoas_data, veiculos_data, *, modo_atual
                 campos_pessoa["status"] = status_por_id[pessoa_id]
             else:
                 campos_pessoa["status"] = StatusPessoa.PENDENTE
-            db.session.add(Pessoa(unidade_id=unidade.id, **campos_pessoa))
+            pessoa = Pessoa(unidade_id=unidade.id, **campos_pessoa)
+            snap = preservados.get(pessoa_id) if pessoa_id else None
+            if snap:
+                pessoa.foto_perfil = snap["foto_perfil"]
+                pessoa.foto_facial = snap["foto_facial"]
+                pessoa.foto_atualizada_em = snap["foto_atualizada_em"]
+                credenciais_pendentes.append((pessoa, snap["credenciais"]))
+            db.session.add(pessoa)
+            criadas.append(pessoa)
 
         for dados in veiculos_data:
             db.session.add(Veiculo(unidade_id=unidade.id, **dados))
+        db.session.flush()
+        for pessoa, credenciais in credenciais_pendentes:
+            for credencial in credenciais:
+                db.session.add(
+                    CredencialAcesso(morador_id=pessoa.id, **credencial)
+                )
+        return criadas
     except Exception as exc:
         db.session.rollback()
         raise RuntimeError("Falha ao atualizar moradores e veículos.") from exc
@@ -1843,6 +2031,40 @@ def morador_inicio(unidade):
         cadastro_pendente=cadastro_pendente,
         alerta_cadastro=alerta_cadastro,
         encomendas_aguardando=encomendas_aguardando,
+    )
+
+
+@unidade_required
+def atualizar_foto_facial(unidade, pessoa_id):
+    """Atualiza só a foto facial do morador, sem reenviar o cadastro."""
+    pessoa = Pessoa.query.filter_by(
+        id=pessoa_id,
+        unidade_id=unidade.id,
+        eh_morador=True,
+    ).first()
+    if pessoa is None:
+        return jsonify({"ok": False, "erro": "Morador não encontrado."}), 404
+    nome, erro = _ler_foto_facial_requisicao(
+        request.files.get("foto"),
+        request.form.get("foto_base64", ""),
+    )
+    if erro:
+        return jsonify({"ok": False, "erro": erro}), 400
+    if not nome:
+        return jsonify({"ok": False, "erro": "Envie uma foto."}), 400
+    antigo = pessoa.foto_facial
+    pessoa.foto_facial = nome
+    pessoa.foto_atualizada_em = _agora_foto_facial()
+    sincronizar_credencial_facial(pessoa)
+    db.session.commit()
+    if antigo and antigo != nome:
+        _apagar_arquivo_facial(antigo)
+    return jsonify(
+        {
+            "ok": True,
+            "foto_url": url_for("static", filename=f"uploads/faciais/{nome}"),
+            "facial_cadastrada": True,
+        }
     )
 
 
@@ -2838,6 +3060,8 @@ def salvar_cadastro():
 
     senha = request.form.get("senha", "").strip()
     confirmar_senha = request.form.get("confirmar_senha", "").strip()
+    fotos_novas = []
+    fotos_antigas = []
 
     try:
         listas_separadas = _formulario_usa_listas_separadas(request.form)
@@ -2920,12 +3144,19 @@ def salvar_cadastro():
             if not listas_separadas:
                 _anexar_proprietarios_nao_ocupantes(unidade, pessoas_data)
 
-        _salvar_pessoas_veiculos(
+        pessoas_criadas = _salvar_pessoas_veiculos(
             unidade,
             pessoas_data,
             veiculos_data,
             modo_atualizacao=modo_atualizacao,
         )
+        fotos_novas = []
+        fotos_antigas = []
+        if listas_separadas:
+            fotos_antigas = _aplicar_fotos_faciais_moradores(
+                pessoas_criadas[: len(moradores_lista)],
+                fotos_novas,
+            )
 
         avisos_upload = []
         slug_drive = _slug_drive_cadastro(unidade)
@@ -3027,6 +3258,8 @@ def salvar_cadastro():
                 unidade.atualizacao_pendente = True
             # Sem mudança crítica: atualizacao_pendente permanece como estava.
         db.session.commit()
+        for nome_antigo in fotos_antigas:
+            _apagar_arquivo_facial(nome_antigo)
 
         if avisos_upload:
             flash(
@@ -3056,12 +3289,16 @@ def salvar_cadastro():
         return redirect(url_for("tenant_login", slug=slug_retorno))
 
     except ValueError as exc:
+        for nome_novo in fotos_novas:
+            _apagar_arquivo_facial(nome_novo)
         db.session.rollback()
         flash(str(exc), "danger")
         if modo_atualizacao:
             return _redirect_atualizar_dados()
         return redirect(url_for("cadastro_inicial", slug=slug_retorno))
     except Exception:
+        for nome_novo in fotos_novas:
+            _apagar_arquivo_facial(nome_novo)
         db.session.rollback()
         traceback.print_exc()
         flash(
@@ -3628,6 +3865,12 @@ def init_app(app):
         "atualizar_dados",
         atualizar_dados,
         methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/atualizar-dados/foto-facial/<int:pessoa_id>",
+        "atualizar_foto_facial",
+        atualizar_foto_facial,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/api/unidade/pessoas-autocomplete",

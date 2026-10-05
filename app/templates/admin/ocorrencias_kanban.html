@@ -62,7 +62,36 @@
         <p class="text-muted mb-0">Painel Kanban dos chamados abertos pelos moradores.</p>
     </div>
 </div>
-{% include "includes/filtro_blocos_sindico.html" %}
+<form method="get" action="{{ url_for('admin_ocorrencias') }}" class="row g-2 align-items-end mb-3">
+    {% if current_user.role != 'sindico' or blocos_opcoes|length > 1 %}
+    <div class="col-12 col-md-3">
+        <label class="form-label mb-1" for="filtro-bloco">Bloco</label>
+        <select class="form-select form-select-sm" id="filtro-bloco" name="bloco">
+            <option value="">Todos</option>
+            {% for codigo in blocos_opcoes %}
+            <option value="{{ codigo }}" {% if bloco_filtro == codigo %}selected{% endif %}>Bloco {{ codigo }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+    <div class="col-12 col-md-3">
+        <label class="form-label mb-1" for="filtro-categoria">Categoria</label>
+        <select class="form-select form-select-sm" id="filtro-categoria" name="categoria">
+            <option value="">Todas</option>
+            {% for categoria in categorias_ocorrencia %}
+            <option value="{{ categoria }}" {% if categoria_filtro == categoria %}selected{% endif %}>{{ categoria }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-12 col-md-4">
+        <label class="form-label mb-1" for="filtro-q">Busca</label>
+        <input type="search" class="form-control form-control-sm" id="filtro-q" name="q"
+               value="{{ busca }}" placeholder="Título, descrição, bloco ou apto">
+    </div>
+    <div class="col-12 col-md-2">
+        <button type="submit" class="btn btn-sm btn-primary w-100">Filtrar</button>
+    </div>
+</form>
 
 <div class="kanban-board">
     {% set colunas_ui = [
@@ -84,7 +113,7 @@
                     <div class="card-body">
                         <div class="d-flex gap-2">
                             {% if item.foto_arquivo %}
-                            <a href="#" data-bs-toggle="modal" data-bs-target="#modalFotoKanban{{ item.id }}">
+                            <a href="#" data-bs-toggle="modal" data-bs-target="#modalAtendimento{{ item.id }}">
                                 <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
                                      alt="Foto da ocorrência {{ item.titulo }}"
                                      class="kanban-thumb">
@@ -102,10 +131,23 @@
                         </div>
                         <p class="small mt-2 mb-0 text-secondary kanban-desc">{{ item.descricao }}</p>
                         <span class="badge text-bg-light border mt-2">{{ item.categoria }}</span>
+                        {% if item.competencia == 'geral' %}
+                        <span class="badge text-bg-primary mt-2">Administração Geral</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary mt-2">Bloco</span>
+                        {% endif %}
+                        {% if item.resposta %}
+                        <p class="small text-success mb-0 mt-2">Parecer registrado</p>
+                        {% endif %}
                     </div>
                     <div class="card-footer bg-white d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                data-bs-toggle="modal" data-bs-target="#modalAtendimento{{ item.id }}">
+                            💬 Ver / Responder
+                        </button>
                         {% if item.status == status_ocorrencia.ABERTO %}
                         <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="retorno" value="{{ retorno }}">
                             <input type="hidden" name="status" value="{{ status_ocorrencia.EM_ANDAMENTO }}">
                             <button type="submit" class="btn btn-sm btn-warning">
                                 <i class="bi bi-play-fill me-1"></i>Iniciar Atendimento
@@ -113,12 +155,14 @@
                         </form>
                         {% elif item.status == status_ocorrencia.EM_ANDAMENTO %}
                         <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="retorno" value="{{ retorno }}">
                             <input type="hidden" name="status" value="{{ status_ocorrencia.ABERTO }}">
                             <button type="submit" class="btn btn-sm btn-outline-secondary">
                                 <i class="bi bi-arrow-left me-1"></i>Voltar
                             </button>
                         </form>
                         <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="retorno" value="{{ retorno }}">
                             <input type="hidden" name="status" value="{{ status_ocorrencia.RESOLVIDO }}">
                             <button type="submit" class="btn btn-sm btn-success">
                                 <i class="bi bi-check2 me-1"></i>Marcar Resolvido
@@ -126,6 +170,7 @@
                         </form>
                         {% elif item.status == status_ocorrencia.RESOLVIDO %}
                         <form method="post" action="{{ url_for('admin_ocorrencias_atualizar_status', id=item.id) }}">
+                            <input type="hidden" name="retorno" value="{{ retorno }}">
                             <input type="hidden" name="status" value="{{ status_ocorrencia.EM_ANDAMENTO }}">
                             <button type="submit" class="btn btn-sm btn-outline-warning">
                                 <i class="bi bi-arrow-counterclockwise me-1"></i>Reabrir
@@ -134,23 +179,64 @@
                         {% endif %}
                     </div>
                 </article>
-                {% if item.foto_arquivo %}
-                <div class="modal fade" id="modalFotoKanban{{ item.id }}" tabindex="-1" aria-hidden="true">
-                    <div class="modal-dialog modal-dialog-centered modal-lg">
+                {% set morador = contexto_morador.get(item.id, {}) %}
+                <div class="modal fade" id="modalAtendimento{{ item.id }}" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
                         <div class="modal-content">
                             <div class="modal-header">
-                                <h2 class="modal-title h6">{{ item.titulo }}</h2>
+                                <h2 class="modal-title h5">{{ item.titulo }}</h2>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                             </div>
-                            <div class="modal-body text-center">
+                            <div class="modal-body">
+                                <p class="small text-muted mb-2">
+                                    {{ item.unidade.identificador if item.unidade else 'Unidade' }}
+                                    · {{ item.categoria }}
+                                    · {{ item.created_at.strftime('%d/%m/%Y %H:%M') }}
+                                </p>
+                                {% if morador.nome %}
+                                <p class="mb-2"><strong>Morador:</strong> {{ morador.nome }}</p>
+                                {% endif %}
+                                {% if morador.whatsapp %}
+                                <a class="btn btn-sm btn-success mb-3" target="_blank" rel="noopener noreferrer"
+                                   href="{{ morador.whatsapp }}">📲 WhatsApp do Morador</a>
+                                {% endif %}
+                                <p class="mb-3" style="white-space: pre-wrap;">{{ item.descricao }}</p>
+                                {% if item.foto_arquivo %}
                                 <img src="{{ url_for('static', filename='uploads/ocorrencias/' ~ item.foto_arquivo) }}"
-                                     alt="Foto da ocorrência {{ item.titulo }}"
-                                     class="img-fluid rounded">
+                                     alt="Anexo da ocorrência {{ item.titulo }}"
+                                     class="img-fluid rounded mb-3">
+                                {% endif %}
+                                {% if item.resposta %}
+                                <div class="alert alert-success">
+                                    <div class="fw-semibold">Parecer atual</div>
+                                    <p class="mb-1" style="white-space: pre-wrap;">{{ item.resposta }}</p>
+                                    <div class="small mb-0">
+                                        {% if item.respondida_em %}{{ item.respondida_em.strftime('%d/%m/%Y %H:%M') }}{% endif %}
+                                        {% if item.respondida_por %} · {{ item.respondida_por.username }}{% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                                <form method="post" action="{{ url_for('admin_ocorrencias_responder', id=item.id) }}" class="mb-3">
+                                    <input type="hidden" name="retorno" value="{{ retorno }}">
+                                    <label class="form-label" for="resposta-{{ item.id }}">Resposta / Parecer Oficial</label>
+                                    <textarea class="form-control mb-2" id="resposta-{{ item.id }}" name="resposta" rows="4" required>{{ item.resposta or '' }}</textarea>
+                                    <button type="submit" class="btn btn-primary">Salvar parecer</button>
+                                </form>
+                                <form method="post" action="{{ url_for('admin_ocorrencias_encaminhar', id=item.id) }}" class="d-flex flex-wrap gap-2 align-items-end">
+                                    <input type="hidden" name="retorno" value="{{ retorno }}">
+                                    <div>
+                                        <label class="form-label" for="competencia-{{ item.id }}">Competência</label>
+                                        <select class="form-select" id="competencia-{{ item.id }}" name="competencia">
+                                            <option value="bloco" {% if item.competencia != 'geral' %}selected{% endif %}>Bloco da unidade</option>
+                                            <option value="geral" {% if item.competencia == 'geral' %}selected{% endif %}>Administração Geral</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="btn btn-outline-primary">Encaminhar</button>
+                                </form>
                             </div>
                         </div>
                     </div>
                 </div>
-                {% endif %}
                 {% endfor %}
             {% else %}
             <p class="text-muted small text-center mb-0 py-3">Nenhum chamado nesta coluna.</p>

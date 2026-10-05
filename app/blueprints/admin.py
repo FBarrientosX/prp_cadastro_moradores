@@ -22,10 +22,21 @@ junto por serem usadas exclusivamente por `admin_clube_vantagens`.
 """
 
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 import os
+import re
 import secrets
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import (
+    Response,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from werkzeug.utils import secure_filename
 from sqlalchemy import and_, case, func, or_, text
 
@@ -40,15 +51,18 @@ from app.auth import (
     normalizar_slug,
     validar_slug,
 )
+from app.utils import get_blocos
 from app.models import (
     AgendamentoMudanca,
     Condominio,
     CredencialAcesso,
+    EquipamentoAcesso,
     Cupom,
     Encomenda,
     Guarita,
     LogAuditoria,
     ItemChecklist,
+    CategoriaOcorrencia,
     Ocorrencia,
     Parceiro,
     Pessoa,
@@ -66,6 +80,19 @@ from app.models import (
     Usuario,
     VinculoPessoa,
 )
+
+
+def _nome_parceiro_exibicao(nome):
+    """Nome principal e o sufixo longo, separado no primeiro ' - '."""
+    texto = " ".join((nome or "").split())
+    if " - " not in texto:
+        return texto, ""
+    principal, _, resto = texto.partition(" - ")
+    principal = principal.strip()
+    resto = resto.strip()
+    if not principal:
+        return texto, ""
+    return principal, resto
 
 
 def _aplicar_filtro_resgates_condominio(query, condominio_id, unidade_ja_joinada=False):
@@ -196,10 +223,12 @@ def _montar_analytics_clube(condominio_id=None):
             if total_cupom_resgates
             else 0.0
         )
+        nome_curto, nome_detalhe = _nome_parceiro_exibicao(parceiro_nome)
         cupons_conversao.append(
             {
                 "titulo": titulo,
-                "parceiro": parceiro_nome,
+                "parceiro": nome_curto,
+                "parceiro_detalhe": nome_detalhe,
                 "resgates": total_cupom_resgates,
                 "utilizados": utilizados,
                 "taxa": taxa_cupom,
@@ -212,7 +241,9 @@ def _montar_analytics_clube(condominio_id=None):
     return {
         "charts": {
             "cupons_por_parceiro": {
-                "labels": [row[0] for row in cupons_por_parceiro_rows],
+                "labels": [
+                    _nome_parceiro_exibicao(row[0])[0] for row in cupons_por_parceiro_rows
+                ],
                 "values": [row[1] for row in cupons_por_parceiro_rows],
             },
             "resgates_por_bloco": {
@@ -235,7 +266,11 @@ def _montar_analytics_clube(condominio_id=None):
         "metricas": {
             "total_cupons_ativos": total_cupons_ativos,
             "total_resgates": total_resgates,
-            "parceiro_popular": parceiro_popular_row[0] if parceiro_popular_row else "—",
+            "parceiro_popular": (
+                _nome_parceiro_exibicao(parceiro_popular_row[0])[0]
+                if parceiro_popular_row
+                else "—"
+            ),
             "parceiro_popular_count": parceiro_popular_row[1] if parceiro_popular_row else 0,
             "unidade_engajada": (
                 f"Bloco {unidade_destaque[0]} / Apto {unidade_destaque[1]}"
@@ -448,23 +483,112 @@ def admin_index():
     )
 
 
+def _parceiros_visiveis_no_condominio(condominio_id):
+    from app.routes import _parceiro_visivel_no_condominio
+
+    return [
+        parceiro
+        for parceiro in Parceiro.query.filter_by(status="Ativo")
+        .order_by(Parceiro.nome_empresa)
+        .all()
+        if _parceiro_visivel_no_condominio(parceiro, condominio_id)
+    ]
+
+
 @admin_required
 def admin_clube_vantagens():
-    """
-    Admin local: apenas Relatórios/Analytics do próprio condomínio.
+    """Relatórios do condomínio e vitrine local. Ativação global continua no Super Admin."""
+    from app.models import CategoriaParceiro
 
-    Clube de Vantagens é catálogo GLOBAL (Parceiro/Cupom sem condominio_id).
-    Mutação de parceiros fica exclusiva do Super Admin (/superadmin/parceiros).
-    """
     usuario = get_current_user()
-    analytics = _montar_analytics_clube(condominio_id=usuario.condominio_id)
-
+    aba = request.args.get("aba", "analytics")
+    if aba not in ("analytics", "parceiros"):
+        aba = "analytics"
+    condominio_id = usuario.condominio_id
+    analytics = (
+        _montar_analytics_clube(condominio_id=condominio_id) if aba == "analytics" else None
+    )
+    parceiros = []
+    sugestoes = []
+    if aba == "parceiros":
+        hoje = date.today()
+        parceiros = _parceiros_visiveis_no_condominio(condominio_id)
+        sugestoes = (
+            Parceiro.query.filter(
+                Parceiro.status == "Pendente",
+                Parceiro.condominios.any(id=condominio_id),
+            )
+            .order_by(Parceiro.nome_empresa)
+            .all()
+        )
+        for parceiro in parceiros:
+            parceiro.cupons_ativos_vitrine = [
+                cupom
+                for cupom in parceiro.cupons
+                if cupom.ativo and (cupom.data_validade is None or cupom.data_validade >= hoje)
+            ]
+    categorias = [
+        categoria.nome
+        for categoria in CategoriaParceiro.query.filter_by(ativa=True)
+        .order_by(CategoriaParceiro.nome)
+        .all()
+    ]
     return render_template(
         "admin_clube_vantagens.html",
         current_user=usuario,
-        active_tab="analytics",
+        aba=aba,
         analytics=analytics,
+        parceiros=parceiros,
+        sugestoes=sugestoes,
+        categorias_parceiro=categorias,
     )
+
+
+@admin_required
+def admin_clube_sugerir_parceiro():
+    """Sugere um comércio da vizinhança. Fica pendente e restrito a este condomínio."""
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    nome = (request.form.get("nome_empresa") or "").strip()
+    email = (request.form.get("email") or "").strip().lower()
+    telefone = (request.form.get("telefone") or "").strip() or None
+    categoria = (request.form.get("categoria") or "").strip()
+    endereco = (request.form.get("endereco") or "").strip() or None
+    if not nome or not email or not categoria:
+        flash("Informe o nome, o e-mail e a categoria do comércio.", "danger")
+        return redirect(url_for("admin_clube_vantagens", aba="parceiros"))
+    if "@" not in email or " " in email:
+        flash("Informe um e-mail válido para o comércio.", "danger")
+        return redirect(url_for("admin_clube_vantagens", aba="parceiros"))
+    if Parceiro.query.filter_by(email=email).first():
+        flash("Já existe um parceiro com este e-mail na plataforma.", "warning")
+        return redirect(url_for("admin_clube_vantagens", aba="parceiros"))
+
+    login = f"sug{condominio_id}{secrets.token_hex(4)}"
+    while Parceiro.query.filter_by(usuario_login=login).first():
+        login = f"sug{condominio_id}{secrets.token_hex(4)}"
+    parceiro = Parceiro(
+        nome_empresa=nome[:100],
+        usuario_login=login,
+        email=email,
+        senha_hash="pendente",
+        telefone=telefone,
+        categoria=categoria[:50],
+        endereco=endereco,
+        ativo=False,
+        status="Pendente",
+    )
+    parceiro.set_password(secrets.token_urlsafe(24))
+    condominio = db.session.get(Condominio, condominio_id)
+    parceiro.condominios.append(condominio)
+    db.session.add(parceiro)
+    db.session.commit()
+    flash(
+        "Sugestão enviada. O comércio fica pendente até a plataforma aprovar "
+        "e só então aparece para os moradores deste condomínio.",
+        "success",
+    )
+    return redirect(url_for("admin_clube_vantagens", aba="parceiros"))
 
 
 @admin_required
@@ -492,7 +616,11 @@ def admin_registrar(unidade_id):
 @admin_or_assistente_required
 def admin_aprovar_atualizacao(unidade_id):
     """Aprova atualização cadastral sem derrubar o status Aprovada/Registrada."""
-    from app.routes import _registrar_auditoria, _unidade_do_tenant
+    from app.routes import (
+        _registrar_auditoria,
+        _unidade_do_tenant,
+        sincronizar_credencial_facial,
+    )
 
     condominio_id = condominio_id_obrigatorio()
     unidade = _unidade_do_tenant(unidade_id, condominio_id)
@@ -504,6 +632,7 @@ def admin_aprovar_atualizacao(unidade_id):
 
     for pessoa in unidade.pessoas.all():
         pessoa.status = StatusPessoa.APROVADO
+        sincronizar_credencial_facial(pessoa)
     unidade.atualizacao_pendente = False
     if usuario:
         _registrar_auditoria(
@@ -1193,10 +1322,49 @@ def admin_excluir_usuario(usuario_id):
     return _redirect_equipe_acessos()
 
 
+def _redirect_ocorrencias():
+    destino = (request.form.get("retorno") or "").strip()
+    if destino.startswith("/admin/ocorrencias") and not destino.startswith("//"):
+        return redirect(destino)
+    return redirect(url_for("admin_ocorrencias"))
+
+
+def _ocorrencia_do_gestor(ocorrencia_id, usuario):
+    from app.routes import _ocorrencia_do_tenant, _sindico_gerencia_bloco
+
+    condominio_id = condominio_id_obrigatorio(usuario)
+    ocorrencia = _ocorrencia_do_tenant(ocorrencia_id, condominio_id)
+    if ocorrencia is None:
+        return None
+    if usuario.role == Role.SINDICO and not _sindico_gerencia_bloco(
+        usuario, ocorrencia.unidade.bloco
+    ):
+        return None
+    return ocorrencia
+
+
+def _contexto_morador_ocorrencia(ocorrencia):
+    from app.blueprints.portaria import _href_whatsapp_morador
+
+    pessoas = (
+        Pessoa.query.filter_by(unidade_id=ocorrencia.unidade_id, eh_morador=True)
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
+        .all()
+    )
+    nome = pessoas[0].nome_completo if pessoas else ""
+    href = _href_whatsapp_morador(
+        ocorrencia.unidade,
+        "Olá {nome}, estamos tratando a ocorrência "
+        f"\"{ocorrencia.titulo}\" da unidade {ocorrencia.unidade.identificador}.",
+    )
+    return {"nome": nome, "whatsapp": href}
+
+
 @admin_or_sindico_required
 def admin_ocorrencias():
     """Kanban de ocorrências do condomínio do admin/síndico logado."""
     from app.routes import _recorte_blocos_consulta, _redirect_login_tenant
+    from app.utils import get_blocos, normalizar_bloco_codigo
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
@@ -1206,11 +1374,36 @@ def admin_ocorrencias():
 
     blocos_opcoes = []
     bloco_filtro = ""
-    query = Ocorrencia.query.filter_by(condominio_id=condominio_id)
+    query = Ocorrencia.query.join(Unidade, Ocorrencia.unidade_id == Unidade.id).filter(
+        Ocorrencia.condominio_id == condominio_id,
+        Unidade.condominio_id == condominio_id,
+    )
     if usuario.role == Role.SINDICO:
         blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
-        query = query.join(Unidade, Ocorrencia.unidade_id == Unidade.id).filter(
-            Unidade.bloco.in_(blocos_sindico or [""])
+        query = query.filter(Unidade.bloco.in_(blocos_sindico or [""]))
+    else:
+        blocos_opcoes = list(get_blocos())
+        pedido = normalizar_bloco_codigo((request.args.get("bloco") or "").strip())
+        if pedido in blocos_opcoes:
+            bloco_filtro = pedido
+            query = query.filter(Unidade.bloco == pedido)
+
+    categoria_filtro = (request.args.get("categoria") or "").strip()
+    if categoria_filtro in CategoriaOcorrencia.CHOICES:
+        query = query.filter(Ocorrencia.categoria == categoria_filtro)
+    else:
+        categoria_filtro = ""
+
+    busca = " ".join((request.args.get("q") or "").split())
+    if busca:
+        termo = f"%{busca.lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(Ocorrencia.titulo).like(termo),
+                func.lower(Ocorrencia.descricao).like(termo),
+                func.lower(Unidade.bloco).like(termo),
+                func.lower(Unidade.apartamento).like(termo),
+            )
         )
 
     ocorrencias = query.order_by(Ocorrencia.created_at.desc()).all()
@@ -1219,28 +1412,30 @@ def admin_ocorrencias():
         StatusOcorrencia.EM_ANDAMENTO: [],
         StatusOcorrencia.RESOLVIDO: [],
     }
+    contexto = {}
     for item in ocorrencias:
         colunas.setdefault(item.status, []).append(item)
+        contexto[item.id] = _contexto_morador_ocorrencia(item)
 
     return render_template(
         "admin/ocorrencias_kanban.html",
         colunas=colunas,
+        contexto_morador=contexto,
         status_ocorrencia=StatusOcorrencia,
+        categorias_ocorrencia=CategoriaOcorrencia.CHOICES,
         current_user=usuario,
         blocos_opcoes=blocos_opcoes,
         bloco_filtro=bloco_filtro,
+        categoria_filtro=categoria_filtro,
+        busca=busca,
+        retorno=request.full_path,
     )
 
 
 @admin_or_sindico_required
 def admin_ocorrencias_atualizar_status(id):
     """Avança ou retrocede o status com proteção Anti-IDOR por condominio_id."""
-    from app.routes import (
-        _ocorrencia_do_tenant,
-        _redirect_login_tenant,
-        _registrar_auditoria,
-        _sindico_gerencia_bloco,
-    )
+    from app.routes import _redirect_login_tenant, _registrar_auditoria
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
@@ -1251,22 +1446,16 @@ def admin_ocorrencias_atualizar_status(id):
     novo_status = (request.form.get("status") or "").strip()
     if novo_status not in StatusOcorrencia.CHOICES:
         flash("Status inválido.", "danger")
-        return redirect(url_for("admin_ocorrencias"))
+        return _redirect_ocorrencias()
 
-    ocorrencia = _ocorrencia_do_tenant(id, condominio_id)
+    ocorrencia = _ocorrencia_do_gestor(id, usuario)
     if not ocorrencia:
         flash("Ocorrência não encontrada.", "danger")
-        return redirect(url_for("admin_ocorrencias"))
-
-    if usuario.role == Role.SINDICO and not _sindico_gerencia_bloco(
-        usuario, ocorrencia.unidade.bloco
-    ):
-        flash("Você não tem permissão para esta ocorrência.", "danger")
-        return redirect(url_for("admin_ocorrencias"))
+        return _redirect_ocorrencias()
 
     status_anterior = ocorrencia.status
     if status_anterior == novo_status:
-        return redirect(url_for("admin_ocorrencias"))
+        return _redirect_ocorrencias()
 
     ocorrencia.status = novo_status
     _registrar_auditoria(
@@ -1278,7 +1467,78 @@ def admin_ocorrencias_atualizar_status(id):
     )
     db.session.commit()
     flash(f"Status atualizado para {novo_status}.", "success")
-    return redirect(url_for("admin_ocorrencias"))
+    return _redirect_ocorrencias()
+
+
+@admin_or_sindico_required
+def admin_ocorrencias_responder(id):
+    from app.blueprints.portaria import _agora_sao_paulo
+    from app.models import PerfilDestinoNotificacao
+    from app.routes import _criar_notificacao, _registrar_auditoria, _redirect_login_tenant
+
+    usuario = get_current_user()
+    if not condominio_id_obrigatorio(usuario):
+        flash("Conta sem condomínio vinculado.", "danger")
+        return _redirect_login_tenant()
+    ocorrencia = _ocorrencia_do_gestor(id, usuario)
+    if ocorrencia is None:
+        flash("Ocorrência não encontrada.", "danger")
+        return _redirect_ocorrencias()
+
+    resposta = " ".join((request.form.get("resposta") or "").split())
+    if not resposta:
+        flash("Escreva a resposta ou o parecer antes de salvar.", "danger")
+        return _redirect_ocorrencias()
+
+    ocorrencia.resposta = resposta[:4000]
+    ocorrencia.respondida_em = _agora_sao_paulo()
+    ocorrencia.respondida_por_id = usuario.id
+    _criar_notificacao(
+        ocorrencia.condominio_id,
+        PerfilDestinoNotificacao.MORADOR,
+        "Resposta da sua ocorrência",
+        f"{ocorrencia.titulo}: {ocorrencia.resposta[:180]}",
+        unidade_id=ocorrencia.unidade_id,
+    )
+    _registrar_auditoria(
+        usuario,
+        f"Parecer registrado na ocorrência #{ocorrencia.id} ({ocorrencia.titulo}).",
+    )
+    db.session.commit()
+    flash("Resposta registrada. O morador já pode vê-la no chamado.", "success")
+    return _redirect_ocorrencias()
+
+
+@admin_or_sindico_required
+def admin_ocorrencias_encaminhar(id):
+    from app.routes import _registrar_auditoria, _redirect_login_tenant
+
+    usuario = get_current_user()
+    if not condominio_id_obrigatorio(usuario):
+        flash("Conta sem condomínio vinculado.", "danger")
+        return _redirect_login_tenant()
+    ocorrencia = _ocorrencia_do_gestor(id, usuario)
+    if ocorrencia is None:
+        flash("Ocorrência não encontrada.", "danger")
+        return _redirect_ocorrencias()
+
+    competencia = (request.form.get("competencia") or "").strip()
+    if competencia not in ("bloco", "geral"):
+        flash("Escolha se o chamado fica com o bloco ou com a administração geral.", "danger")
+        return _redirect_ocorrencias()
+    if ocorrencia.competencia == competencia:
+        flash("Este chamado já está nessa competência.", "info")
+        return _redirect_ocorrencias()
+
+    ocorrencia.competencia = competencia
+    destino = "Administração Geral" if competencia == "geral" else "Bloco"
+    _registrar_auditoria(
+        usuario,
+        f"Ocorrência #{ocorrencia.id} ({ocorrencia.titulo}) encaminhada para {destino}.",
+    )
+    db.session.commit()
+    flash(f"Chamado encaminhado para {destino}.", "success")
+    return _redirect_ocorrencias()
 
 
 @admin_or_assistente_required
@@ -1439,18 +1699,8 @@ def admin_mudancas():
     )
 
 
-@admin_required
-def admin_controle_acesso():
-    """Credenciais de acesso (RFID, biometria, controle, cartão) do condomínio."""
-    condominio_id = condominio_id_obrigatorio()
-    credenciais = (
-        CredencialAcesso.query.join(Pessoa, CredencialAcesso.morador_id == Pessoa.id)
-        .join(Unidade, Pessoa.unidade_id == Unidade.id)
-        .filter(CredencialAcesso.condominio_id == condominio_id)
-        .order_by(CredencialAcesso.ativa.desc(), Pessoa.nome_completo)
-        .all()
-    )
-    moradores = (
+def _moradores_credencial(condominio_id):
+    return (
         Pessoa.query.join(Unidade, Pessoa.unidade_id == Unidade.id)
         .filter(
             Unidade.condominio_id == condominio_id,
@@ -1461,6 +1711,143 @@ def admin_controle_acesso():
         .order_by(Unidade.bloco, Unidade.apartamento, Pessoa.nome_completo)
         .all()
     )
+
+
+def _redirect_controle_acesso(aba=None):
+    destino = aba or (request.form.get("aba") or request.args.get("aba") or "").strip()
+    params = {
+        "q": (request.form.get("filtro_q") or request.args.get("q") or "").strip(),
+        "tipo": (request.form.get("filtro_tipo") or request.args.get("tipo") or "").strip(),
+        "status": (request.form.get("filtro_status") or request.args.get("status") or "").strip(),
+    }
+    if destino == "equipamentos":
+        params["aba"] = "equipamentos"
+    return redirect(url_for("admin_controle_acesso", **params))
+
+
+def _garantir_agent_token(condominio):
+    if condominio is None:
+        return ""
+    if not (condominio.agent_api_token or "").strip():
+        condominio.agent_api_token = secrets.token_hex(24)
+    return condominio.agent_api_token
+
+
+def _status_agente(ping):
+    if ping is None:
+        return {
+            "online": False,
+            "rotulo": "Aguardando conexão do Agente",
+        }
+    segundos = max(0, int((datetime.utcnow() - ping).total_seconds()))
+    if segundos < 60:
+        quando = "há menos de 1 min"
+    elif segundos < 3600:
+        minutos = max(1, segundos // 60)
+        quando = f"há {minutos} min"
+    else:
+        horas = max(1, segundos // 3600)
+        quando = f"há {horas} h"
+    if segundos <= 180:
+        return {
+            "online": True,
+            "rotulo": f"Online - Último contato {quando}",
+        }
+    return {
+        "online": False,
+        "rotulo": f"Sem contato {quando}",
+    }
+
+
+def _formatar_utc_para_local(momento):
+    if momento is None:
+        return ""
+    utc = momento.replace(tzinfo=ZoneInfo("UTC"))
+    local = utc.astimezone(ZoneInfo("America/Sao_Paulo"))
+    return local.strftime("%d/%m/%Y %H:%M")
+
+
+_RE_IPV4 = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
+
+
+def _ipv4_valido(valor):
+    encontrado = _RE_IPV4.fullmatch((valor or "").strip())
+    if not encontrado:
+        return False
+    return all(0 <= int(parte) <= 255 for parte in encontrado.groups())
+
+
+def _ler_equipamento_form(existente=None):
+    nome = " ".join((request.form.get("nome") or "").split())
+    if not nome or len(nome) > 120:
+        return None, "Informe o nome do equipamento."
+    fabricante = (request.form.get("fabricante") or "").strip()
+    if fabricante not in EquipamentoAcesso.FABRICANTES:
+        return None, "Escolha Control iD ou Intelbras."
+    ip_local = (request.form.get("ip_local") or "").strip()
+    if not _ipv4_valido(ip_local):
+        return None, "Informe o IP local do equipamento, por exemplo 192.168.1.201."
+    porta = request.form.get("porta", type=int)
+    if porta is None:
+        porta = 80
+    if porta < 1 or porta > 65535:
+        return None, "A porta deve estar entre 1 e 65535."
+    usuario = (request.form.get("usuario_equipamento") or "").strip() or "admin"
+    usuario = usuario.replace("\r", "").replace("\n", "")
+    if len(usuario) > 80:
+        return None, "O login do equipamento é longo demais."
+    senha = request.form.get("senha_equipamento")
+    if senha is None or senha == "":
+        senha = existente.senha_equipamento if existente is not None else "admin"
+    senha = str(senha).replace("\r", "").replace("\n", "")
+    if not senha or len(senha) > 120:
+        return None, "Informe a senha do equipamento."
+    escopo = (request.form.get("bloco_escopo") or "").strip()
+    if escopo.upper() == "GERAL":
+        escopo = ""
+    if escopo and escopo not in get_blocos():
+        return None, "Escolha a portaria geral ou um bloco válido."
+    return {
+        "nome": nome,
+        "fabricante": fabricante,
+        "ip_local": ip_local,
+        "porta": porta,
+        "usuario_equipamento": usuario,
+        "senha_equipamento": senha,
+        "bloco_escopo": escopo or None,
+        "ativo": request.form.get("ativo") == "on",
+    }, None
+
+
+def _aplicar_equipamento(equipamento, dados):
+    equipamento.nome = dados["nome"]
+    equipamento.fabricante = dados["fabricante"]
+    equipamento.ip_local = dados["ip_local"]
+    equipamento.porta = dados["porta"]
+    equipamento.usuario_equipamento = dados["usuario_equipamento"]
+    equipamento.senha_equipamento = dados["senha_equipamento"]
+    equipamento.bloco_escopo = dados["bloco_escopo"]
+    equipamento.ativo = dados["ativo"]
+
+
+def _codigo_facial(pessoa):
+    foto = (pessoa.foto_facial or pessoa.foto_perfil or "").strip()
+    nome = os.path.basename(foto) if foto else ""
+    return f"facial-{pessoa.id}-{nome}"[:120]
+
+
+@admin_required
+def admin_controle_acesso():
+    """Credenciais de acesso do condomínio, com resumo e filtro operacional."""
+    condominio_id = condominio_id_obrigatorio()
+    credenciais = (
+        CredencialAcesso.query.join(Pessoa, CredencialAcesso.morador_id == Pessoa.id)
+        .join(Unidade, Pessoa.unidade_id == Unidade.id)
+        .filter(CredencialAcesso.condominio_id == condominio_id)
+        .order_by(CredencialAcesso.ativa.desc(), Pessoa.nome_completo)
+        .all()
+    )
+    moradores = _moradores_credencial(condominio_id)
     grupos = []
     indice = {}
     for morador in moradores:
@@ -1470,11 +1857,89 @@ def admin_controle_acesso():
             indice[morador.unidade_id] = grupo
             grupos.append(grupo)
         grupo["moradores"].append(morador)
+
+    ativas = [item for item in credenciais if item.ativa]
+    resumo = {
+        "ativas": len(ativas),
+        "faciais": sum(
+            1
+            for morador in moradores
+            if (morador.foto_facial or morador.foto_perfil or "").strip()
+        ),
+        "tags": sum(1 for item in ativas if item.tipo in CredencialAcesso.TIPOS_TAG_CARTAO),
+        "bloqueadas": sum(1 for item in credenciais if not item.ativa),
+    }
+    filtro_q = " ".join((request.args.get("q") or "").split()).lower()
+    filtro_tipo = (request.args.get("tipo") or "").strip()
+    filtro_status = (request.args.get("status") or "").strip()
+    tipos_por_filtro = {
+        "Facial": CredencialAcesso.TIPOS_FACIAL,
+        "Tag Veicular": ("Tag Veicular",),
+        "Cartão/Chaveiro RFID": ("Cartão/Chaveiro RFID", "Cartão", "Tag RFID"),
+        "Controle Remoto": ("Controle Remoto",),
+    }
+    if filtro_tipo not in tipos_por_filtro:
+        filtro_tipo = ""
+    if filtro_status not in ("ativa", "bloqueada"):
+        filtro_status = ""
+
+    def visivel(credencial):
+        if filtro_tipo and credencial.tipo not in tipos_por_filtro[filtro_tipo]:
+            return False
+        if filtro_status == "ativa" and not credencial.ativa:
+            return False
+        if filtro_status == "bloqueada" and credencial.ativa:
+            return False
+        if not filtro_q:
+            return True
+        morador = credencial.morador
+        unidade = morador.unidade
+        texto = " ".join(
+            [
+                unidade.bloco or "",
+                unidade.apartamento or "",
+                unidade.identificador or "",
+                morador.nome_completo or "",
+                credencial.tipo or "",
+            ]
+        ).lower()
+        return filtro_q in texto
+
+    aba = (request.args.get("aba") or "").strip()
+    if aba != "equipamentos":
+        aba = "credenciais"
+    condominio = Condominio.query.get(condominio_id)
+    if condominio is not None and not (condominio.agent_api_token or "").strip():
+        _garantir_agent_token(condominio)
+        db.session.commit()
+    equipamentos = []
+    if condominio is not None:
+        equipamentos = (
+            EquipamentoAcesso.query.filter_by(condominio_id=condominio_id)
+            .order_by(EquipamentoAcesso.nome.asc())
+            .all()
+        )
+        for equipamento in equipamentos:
+            equipamento.sincronia_label = _formatar_utc_para_local(
+                equipamento.ultima_sincronia
+            )
     return render_template(
         "admin/controle_acesso.html",
-        credenciais=credenciais,
+        credenciais=[item for item in credenciais if visivel(item)],
         moradores_por_unidade=grupos,
-        tipos_credencial=CredencialAcesso.TIPOS,
+        tipos_credencial=CredencialAcesso.TIPOS_FORMULARIO,
+        tipos_filtro=list(tipos_por_filtro),
+        resumo=resumo,
+        filtro_q=request.args.get("q") or "",
+        filtro_tipo=filtro_tipo,
+        filtro_status=filtro_status,
+        aba=aba,
+        equipamentos=equipamentos,
+        blocos=get_blocos(),
+        agent_token=(condominio.agent_api_token if condominio is not None else "") or "",
+        status_agente=_status_agente(
+            condominio.agent_ultimo_ping if condominio is not None else None
+        ),
     )
 
 
@@ -1488,7 +1953,7 @@ def admin_controle_acesso_salvar():
     codigo = (request.form.get("codigo_identificador") or "").strip()
     if not morador_id or tipo not in CredencialAcesso.TIPOS or not codigo:
         flash("Informe o morador, o tipo e o código da credencial.", "danger")
-        return redirect(url_for("admin_controle_acesso"))
+        return _redirect_controle_acesso()
 
     morador = (
         Pessoa.query.join(Unidade, Pessoa.unidade_id == Unidade.id)
@@ -1501,13 +1966,13 @@ def admin_controle_acesso_salvar():
     )
     if morador is None:
         flash("Morador não encontrado neste condomínio.", "danger")
-        return redirect(url_for("admin_controle_acesso"))
+        return _redirect_controle_acesso()
     if not morador.eh_morador:
         flash(
             "Somente quem reside na unidade pode receber credencial de acesso.",
             "warning",
         )
-        return redirect(url_for("admin_controle_acesso"))
+        return _redirect_controle_acesso()
 
     duplicada = CredencialAcesso.query.filter_by(
         condominio_id=condominio_id,
@@ -1516,7 +1981,7 @@ def admin_controle_acesso_salvar():
     ).first()
     if duplicada is not None:
         flash("Já existe uma credencial ativa com este código neste condomínio.", "warning")
-        return redirect(url_for("admin_controle_acesso"))
+        return _redirect_controle_acesso()
 
     credencial = CredencialAcesso(
         tipo=tipo,
@@ -1533,7 +1998,7 @@ def admin_controle_acesso_salvar():
     )
     db.session.commit()
     flash("Credencial cadastrada.", "success")
-    return redirect(url_for("admin_controle_acesso"))
+    return _redirect_controle_acesso()
 
 
 @admin_required
@@ -1546,19 +2011,185 @@ def admin_controle_acesso_revogar(credencial_id):
         condominio_id=condominio_id,
     ).first_or_404()
     if not credencial.ativa:
-        flash("Esta credencial já está revogada.", "info")
-        return redirect(url_for("admin_controle_acesso"))
+        flash("Esta credencial já está bloqueada.", "info")
+        return _redirect_controle_acesso()
 
     credencial.ativa = False
     morador = credencial.morador
     _registrar_auditoria(
         get_current_user(),
-        f"Credencial revogada: {credencial.tipo} {credencial.codigo_identificador} "
+        f"Credencial bloqueada: {credencial.tipo} {credencial.codigo_identificador} "
         f"de {morador.nome_completo}.",
     )
     db.session.commit()
-    flash("Credencial revogada. O registro permanece para auditoria.", "success")
-    return redirect(url_for("admin_controle_acesso"))
+    flash("Credencial bloqueada. O registro permanece para auditoria.", "success")
+    return _redirect_controle_acesso()
+
+
+@admin_required
+def admin_controle_acesso_sincronizar_faciais():
+    """Cria ou atualiza a credencial Facial de quem já tem foto no cadastro."""
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    criadas = 0
+    atualizadas = 0
+    for morador in _moradores_credencial(condominio_id):
+        if not (morador.foto_facial or morador.foto_perfil or "").strip():
+            continue
+        codigo = _codigo_facial(morador)
+        existente = (
+            CredencialAcesso.query.filter(
+                CredencialAcesso.condominio_id == condominio_id,
+                CredencialAcesso.morador_id == morador.id,
+                CredencialAcesso.ativa.is_(True),
+                CredencialAcesso.tipo.in_(CredencialAcesso.TIPOS_FACIAL),
+            )
+            .order_by(CredencialAcesso.id.asc())
+            .first()
+        )
+        if existente is None:
+            db.session.add(
+                CredencialAcesso(
+                    tipo="Facial",
+                    codigo_identificador=codigo,
+                    morador_id=morador.id,
+                    condominio_id=condominio_id,
+                    ativa=True,
+                )
+            )
+            criadas += 1
+            continue
+        if existente.codigo_identificador != codigo:
+            existente.codigo_identificador = codigo
+            atualizadas += 1
+    if criadas or atualizadas:
+        _registrar_auditoria(
+            get_current_user(),
+            f"Sincronização facial: {criadas} credenciais criadas, "
+            f"{atualizadas} atualizadas.",
+        )
+        db.session.commit()
+        flash(
+            f"Fotos faciais sincronizadas: {criadas} credenciais criadas, "
+            f"{atualizadas} atualizadas.",
+            "success",
+        )
+    else:
+        flash(
+            "Nenhum morador aprovado com foto facial ou de perfil pendente de credencial.",
+            "info",
+        )
+    return _redirect_controle_acesso()
+
+
+@admin_required
+def admin_controle_acesso_equipamento_salvar():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    equipamento_id = request.form.get("equipamento_id", type=int)
+    existente = None
+    if equipamento_id:
+        existente = EquipamentoAcesso.query.filter_by(
+            id=equipamento_id,
+            condominio_id=condominio_id,
+        ).first()
+        if existente is None:
+            flash("Equipamento não encontrado.", "danger")
+            return _redirect_controle_acesso("equipamentos")
+    dados, erro = _ler_equipamento_form(existente)
+    if erro:
+        flash(erro, "danger")
+        return _redirect_controle_acesso("equipamentos")
+    if existente is None:
+        existente = EquipamentoAcesso(condominio_id=condominio_id)
+        db.session.add(existente)
+        acao = "cadastrada"
+    else:
+        acao = "atualizada"
+    _aplicar_equipamento(existente, dados)
+    _registrar_auditoria(
+        get_current_user(),
+        f"Controladora {acao}: {dados['nome']} ({dados['ip_local']}).",
+    )
+    db.session.commit()
+    flash(f"Controladora {acao}.", "success")
+    return _redirect_controle_acesso("equipamentos")
+
+
+@admin_required
+def admin_controle_acesso_equipamento_remover(equipamento_id):
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    equipamento = EquipamentoAcesso.query.filter_by(
+        id=equipamento_id,
+        condominio_id=condominio_id,
+    ).first_or_404()
+    nome = equipamento.nome
+    db.session.delete(equipamento)
+    _registrar_auditoria(
+        get_current_user(),
+        f"Controladora removida: {nome}.",
+    )
+    db.session.commit()
+    flash("Controladora removida.", "success")
+    return _redirect_controle_acesso("equipamentos")
+
+
+@admin_required
+def admin_controle_acesso_regenerar_token():
+    from app.routes import _registrar_auditoria
+
+    condominio_id = condominio_id_obrigatorio()
+    condominio = Condominio.query.get(condominio_id)
+    if condominio is None:
+        flash("Condomínio não encontrado.", "danger")
+        return _redirect_controle_acesso("equipamentos")
+    condominio.agent_api_token = secrets.token_hex(24)
+    _registrar_auditoria(
+        get_current_user(),
+        "Token do Vizinsync Agent regenerado. O script antigo deixa de conectar.",
+    )
+    db.session.commit()
+    flash(
+        "Token regenerado. Baixe o script de novo e substitua o arquivo no computador da portaria.",
+        "warning",
+    )
+    return _redirect_controle_acesso("equipamentos")
+
+
+@admin_required
+def admin_controle_acesso_baixar_agente():
+    condominio_id = condominio_id_obrigatorio()
+    condominio = Condominio.query.get(condominio_id)
+    if condominio is None:
+        flash("Condomínio não encontrado.", "danger")
+        return _redirect_controle_acesso("equipamentos")
+    _garantir_agent_token(condominio)
+    db.session.commit()
+    caminho = os.path.normpath(
+        os.path.join(current_app.root_path, "..", "agent", "vizinsync_agent.py")
+    )
+    pasta_agent = os.path.normpath(os.path.join(current_app.root_path, "..", "agent"))
+    if os.path.dirname(caminho) != pasta_agent or not os.path.isfile(caminho):
+        flash("O script do agente não está disponível neste servidor.", "danger")
+        return _redirect_controle_acesso("equipamentos")
+    with open(caminho, encoding="utf-8") as arquivo:
+        corpo = arquivo.read()
+    api_url = request.host_url.rstrip("/")
+    corpo = corpo.replace("__VIZINSYNC_API_URL__", api_url).replace(
+        "__VIZINSYNC_API_TOKEN__", condominio.agent_api_token
+    )
+    return Response(
+        corpo,
+        mimetype="text/x-python; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="vizinsync_agent.py"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 def encomendas_pendentes_setores(condominio_id):
@@ -2325,6 +2956,12 @@ def register(app):
         methods=["GET"],
     )
     app.add_url_rule(
+        "/admin/clube_vantagens/sugerir",
+        "admin_clube_sugerir_parceiro",
+        admin_clube_sugerir_parceiro,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/admin/usuarios/novo",
         "admin_criar_usuario",
         admin_criar_usuario,
@@ -2421,6 +3058,18 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/admin/ocorrencias/<int:id>/responder",
+        "admin_ocorrencias_responder",
+        admin_ocorrencias_responder,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/ocorrencias/<int:id>/encaminhar",
+        "admin_ocorrencias_encaminhar",
+        admin_ocorrencias_encaminhar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/admin/mudancas",
         "admin_mudancas",
         admin_mudancas,
@@ -2479,4 +3128,34 @@ def register(app):
         "admin_controle_acesso_revogar",
         admin_controle_acesso_revogar,
         methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/sincronizar-faciais",
+        "admin_controle_acesso_sincronizar_faciais",
+        admin_controle_acesso_sincronizar_faciais,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/equipamentos/salvar",
+        "admin_controle_acesso_equipamento_salvar",
+        admin_controle_acesso_equipamento_salvar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/equipamentos/<int:equipamento_id>/remover",
+        "admin_controle_acesso_equipamento_remover",
+        admin_controle_acesso_equipamento_remover,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/agente/regenerar-token",
+        "admin_controle_acesso_regenerar_token",
+        admin_controle_acesso_regenerar_token,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/controle-acesso/agente/baixar",
+        "admin_controle_acesso_baixar_agente",
+        admin_controle_acesso_baixar_agente,
+        methods=["GET"],
     )

@@ -37,6 +37,7 @@ from app.auth import (
 )
 from app.utils import (
     get_condominio_estrutura,
+    nome_foto_facial_seguro,
     normalizar_bloco_apartamento,
     normalizar_bloco_codigo,
 )
@@ -1909,6 +1910,9 @@ def _morador_contato(pessoa):
         "responsavel": bool(pessoa.is_responsavel),
         "autoriza_interfone": bool(pessoa.autoriza_interfone),
     }
+    nome_foto = nome_foto_facial_seguro(pessoa.foto_facial)
+    if nome_foto:
+        item["foto_url"] = url_for("static", filename=f"uploads/faciais/{nome_foto}")
     if not pessoa.autoriza_interfone:
         return item
     whatsapp, formatado = _telefones_interfone(pessoa.telefone)

@@ -16,3 +16,6 @@ app/static/uploads/ocorrencias/*
 !app/static/uploads/ocorrencias/.gitkeep
 app/static/uploads/encomendas/*
 !app/static/uploads/encomendas/.gitkeep
+app/static/uploads/faciais/*
+!app/static/uploads/faciais/.gitkeep
+agent/agent_state.json

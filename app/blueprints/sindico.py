@@ -290,6 +290,7 @@ def sindico_validar_unidade(unidade_id):
         _registrar_auditoria,
         _sindico_gerencia_bloco,
         _unidade_do_tenant,
+        sincronizar_credencial_facial,
     )
 
     usuario = get_current_user()
@@ -361,6 +362,7 @@ def sindico_validar_unidade(unidade_id):
         status_anterior = unidade.status
         for pessoa in moradores_aprovados:
             pessoa.status = StatusPessoa.APROVADO
+            sincronizar_credencial_facial(pessoa)
         unidade.atualizacao_pendente = False
         if status_anterior == StatusUnidade.PENDENTE:
             unidade.status = StatusUnidade.APROVADA

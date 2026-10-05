@@ -424,9 +424,6 @@
 
     function desenharInterfone() {
         box.replaceChildren();
-        const comTelefone = contatosAtuais.filter(function (morador) {
-            return morador.autoriza_interfone && morador.telefone;
-        });
         if (!unidade.value) {
             box.classList.add("d-none");
             return;
@@ -436,27 +433,39 @@
         titulo.className = "small fw-semibold mb-1";
         titulo.textContent = "Interfone desta unidade";
         box.appendChild(titulo);
-        if (!comTelefone.length) {
+        if (!contatosAtuais.length) {
             const vazio = document.createElement("p");
             vazio.className = "small text-muted mb-0";
-            vazio.textContent = "Nenhum morador autorizou o interfone nesta unidade.";
+            vazio.textContent = "Nenhum morador cadastrado nesta unidade.";
             box.appendChild(vazio);
             return;
         }
-        comTelefone.forEach(function (morador) {
+        contatosAtuais.forEach(function (morador) {
             const linha = document.createElement("div");
             linha.className = "d-flex justify-content-between align-items-center gap-2 py-1";
             const rotulo = document.createElement("span");
-            rotulo.className = "small text-truncate";
-            rotulo.textContent = morador.nome || "Morador";
-            const link = document.createElement("a");
-            link.className = "btn btn-sm btn-success flex-shrink-0";
-            link.target = "_blank";
-            link.rel = "noopener noreferrer";
-            link.textContent = "WhatsApp";
-            link.href = "https://wa.me/" + morador.telefone + "?text=" + encodeURIComponent(textoWhatsapp(morador.nome || "Morador"));
+            rotulo.className = "small text-truncate d-inline-flex align-items-center gap-2";
+            if (morador.foto_url) {
+                const foto = document.createElement("img");
+                foto.src = morador.foto_url;
+                foto.alt = "";
+                foto.width = 36;
+                foto.height = 36;
+                foto.className = "rounded-circle flex-shrink-0";
+                foto.style.objectFit = "cover";
+                rotulo.appendChild(foto);
+            }
+            rotulo.appendChild(document.createTextNode(morador.nome || "Morador"));
             linha.appendChild(rotulo);
-            linha.appendChild(link);
+            if (morador.autoriza_interfone && morador.telefone) {
+                const link = document.createElement("a");
+                link.className = "btn btn-sm btn-success flex-shrink-0";
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.textContent = "WhatsApp";
+                link.href = "https://wa.me/" + morador.telefone + "?text=" + encodeURIComponent(textoWhatsapp(morador.nome || "Morador"));
+                linha.appendChild(link);
+            }
             box.appendChild(linha);
         });
     }

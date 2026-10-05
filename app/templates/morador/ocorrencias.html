@@ -34,7 +34,17 @@
                     <span class="mx-1">·</span>
                     <span class="badge text-bg-light border">{{ item.categoria }}</span>
                 </p>
-                <p class="small mb-0">{{ item.descricao }}</p>
+                <p class="small mb-0" style="white-space: pre-wrap;">{{ item.descricao }}</p>
+                {% if item.resposta %}
+                <div class="alert alert-success mt-3 mb-0">
+                    <div class="fw-semibold">Resposta da gestão</div>
+                    <p class="mb-1" style="white-space: pre-wrap;">{{ item.resposta }}</p>
+                    <div class="small mb-0">
+                        {% if item.respondida_em %}{{ item.respondida_em.strftime('%d/%m/%Y %H:%M') }}{% endif %}
+                        {% if item.respondida_por %} · {{ item.respondida_por.username }}{% endif %}
+                    </div>
+                </div>
+                {% endif %}
             </div>
             {% if item.foto_arquivo %}
             <div class="px-3 pb-3">
@@ -83,6 +93,9 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
                 <div class="modal-body">
+                    <div class="alert alert-light border">
+                        🔒 Privacidade garantida: Seu chamado é privado e visível apenas para a gestão do seu bloco e Administração Geral (não fica exposto para outros moradores).
+                    </div>
                     <div class="mb-3">
                         <label class="form-label" for="titulo">Título</label>
                         <input type="text" class="form-control" id="titulo" name="titulo"

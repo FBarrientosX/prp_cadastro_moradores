@@ -18,6 +18,15 @@ SALT_RECUPERACAO_PARCEIRO = "recuperacao-parceiro"
 
 PARCEIRO_LOGO_EXTENSOES = {"png", "jpg", "jpeg", "webp"}
 PARCEIRO_LOGO_MAX_BYTES = 2 * 1024 * 1024
+_RE_FOTO_FACIAL = re.compile(r"^facial_[a-z0-9]{8}\.jpg$")
+
+
+def nome_foto_facial_seguro(nome):
+    """Aceita só o arquivo gerado pelo servidor, sem caminho informado pelo cliente."""
+    base = os.path.basename(str(nome or "").strip())
+    if base and _RE_FOTO_FACIAL.fullmatch(base):
+        return base
+    return None
 
 
 def gerar_api_key():

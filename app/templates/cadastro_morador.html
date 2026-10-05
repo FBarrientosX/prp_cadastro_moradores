@@ -147,6 +147,45 @@
     .pessoa-card .card-resumo-nome {
         min-width: 0;
     }
+
+    .avatar-facial {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+    }
+
+    .avatar-facial-vazio {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #e9ecef;
+        color: #6c757d;
+        font-size: 1.6rem;
+    }
+
+    .foto-facial-visor {
+        position: relative;
+        width: min(100%, 320px);
+        aspect-ratio: 3 / 4;
+        background: #111;
+        border-radius: 0.75rem;
+        overflow: hidden;
+    }
+
+    .foto-facial-visor video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .foto-facial-guia {
+        position: absolute;
+        inset: 12% 18%;
+        border: 3px solid rgba(255, 255, 255, 0.9);
+        border-radius: 50%;
+        box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+    }
 </style>
 {% endblock %}
 
@@ -780,13 +819,26 @@
                         {% set escolhido = ns_vinculo.escolhido %}
                         {% set tem_dados = pessoa and pessoa.nome_completo and pessoa.cpf %}
                         <div class="card shadow-sm mb-3 pessoa-card morador-item"
+                             data-foto="{{ '1' if pessoa and pessoa.foto_facial else '0' }}"
                              {% if pessoa and pessoa.status == 'Pendente' %}data-status="Aguardando Aprovação"{% endif %}>
                             {% if pessoa and pessoa.id %}
                             <input type="hidden" name="morador_{{ i }}_id" value="{{ pessoa.id }}">
                             {% endif %}
                             <div class="card-header border-bottom-0 pb-2">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
-                                    <div class="min-w-0">
+                                    <div class="d-flex align-items-center gap-2 min-w-0">
+                                        <span class="avatar-facial-wrap flex-shrink-0">
+                                            {% if pessoa and foto_facial_url(pessoa) %}
+                                            <img class="avatar-facial rounded-circle" alt=""
+                                                 width="64" height="64"
+                                                 src="{{ foto_facial_url(pessoa) }}">
+                                            {% else %}
+                                            <span class="avatar-facial avatar-facial-vazio rounded-circle">
+                                                <i class="bi bi-person"></i>
+                                            </span>
+                                            {% endif %}
+                                        </span>
+                                        <div class="min-w-0">
                                         <div class="d-flex flex-wrap align-items-center gap-1">
                                             <span class="fw-semibold text-truncate card-resumo-nome">
                                                 {{ pessoa.nome_completo if tem_dados else 'Novo Morador' }}
@@ -807,13 +859,20 @@
                                                 {% if pessoa and pessoa.status == 'Pendente' %}
                                                 <span class="badge bg-warning text-dark">Aguardando Aprovação</span>
                                                 {% endif %}
+                                                {% if pessoa and pessoa.foto_facial %}
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle">📸 Facial Cadastrada</span>
+                                                {% else %}
+                                                <span class="badge bg-warning-subtle text-warning-emphasis border">⚠️ Sem Foto Facial</span>
+                                                {% endif %}
                                             </span>
                                         </div>
                                         <div class="small text-muted card-resumo-cpf">
                                             {% if pessoa and pessoa.cpf %}CPF {{ pessoa.cpf }}{% else %}CPF não informado{% endif %}
                                         </div>
+                                        </div>
                                     </div>
-                                    <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                                    <div class="d-flex flex-wrap flex-shrink-0 align-items-center gap-1">
+                                        <button type="button" class="btn btn-sm btn-outline-primary js-abrir-foto">📸 Enviar/Trocar Foto</button>
                                         <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">
                                             {% if tem_dados %}Editar{% else %}Recolher{% endif %}
                                         </button>
@@ -826,6 +885,7 @@
                                     </div>
                                 </div>
                             </div>
+                            {% include "includes/foto_facial_painel.html" %}
                             <div class="card-corpo card-body pt-2 {% if tem_dados %}d-none{% endif %}">
                             <div class="row g-3">
                                 <div class="col-12 position-relative">
@@ -2002,6 +2062,7 @@
     pintarStepper(1);
 </script>
 {% else %}
+<script src="{{ url_for('static', filename='js/foto-facial.js') }}"></script>
 <script>
     const urlAutocomplete = {{ url_for("api_unidade_pessoas_autocomplete") | tojson }};
     const opcoesVinculo = ["Proprietário", "Inquilino", "Familiar/Morador"];
@@ -2106,18 +2167,28 @@
         }
     }
 
-    function htmlCabecalho(titulo, classeRemover) {
+    function htmlCabecalho(titulo, classeRemover, comFoto) {
+        const avatar = comFoto
+            ? `<span class="avatar-facial-wrap flex-shrink-0"><span class="avatar-facial avatar-facial-vazio rounded-circle"><i class="bi bi-person"></i></span></span>`
+            : "";
+        const botaoFoto = comFoto
+            ? `<button type="button" class="btn btn-sm btn-outline-primary js-abrir-foto">📸 Enviar/Trocar Foto</button>`
+            : "";
         return `
             <div class="card-header border-bottom-0 pb-2">
                 <div class="d-flex justify-content-between align-items-start gap-2">
-                    <div class="min-w-0">
-                        <div class="d-flex flex-wrap align-items-center gap-1">
-                            <span class="fw-semibold text-truncate card-resumo-nome">${esc(titulo)}</span>
-                            <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                    <div class="d-flex align-items-center gap-2 min-w-0">
+                        ${avatar}
+                        <div class="min-w-0">
+                            <div class="d-flex flex-wrap align-items-center gap-1">
+                                <span class="fw-semibold text-truncate card-resumo-nome">${esc(titulo)}</span>
+                                <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                            </div>
+                            <div class="small text-muted card-resumo-cpf">CPF não informado</div>
                         </div>
-                        <div class="small text-muted card-resumo-cpf">CPF não informado</div>
                     </div>
-                    <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                    <div class="d-flex flex-wrap flex-shrink-0 align-items-center gap-1">
+                        ${botaoFoto}
                         <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">Recolher</button>
                         <button type="button" class="btn btn-sm btn-link text-danger text-decoration-none px-2 ${classeRemover}" aria-label="Remover">
                             <i class="bi bi-trash"></i><span class="d-none d-sm-inline ms-1">Remover</span>
@@ -2178,14 +2249,27 @@
         if (card.dataset.status) {
             pedacos.push(`<span class="badge bg-warning text-dark">${esc(card.dataset.status)}</span>`);
         }
+        if (card.dataset.foto === "1" || card.dataset.fotoPreview === "1") {
+            pedacos.push('<span class="badge bg-success-subtle text-success border border-success-subtle">📸 Facial Cadastrada</span>');
+        } else {
+            pedacos.push('<span class="badge bg-warning-subtle text-warning-emphasis border">⚠️ Sem Foto Facial</span>');
+        }
         badges.innerHTML = pedacos.join("");
     }
+    window.atualizarResumoFacial = atualizarResumo;
 
     function definirCardAberto(card, aberto, focar) {
         const corpo = card.querySelector(".card-corpo");
         const botao = card.querySelector(".alternar-card");
         if (corpo) {
             corpo.classList.toggle("d-none", !aberto);
+        }
+        const painelFoto = card.querySelector(".foto-facial-painel");
+        if (painelFoto && card.classList.contains("morador-item")) {
+            painelFoto.classList.toggle("d-none", !aberto);
+            if (!aberto && window.pararCameraFacial) {
+                window.pararCameraFacial(painelFoto);
+            }
         }
         if (botao) {
             botao.textContent = aberto ? "Recolher" : "Editar";
@@ -2247,7 +2331,8 @@
         }).join("");
         return `
             ${idOculto}
-            ${htmlCabecalho(info.nome || "Novo Morador", "remover-morador")}
+            ${htmlCabecalho(info.nome || "Novo Morador", "remover-morador", true)}
+            ${window.htmlPainelFotoFacial ? window.htmlPainelFotoFacial(index) : ""}
             <div class="card-corpo card-body pt-2">
             <div class="row g-3">
                 <div class="col-12 position-relative">

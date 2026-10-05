@@ -484,7 +484,10 @@
                                 {% set vinculo_exibido = 'Inquilino' if pessoa.vinculo == 'Locatário' else ('Familiar/Morador' if pessoa.vinculo == 'Morador' else pessoa.vinculo) %}
                                 <tr {% if pessoa.status == 'Pendente' %}class="table-warning"{% endif %}>
                                     <td>
-                                        <div>{{ pessoa.nome_completo }}</div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            {% include "includes/miniatura_facial.html" %}
+                                            <span>{{ pessoa.nome_completo }}</span>
+                                        </div>
                                         <div class="d-flex flex-wrap gap-1 mt-1">
                                             {% if pessoa.eh_proprietario %}
                                             <span class="badge text-bg-info">Proprietário e Morador</span>
@@ -534,7 +537,10 @@
                         <ul class="list-group list-group-flush border rounded">
                             {% for pessoa in interfone %}
                             <li class="list-group-item d-flex justify-content-between align-items-center py-2">
-                                <span>{{ pessoa.nome_completo }}</span>
+                                <span class="d-inline-flex align-items-center gap-2">
+                                    {% include "includes/miniatura_facial.html" %}
+                                    {{ pessoa.nome_completo }}
+                                </span>
                                 <span class="font-monospace">{{ pessoa.telefone }}</span>
                             </li>
                             {% endfor %}
