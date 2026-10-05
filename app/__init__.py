@@ -3,7 +3,7 @@ import os
 
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import inspect, or_, text
+from sqlalchemy import inspect, text
 
 db = SQLAlchemy()
 
@@ -1414,26 +1414,14 @@ def create_app(config=None):
             query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
             if usuario.condominio_id:
                 query = query.filter(EspacoComum.condominio_id == usuario.condominio_id)
-            if usuario.role == "sindico" and usuario.perm_reservas_geral:
-                from app.utils import get_blocos
+            if usuario.role == "sindico":
+                from app.routes import _filtro_espacos_sindico
 
-                codigos = usuario.get_blocos_permitidos()
-                if codigos is None:
-                    codigos = list(get_blocos())
-                chaves = []
-                for codigo in codigos:
-                    chaves.extend([codigo, f"Bloco {codigo}"])
                 reservas_pendentes_count = query.filter(
-                    or_(
-                        EspacoComum.bloco_vinculado.in_(chaves or [""]),
-                        EspacoComum.bloco_vinculado.is_(None),
-                        EspacoComum.bloco_vinculado == "",
-                    )
+                    _filtro_espacos_sindico(usuario)
                 ).count()
             elif usuario.role in ("admin", "assistente"):
-                reservas_pendentes_count = query.filter(
-                    Reserva.espaco.has(gerenciado_por="admin")
-                ).count()
+                reservas_pendentes_count = query.count()
 
             if usuario.condominio_id:
                 condominio_ctx = usuario.condominio

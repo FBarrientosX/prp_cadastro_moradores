@@ -271,7 +271,7 @@ Admin e Assistente (tenant):
 - `POST /admin/registrar/<id>`
 - `POST /admin/unidades/<id>/alterar_senha`
 - `GET|POST /admin/mudancas` (aprovacao final + mudanca avulsa ja aprovada)
-- `GET /reservas` e gestao de espacos `gerenciado_por='admin'`
+- `GET /reservas`: ve e gere todas as reservas; cria espaco geral ou de um bloco
 - Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, clube, portaria
   no menu; validacao documental e CRUD de usuarios sao `@admin_required`.
 
@@ -291,14 +291,15 @@ Somente Sindico:
   `get_blocos_permitidos()` devolve a lista ou `None` (todos). Consultas usam
   `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
   mapa, mudancas e ocorrencias.
-- Sem permissao extra, so Aprovacao de Moradores, Mudancas e Ocorrencias
-  do proprio escopo. Flags default False:
+- Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias
+  e Reservas dos espacos do proprio bloco. Flags default False:
   `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
 - Sem `perm_portaria`: sidebar sem Portaria e rotas `/portaria` e
   `/api/portaria` redirecionam ao painel do sindico.
 - Sem `perm_configuracoes`: sem Dados do Condominio nem Setores ADM
   (`/admin/condominio`, `/admin/setores`).
-- Sem `perm_reservas_geral`: sem Reservas (`/reservas`).
+- `perm_reservas_geral` nao esconde o menu. Libera criar e ver espacos
+  gerais (`bloco_vinculado` vazio ou `GERAL`), alem dos blocos do escopo.
 - Equipe (`/admin?tab=equipe`): admin define escopo e as tres permissoes
   ao criar ou editar o sindico.
 
@@ -371,7 +372,8 @@ Parceiro logado:
 
 `EspacoComum` + `Reserva`:
 - espaco com `condominio_id`, `gerenciado_por` (`admin` ou sindico),
-  `bloco_vinculado`, dias, valor, `ativo` (default True; soft disable para reforma)
+  `bloco_vinculado` (vazio/`GERAL` = area geral; `"1"` = exclusivo do bloco),
+  dias, valor, `ativo` (default True; soft disable para reforma)
 - reserva: `espaco_id`, `unidade_id` nullable (gestao pode criar), `data_reserva`,
   `status`, `valor_pago`, `motivo_reserva`
 - duplo-booking (mesmo espaco+data em Pendente/Aprovada) e bloqueado NA APLICACAO
@@ -808,6 +810,10 @@ Mudancas / portaria:
   no check-in do dia.
 
 Reservas:
-- Manter bloqueio de conflito na aplicacao; gestao respeita `gerenciado_por`
-  e bloco do sindico.
+- Manter bloqueio de conflito na aplicacao.
+- Sindico sempre acessa `/reservas`. Ve e gere so espacos do proprio
+  escopo. Com `perm_reservas_geral`, tambem as areas gerais.
+- Um bloco: o espaco nasce nesse bloco. Varios: ele escolhe entre os seus.
+- Admin ve todas as reservas e pode criar espaco geral ou de um bloco.
+- Morador ve areas gerais e os espacos exclusivos do bloco da unidade.
 - Espaco comum tem `ativo`; desativar para reforma. Excluir so sem historico de reservas.

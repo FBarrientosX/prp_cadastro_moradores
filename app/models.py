@@ -237,8 +237,8 @@ class Usuario(db.Model):
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
     # Escopo do síndico: "1", "1,2" ou "*" (todos os blocos).
     blocos_escopo = db.Column(db.String(120), nullable=True)
-    # Permissões extras. Default False trava portaria, reservas gerais e
-    # configurações para os síndicos de bloco já cadastrados.
+    # Permissões extras. Default False trava portaria, áreas gerais e
+    # configurações. Reservas do próprio bloco não dependem de flag.
     perm_portaria = db.Column(db.Boolean, nullable=False, default=False)
     perm_reservas_geral = db.Column(db.Boolean, nullable=False, default=False)
     perm_configuracoes = db.Column(db.Boolean, nullable=False, default=False)
@@ -444,6 +444,16 @@ class EspacoComum(db.Model):
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
+
+    @property
+    def rotulo_vinculo(self):
+        """'Geral' quando o espaço é do condomínio; senão 'Bloco N'."""
+        bloco = (self.bloco_vinculado or "").strip()
+        if not bloco or bloco.upper() == "GERAL":
+            return "Geral"
+        if bloco.lower().startswith("bloco "):
+            return bloco
+        return f"Bloco {bloco}"
 
     def __repr__(self):
         return f"<EspacoComum {self.nome}>"

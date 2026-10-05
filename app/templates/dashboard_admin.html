@@ -259,7 +259,7 @@
                                 {% endif %}
                                 <div class="small text-muted">
                                     {% if usuario.perm_portaria %}Portaria{% endif %}
-                                    {% if usuario.perm_reservas_geral %}{% if usuario.perm_portaria %} · {% endif %}Reservas{% endif %}
+                                    {% if usuario.perm_reservas_geral %}{% if usuario.perm_portaria %} · {% endif %}Espaços gerais{% endif %}
                                     {% if usuario.perm_configuracoes %}{% if usuario.perm_portaria or usuario.perm_reservas_geral %} · {% endif %}Configurações{% endif %}
                                     {% if not usuario.perm_portaria and not usuario.perm_reservas_geral and not usuario.perm_configuracoes %}
                                     Só o próprio escopo

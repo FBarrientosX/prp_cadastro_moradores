@@ -465,16 +465,91 @@ def _recorte_blocos_consulta(usuario):
     return opcoes, list(opcoes), ""
 
 
-def _filtro_espacos_sindico(usuario):
-    """Espaços do(s) bloco(s) do síndico e áreas comuns sem bloco vinculado."""
-    chaves = _chaves_agrupamento_sindico(usuario)
-    partes = [
+def _espaco_e_area_geral(bloco):
+    """None, vazio ou 'GERAL' = área comum da administração, sem bloco."""
+    if bloco is None:
+        return True
+    texto = str(bloco).strip()
+    return texto == "" or texto.upper() == "GERAL"
+
+
+def _filtro_areas_gerais():
+    return or_(
         EspacoComum.bloco_vinculado.is_(None),
         EspacoComum.bloco_vinculado == "",
-    ]
+        func.upper(EspacoComum.bloco_vinculado) == "GERAL",
+    )
+
+
+def _filtro_espacos_sindico(usuario):
+    """Espaços dos blocos do síndico. Áreas gerais só com perm_reservas_geral."""
+    chaves = _chaves_agrupamento_sindico(usuario)
+    partes = []
     if chaves:
         partes.append(EspacoComum.bloco_vinculado.in_(chaves))
+    if usuario and usuario.perm_reservas_geral:
+        partes.append(_filtro_areas_gerais())
+    if not partes:
+        return EspacoComum.id.is_(None)
     return or_(*partes)
+
+
+def _filtro_espacos_morador(unidade):
+    """Áreas gerais do condomínio e espaços exclusivos do bloco da unidade."""
+    codigo = normalizar_bloco_codigo(unidade.bloco)
+    return or_(
+        _filtro_areas_gerais(),
+        EspacoComum.bloco_vinculado.in_([codigo, f"Bloco {codigo}"]),
+    )
+
+
+def _morador_enxerga_espaco(espaco, unidade):
+    if _espaco_e_area_geral(espaco.bloco_vinculado):
+        return True
+    return normalizar_bloco_codigo(espaco.bloco_vinculado) == normalizar_bloco_codigo(
+        unidade.bloco
+    )
+
+
+def _opcoes_vinculo_espaco(usuario):
+    """Pares (valor, rótulo) do vínculo. Valor vazio = área geral."""
+    if not usuario:
+        return []
+    if usuario.role == Role.SINDICO:
+        opcoes = [
+            (codigo, f"Bloco {codigo}") for codigo in _blocos_codigo_sindico(usuario)
+        ]
+        if usuario.perm_reservas_geral:
+            opcoes.append(("", "Todo o condomínio"))
+        return opcoes
+    if usuario.role in (Role.ADMIN, Role.ASSISTENTE):
+        opcoes = [("", "Todo o condomínio")]
+        opcoes.extend((codigo, f"Bloco {codigo}") for codigo in get_blocos())
+        return opcoes
+    return []
+
+
+def _ler_bloco_espaco(usuario):
+    """(bloco ou None para área geral, mensagem de erro)."""
+    pedido = normalizar_bloco_codigo((request.form.get("bloco_vinculado") or "").strip())
+    if pedido.upper() == "GERAL":
+        pedido = ""
+    if usuario.role == Role.SINDICO:
+        codigos = _blocos_codigo_sindico(usuario)
+        if not codigos:
+            return None, "Síndico sem bloco vinculado. Contate a administração."
+        if len(codigos) == 1 and not usuario.perm_reservas_geral:
+            return codigos[0], None
+        if not pedido:
+            if usuario.perm_reservas_geral:
+                return None, None
+            return None, "Escolha o bloco do espaço."
+        if pedido not in codigos:
+            return None, "Você só pode vincular o espaço a um bloco do seu escopo."
+        return pedido, None
+    if pedido and pedido not in get_blocos():
+        return None, "Bloco inválido para este condomínio."
+    return (pedido or None), None
 
 
 def _registrar_auditoria(usuario, mensagem):
@@ -1234,12 +1309,6 @@ def acesso_reservas_required(view):
         if usuario and usuario.role == Role.PORTEIRO:
             flash("Acesso restrito à portaria.", "danger")
             return redirect(url_for("portaria_dashboard"))
-        if usuario and usuario.role == Role.SINDICO and not usuario.perm_reservas_geral:
-            flash(
-                "Seu acesso de síndico não inclui reservas de áreas comuns.",
-                "warning",
-            )
-            return redirect(url_for("sindico_dashboard"))
         if usuario or get_unidade_logada():
             return view(*args, **kwargs)
         flash("Faça login para acessar o módulo de reservas.", "warning")
@@ -1255,12 +1324,6 @@ def gestao_espacos_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         usuario = get_current_user()
-        if usuario and usuario.role == Role.SINDICO and not usuario.perm_reservas_geral:
-            flash(
-                "Seu acesso de síndico não inclui reservas de áreas comuns.",
-                "warning",
-            )
-            return redirect(url_for("sindico_dashboard"))
         if usuario and usuario.role in (Role.ADMIN, Role.ASSISTENTE, Role.SINDICO):
             if not usuario.condominio_id:
                 flash(
@@ -1281,13 +1344,11 @@ def _usuario_pode_gerenciar_espaco(usuario, espaco):
     if not usuario.condominio_id or espaco.condominio_id != usuario.condominio_id:
         return False
     if usuario.role == Role.SINDICO:
-        if not usuario.perm_reservas_geral:
-            return False
-        if not espaco.bloco_vinculado:
-            return True
+        if _espaco_e_area_geral(espaco.bloco_vinculado):
+            return bool(usuario.perm_reservas_geral)
         return _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado)
     if usuario.role in (Role.ADMIN, Role.ASSISTENTE):
-        return espaco.gerenciado_por == "admin"
+        return True
     return False
 
 
@@ -1302,12 +1363,8 @@ def _reservas_pendentes_por_jurisdicao(usuario):
         )
     )
     if usuario.role == Role.SINDICO:
-        if not usuario.perm_reservas_geral:
-            return []
         query = query.filter(_filtro_espacos_sindico(usuario))
-    elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
-        query = query.filter(EspacoComum.gerenciado_por == "admin")
-    else:
+    elif usuario.role not in (Role.ADMIN, Role.ASSISTENTE):
         return []
     return query.order_by(Reserva.data_solicitacao.desc()).all()
 
@@ -2179,9 +2236,7 @@ def reservas():
             )
         elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
             espacos = (
-                EspacoComum.query.filter_by(
-                    condominio_id=condominio_id, gerenciado_por="admin"
-                )
+                EspacoComum.query.filter_by(condominio_id=condominio_id)
                 .order_by(EspacoComum.nome)
                 .all()
             )
@@ -2213,19 +2268,13 @@ def reservas():
                 if blocos_sindico
                 else []
             )
-        else:
-            filtro_jurisdicao = EspacoComum.gerenciado_por == "admin"
+            query_pendentes = query_pendentes.filter(filtro_jurisdicao)
+            query_historico = query_historico.filter(filtro_jurisdicao)
 
-        reservas_pendentes = (
-            query_pendentes.filter(filtro_jurisdicao)
-            .order_by(Reserva.data_solicitacao.desc())
-            .all()
-        )
-        reservas_historico = (
-            query_historico.filter(filtro_jurisdicao)
-            .order_by(Reserva.data_reserva.desc())
-            .all()
-        )
+        reservas_pendentes = query_pendentes.order_by(
+            Reserva.data_solicitacao.desc()
+        ).all()
+        reservas_historico = query_historico.order_by(Reserva.data_reserva.desc()).all()
 
     if unidade:
         condominio_id = unidade.condominio_id
@@ -2233,10 +2282,7 @@ def reservas():
             EspacoComum.query.filter(
                 EspacoComum.condominio_id == condominio_id,
                 EspacoComum.ativo.is_(True),
-                or_(
-                    EspacoComum.apenas_moradores_bloco.is_(False),
-                    EspacoComum.bloco_vinculado == unidade.bloco,
-                ),
+                _filtro_espacos_morador(unidade),
             )
             .order_by(EspacoComum.nome)
             .all()
@@ -2260,6 +2306,7 @@ def reservas():
         minhas_reservas=minhas_reservas,
         data_minima_reserva=date.today().isoformat(),
         data_maxima_reserva=(date.today() + timedelta(days=90)).isoformat(),
+        opcoes_bloco_espaco=_opcoes_vinculo_espaco(usuario),
     )
 
 
@@ -2339,8 +2386,8 @@ def solicitar_reserva(unidade):
         flash("Este espaço não funciona no dia selecionado.", "danger")
         return redirect(url_for("reservas"))
 
-    if espaco.apenas_moradores_bloco and espaco.bloco_vinculado != unidade.bloco:
-        flash("Este espaço aceita reservas apenas de moradores do bloco vinculado.", "danger")
+    if not _morador_enxerga_espaco(espaco, unidade):
+        flash("Este espaço não está disponível para o bloco da sua unidade.", "danger")
         return redirect(url_for("reservas"))
 
     if _existe_reserva_ativa(espaco.id, data_reserva):
@@ -2520,16 +2567,7 @@ def api_reservas_eventos():
     elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
         query = Reserva.query.join(EspacoComum).filter(
             EspacoComum.condominio_id == condominio_id,
-            or_(
-                and_(
-                    EspacoComum.gerenciado_por == "admin",
-                    Reserva.status.in_(["Pendente", "Aprovada"]),
-                ),
-                and_(
-                    EspacoComum.gerenciado_por == "sindico",
-                    Reserva.status == "Aprovada",
-                ),
-            ),
+            Reserva.status.in_(["Pendente", "Aprovada"]),
         )
     else:
         return jsonify([])
@@ -2632,7 +2670,6 @@ def salvar_espaco_reserva():
     usuario = get_current_user()
     espaco_id = request.form.get("espaco_id", "").strip()
     nome = request.form.get("nome", "").strip()
-    apenas_moradores_bloco = request.form.get("apenas_moradores_bloco") == "on"
     valor_reserva_raw = request.form.get("valor_reserva", "").strip()
     dias_selecionados = [
         dia
@@ -2657,48 +2694,30 @@ def salvar_espaco_reserva():
         flash("O valor da reserva não pode ser negativo.", "danger")
         return redirect(url_for("reservas"))
 
+    bloco_vinculado, erro_bloco = _ler_bloco_espaco(usuario)
+    if erro_bloco:
+        flash(erro_bloco, "danger")
+        return redirect(url_for("reservas"))
+
     if espaco_id:
         espaco = _espaco_do_tenant(int(espaco_id), condominio_id_obrigatorio(usuario))
-        if usuario.role == Role.SINDICO:
-            if not _sindico_gerencia_bloco(usuario, espaco.bloco_vinculado):
-                flash("Você não tem permissão para editar este espaço.", "danger")
-                return redirect(url_for("reservas"))
-        elif usuario.role in (Role.ADMIN, Role.ASSISTENTE):
-            if espaco.gerenciado_por != "admin":
-                flash("Você só pode editar espaços gerenciados pela administração.", "danger")
-                return redirect(url_for("reservas"))
+        if not _usuario_pode_gerenciar_espaco(usuario, espaco):
+            flash("Você não tem permissão para editar este espaço.", "danger")
+            return redirect(url_for("reservas"))
     else:
         espaco = EspacoComum(
             tipo="SALAO_FESTAS",
             condominio_id=condominio_id_obrigatorio(usuario),
             ativo=True,
+            gerenciado_por="sindico" if usuario.role == Role.SINDICO else "admin",
         )
         db.session.add(espaco)
 
     espaco.nome = nome
     espaco.valor_reserva = valor_reserva
     espaco.dias_funcionamento = ",".join(dias_selecionados)
-
-    if usuario.role == Role.SINDICO:
-        if usuario.get_blocos_permitidos() is None:
-            espaco.gerenciado_por = "sindico"
-            espaco.bloco_vinculado = None
-            espaco.apenas_moradores_bloco = False
-        else:
-            agrupamentos = _agrupamentos_sindico(usuario)
-            if not agrupamentos:
-                flash(
-                    "Síndico sem bloco vinculado. Contate a administração.",
-                    "danger",
-                )
-                return redirect(url_for("reservas"))
-            espaco.gerenciado_por = "sindico"
-            espaco.bloco_vinculado = agrupamentos[0]
-            espaco.apenas_moradores_bloco = apenas_moradores_bloco
-    else:
-        espaco.gerenciado_por = "admin"
-        espaco.bloco_vinculado = None
-        espaco.apenas_moradores_bloco = False
+    espaco.bloco_vinculado = bloco_vinculado
+    espaco.apenas_moradores_bloco = bloco_vinculado is not None
 
     db.session.commit()
     flash("Espaço salvo com sucesso.", "success")

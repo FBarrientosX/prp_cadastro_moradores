@@ -63,7 +63,7 @@
         <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
     </a>
 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
-    {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or ep == 'sindico_mudancas' or (sidebar_user.perm_reservas_geral and ep == 'reservas') %}
+    {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or ep == 'sindico_mudancas' or ep == 'reservas' %}
     {% set portaria_aberto = portaria_ativo %}
     {% set config_aberto = setores_ativo or dados_condominio_ativo %}
     {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix) %}
@@ -76,14 +76,12 @@
         <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_mudancas' %}active{% endif %}" href="{{ url_for('sindico_mudancas') }}">
             <i class="bi bi-box-seam me-2"></i>Mudanças
         </a>
-        {% if sidebar_user.perm_reservas_geral %}
         <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ep == 'reservas' %}active{% endif %}" href="{{ url_for('reservas') }}">
             <span class="d-flex align-items-center"><i class="bi bi-calendar-check me-2"></i>Reservas</span>
             {% if reservas_pendentes_count > 0 %}
             <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
             {% endif %}
         </a>
-        {% endif %}
     {% endcall %}
     {% if sidebar_user.perm_portaria %}
     {% call grupo('portaria', 'Portaria & Acesso', 'bi-shield-check', portaria_aberto, menu_prefix) %}

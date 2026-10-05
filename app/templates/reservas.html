@@ -28,6 +28,7 @@
                                 <p class="mb-2">
                                     <strong>Valor:</strong> R$ {{ '%.2f'|format(espaco.valor_reserva) }}
                                 </p>
+                                <p class="mb-2 small text-muted">{{ espaco.rotulo_vinculo }}</p>
                                 <p class="text-muted small mb-3">
                                     <strong>Dias de funcionamento:</strong>
                                     {{ espaco.dias_funcionamento|upper }}
@@ -305,10 +306,8 @@
                     <tr>
                         <th>Espaço</th>
                         <th>Valor</th>
+                        <th>Vínculo</th>
                         <th>Dias</th>
-                        {% if current_user.role == 'sindico' %}
-                        <th>Somente bloco</th>
-                        {% endif %}
                         <th>Status</th>
                         <th class="text-end">Ações</th>
                     </tr>
@@ -322,10 +321,8 @@
                             <div class="small text-muted">Tipo: {{ espaco.tipo }}</div>
                         </td>
                         <td>R$ {{ '%.2f'|format(espaco.valor_reserva) }}</td>
+                        <td>{{ espaco.rotulo_vinculo }}</td>
                         <td>{{ dias_lista|join(', ')|upper }}</td>
-                        {% if current_user.role == 'sindico' %}
-                        <td>{{ 'Sim' if espaco.apenas_moradores_bloco else 'Não' }}</td>
-                        {% endif %}
                         <td>
                             {% if espaco.ativo %}
                             <span class="badge text-bg-success">Ativo</span>
@@ -342,7 +339,7 @@
                                         data-nome="{{ espaco.nome }}"
                                         data-valor="{{ '%.2f'|format(espaco.valor_reserva) }}"
                                         data-dias="{{ espaco.dias_funcionamento }}"
-                                        data-apenas-bloco="{{ 'true' if espaco.apenas_moradores_bloco else 'false' }}">
+                                        data-bloco="{{ espaco.bloco_vinculado or '' }}">
                                     Editar
                                 </button>
                                 <form method="post"
@@ -555,16 +552,21 @@
                         <label class="form-label" for="nome">Nome do Espaço</label>
                         <input type="text" class="form-control" id="nome" name="nome" required>
                     </div>
-                    {% if current_user.role == 'sindico' %}
+                    {% if opcoes_bloco_espaco|length > 1 %}
                     <div class="mb-3">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox"
-                                   id="apenas_moradores_bloco" name="apenas_moradores_bloco">
-                            <label class="form-check-label" for="apenas_moradores_bloco">
-                                Apenas moradores do meu bloco podem reservar?
-                            </label>
+                        <label class="form-label" for="bloco_vinculado">Vínculo do espaço</label>
+                        <select class="form-select" id="bloco_vinculado" name="bloco_vinculado" required>
+                            {% for valor, rotulo in opcoes_bloco_espaco %}
+                            <option value="{{ valor }}">{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Espaço de bloco fica exclusivo daquele bloco. Todo o condomínio aparece para todos os moradores.
                         </div>
                     </div>
+                    {% elif opcoes_bloco_espaco|length == 1 %}
+                    <input type="hidden" name="bloco_vinculado" id="bloco_vinculado" value="{{ opcoes_bloco_espaco[0][0] }}">
+                    <p class="small text-muted">Este espaço fica exclusivo do {{ opcoes_bloco_espaco[0][1] }}.</p>
                     {% endif %}
                     <div class="mb-3">
                         <label class="form-label" for="valor_reserva">Valor da Reserva (R$)</label>
@@ -732,16 +734,27 @@
         const campoId = document.getElementById("espaco_id");
         const campoNome = document.getElementById("nome");
         const campoValor = document.getElementById("valor_reserva");
-        const campoApenasBloco = document.getElementById("apenas_moradores_bloco");
+        const campoBloco = document.getElementById("bloco_vinculado");
         const checkboxesDias = modalEspaco.querySelectorAll(".dia-funcionamento");
+
+        function codigoBlocoEspaco(valor) {
+            const texto = (valor || "").trim();
+            if (!texto || texto.toUpperCase() === "GERAL") {
+                return "";
+            }
+            if (texto.toLowerCase().startsWith("bloco ")) {
+                return texto.slice(6).trim();
+            }
+            return texto;
+        }
 
         function resetarFormularioEspaco() {
             tituloModal.textContent = "Novo Espaço";
             campoId.value = "";
             campoNome.value = "";
             campoValor.value = "0.00";
-            if (campoApenasBloco) {
-                campoApenasBloco.checked = false;
+            if (campoBloco && campoBloco.tagName === "SELECT") {
+                campoBloco.selectedIndex = 0;
             }
             checkboxesDias.forEach((checkbox) => {
                 checkbox.checked = false;
@@ -760,8 +773,8 @@
                 campoNome.value = botao.dataset.nome || "";
                 campoValor.value = botao.dataset.valor || "0.00";
 
-                if (campoApenasBloco) {
-                    campoApenasBloco.checked = botao.dataset.apenasBloco === "true";
+                if (campoBloco && campoBloco.tagName === "SELECT") {
+                    campoBloco.value = codigoBlocoEspaco(botao.dataset.bloco);
                 }
 
                 const dias = (botao.dataset.dias || "")
