@@ -1184,6 +1184,11 @@ def _garantir_colunas_financeiro():
         ("remessa_lote_id", "INTEGER"),
         ("status_banco", "VARCHAR(30) NOT NULL DEFAULT 'Nao Enviado'"),
         ("codigo_ocorrencia_banco", "VARCHAR(10)"),
+        ("destinatario_tipo", "VARCHAR(40) NOT NULL DEFAULT 'Proprietário'"),
+        ("situacao_juridica", "VARCHAR(40) NOT NULL DEFAULT 'Normal'"),
+        ("notificacoes_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("anexos_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("retorno_cnab_id", "INTEGER"),
     )
     alterou_cobranca = False
     for nome, tipo in definicoes_cobranca:
@@ -1195,6 +1200,65 @@ def _garantir_colunas_financeiro():
         alterou_cobranca = True
     if alterou_cobranca:
         db.session.commit()
+    if "rateio_condominio" not in inspetor.get_table_names():
+        return
+    colunas_rateio = {
+        coluna["name"] for coluna in inspetor.get_columns("rateio_condominio")
+    }
+    definicoes_rateio = (
+        ("grupo_fracao_id", "INTEGER"),
+        ("modo_rateio", "VARCHAR(20) NOT NULL DEFAULT 'VALOR_UNITARIO'"),
+    )
+    alterou_rateio = False
+    for nome, tipo in definicoes_rateio:
+        if nome in colunas_rateio:
+            continue
+        db.session.execute(text(f"ALTER TABLE rateio_condominio ADD COLUMN {nome} {tipo}"))
+        alterou_rateio = True
+    if alterou_rateio:
+        db.session.commit()
+    if hasattr(inspetor, "clear_cache"):
+        inspetor.clear_cache()
+
+
+def _garantir_colunas_planta_unidades():
+    """Colunas da planta física. Roda antes de qualquer Unidade.query."""
+    inspetor = inspect(db.engine)
+    if "unidades" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("unidades")}
+    definicoes = (
+        ("criada_pela_admin", "BOOLEAN NOT NULL DEFAULT 1"),
+        ("conta_reivindicada", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("cpf_pre_autorizado", "VARCHAR(20)"),
+    )
+    coluna_nova = "conta_reivindicada" not in colunas
+    alterou = False
+    for nome, tipo in definicoes:
+        if nome in colunas:
+            continue
+        db.session.execute(text(f"ALTER TABLE unidades ADD COLUMN {nome} {tipo}"))
+        alterou = True
+    if alterou:
+        db.session.commit()
+    if hasattr(inspetor, "clear_cache"):
+        inspetor.clear_cache()
+    if not coluna_nova:
+        return
+    db.session.execute(
+        text(
+            "UPDATE unidades SET criada_pela_admin = 1, conta_reivindicada = 1 "
+            "WHERE IFNULL(eh_setor_interno, 0) = 0 "
+            "AND IFNULL(status, '') != 'Pré-Cadastro Admin'"
+        )
+    )
+    db.session.execute(
+        text(
+            "UPDATE unidades SET criada_pela_admin = 1, conta_reivindicada = 1 "
+            "WHERE IFNULL(eh_setor_interno, 0) = 1"
+        )
+    )
+    db.session.commit()
 
 
 def _seed_financeiro_prp():
@@ -1530,6 +1594,60 @@ def _backfill_blocos_escopo_sindico():
     db.session.commit()
 
 
+def _garantir_tabelas_caixa():
+    """Livro-caixa avulso e fechamento mensal. Roda no boot antes das consultas."""
+    existentes = set(inspect(db.engine).get_table_names())
+    if "lancamento_caixa_avulso" not in existentes:
+        db.session.execute(
+            text(
+                """
+                CREATE TABLE lancamento_caixa_avulso (
+                    id INTEGER PRIMARY KEY,
+                    condominio_id INTEGER NOT NULL,
+                    conta_bancaria_id INTEGER NOT NULL,
+                    plano_conta_id INTEGER,
+                    fundo_id INTEGER NOT NULL,
+                    tipo VARCHAR(30) NOT NULL,
+                    fundo_destino_id INTEGER,
+                    competencia VARCHAR(7) NOT NULL,
+                    data_lancamento DATE NOT NULL,
+                    descricao VARCHAR(200) NOT NULL,
+                    bloco_escopo VARCHAR(20) NOT NULL DEFAULT 'GERAL',
+                    valor FLOAT NOT NULL DEFAULT 0.0,
+                    criado_por VARCHAR(80) NOT NULL DEFAULT '',
+                    criado_em DATETIME
+                )
+                """
+            )
+        )
+        db.session.commit()
+    if "fechamento_mensal" not in set(inspect(db.engine).get_table_names()):
+        db.session.execute(
+            text(
+                """
+                CREATE TABLE fechamento_mensal (
+                    id INTEGER PRIMARY KEY,
+                    condominio_id INTEGER NOT NULL,
+                    competencia VARCHAR(7) NOT NULL,
+                    fechado BOOLEAN NOT NULL DEFAULT 1,
+                    saldo_inicial_mes FLOAT NOT NULL DEFAULT 0.0,
+                    total_receitas FLOAT NOT NULL DEFAULT 0.0,
+                    total_despesas FLOAT NOT NULL DEFAULT 0.0,
+                    total_repasses FLOAT NOT NULL DEFAULT 0.0,
+                    saldo_final_mes FLOAT NOT NULL DEFAULT 0.0,
+                    resumo_snapshot_json TEXT,
+                    fechado_por VARCHAR(80) NOT NULL DEFAULT '',
+                    fechado_em DATETIME,
+                    motivo_reabertura VARCHAR(300),
+                    CONSTRAINT uq_fechamento_competencia_tenant
+                        UNIQUE (condominio_id, competencia)
+                )
+                """
+            )
+        )
+        db.session.commit()
+
+
 def _hex_para_rgb(hex_color):
     """Converte '#RRGGBB' em string 'r, g, b' para CSS --bs-primary-rgb."""
     valor = str(hex_color or "").strip().lstrip("#")
@@ -1544,6 +1662,139 @@ def _hex_para_rgb(hex_color):
     return f"{r}, {g}, {b}"
 
 
+def _garantir_tabelas_medidores():
+    """Tabelas de medidores. Roda no boot antes das consultas de negócio."""
+    inspetor = inspect(db.engine)
+    existentes = set(inspetor.get_table_names())
+    enunciados = []
+    if "medidor_config" not in existentes:
+        enunciados.append(
+            """
+            CREATE TABLE medidor_config (
+                id INTEGER PRIMARY KEY,
+                condominio_id INTEGER NOT NULL,
+                titulo VARCHAR(160) NOT NULL,
+                tipo_recurso VARCHAR(20) NOT NULL DEFAULT 'AGUA',
+                unidade_medida VARCHAR(10) NOT NULL DEFAULT 'm³',
+                nivel_medicao VARCHAR(20) NOT NULL DEFAULT 'POR_UNIDADE',
+                bloco_vinculado VARCHAR(20) NOT NULL DEFAULT 'GERAL',
+                modo_calculo VARCHAR(30) NOT NULL DEFAULT 'METRAGEM',
+                tarifa_unitaria FLOAT NOT NULL DEFAULT 0.0,
+                taxa_fixa_minima FLOAT NOT NULL DEFAULT 0.0,
+                faixas_json TEXT,
+                plano_conta_id INTEGER,
+                fundo_id INTEGER,
+                permitir_leitura_morador BOOLEAN NOT NULL DEFAULT 0,
+                embutido_taxa_ordinaria BOOLEAN NOT NULL DEFAULT 1,
+                ativo BOOLEAN NOT NULL DEFAULT 1,
+                criado_em DATETIME
+            )
+            """
+        )
+    if "participante_medidor" not in existentes:
+        enunciados.append(
+            """
+            CREATE TABLE participante_medidor (
+                id INTEGER PRIMARY KEY,
+                medidor_id INTEGER NOT NULL,
+                unidade_id INTEGER,
+                identificador_ponto VARCHAR(160) NOT NULL,
+                numero_serie_relogio VARCHAR(60),
+                leitura_inicial FLOAT NOT NULL DEFAULT 0.0,
+                credito_acumulado FLOAT NOT NULL DEFAULT 0.0,
+                ativo BOOLEAN NOT NULL DEFAULT 1
+            )
+            """
+        )
+    if "ciclo_leitura_medidor" not in existentes:
+        enunciados.append(
+            """
+            CREATE TABLE ciclo_leitura_medidor (
+                id INTEGER PRIMARY KEY,
+                condominio_id INTEGER NOT NULL,
+                medidor_id INTEGER NOT NULL,
+                competencia VARCHAR(7) NOT NULL,
+                data_leitura DATE NOT NULL,
+                valor_fatura_concessionaria FLOAT NOT NULL DEFAULT 0.0,
+                consumo_total FLOAT NOT NULL DEFAULT 0.0,
+                valor_total_apurado FLOAT NOT NULL DEFAULT 0.0,
+                status VARCHAR(20) NOT NULL DEFAULT 'Em Aberto',
+                observacoes TEXT,
+                criado_em DATETIME,
+                CONSTRAINT uq_ciclo_medidor_competencia UNIQUE (medidor_id, competencia)
+            )
+            """
+        )
+    if "item_leitura_medidor" not in existentes:
+        enunciados.append(
+            """
+            CREATE TABLE item_leitura_medidor (
+                id INTEGER PRIMARY KEY,
+                ciclo_id INTEGER NOT NULL,
+                participante_id INTEGER NOT NULL,
+                unidade_id INTEGER,
+                leitura_anterior FLOAT NOT NULL DEFAULT 0.0,
+                leitura_atual FLOAT,
+                reiniciada BOOLEAN NOT NULL DEFAULT 0,
+                consumo_apurado FLOAT NOT NULL DEFAULT 0.0,
+                credito_abatido FLOAT NOT NULL DEFAULT 0.0,
+                consumo_final FLOAT NOT NULL DEFAULT 0.0,
+                valor_calculado FLOAT NOT NULL DEFAULT 0.0,
+                foto_relogio VARCHAR(120),
+                enviado_pelo_morador BOOLEAN NOT NULL DEFAULT 0,
+                data_envio_morador DATETIME,
+                alerta_anomalia BOOLEAN NOT NULL DEFAULT 0,
+                lancamento_gerado BOOLEAN NOT NULL DEFAULT 0,
+                cobranca_id INTEGER
+            )
+            """
+        )
+    if enunciados:
+        for enunciado in enunciados:
+            db.session.execute(text(enunciado))
+        db.session.commit()
+        if hasattr(inspetor, "clear_cache"):
+            inspetor.clear_cache()
+    if "medidor_config" not in set(inspect(db.engine).get_table_names()):
+        return
+    colunas = {coluna["name"] for coluna in inspect(db.engine).get_columns("medidor_config")}
+    if "embutido_taxa_ordinaria" in colunas:
+        return
+    db.session.execute(
+        text(
+            "ALTER TABLE medidor_config ADD COLUMN "
+            "embutido_taxa_ordinaria BOOLEAN NOT NULL DEFAULT 1"
+        )
+    )
+    db.session.commit()
+
+
+def _garantir_tabela_orcamento():
+    """Previsão orçamentária. Roda no boot antes das consultas de negócio."""
+    if "previsao_orcamentaria" in set(inspect(db.engine).get_table_names()):
+        return
+    db.session.execute(
+        text(
+            """
+            CREATE TABLE previsao_orcamentaria (
+                id INTEGER PRIMARY KEY,
+                condominio_id INTEGER NOT NULL,
+                ano INTEGER NOT NULL,
+                plano_conta_id INTEGER NOT NULL,
+                bloco_escopo VARCHAR(20) NOT NULL DEFAULT 'GERAL',
+                valores_mensais_json TEXT,
+                valor_anual_total FLOAT NOT NULL DEFAULT 0.0,
+                observacoes VARCHAR(300),
+                atualizado_em DATETIME,
+                CONSTRAINT uq_previsao_conta_escopo
+                    UNIQUE (condominio_id, ano, plano_conta_id, bloco_escopo)
+            )
+            """
+        )
+    )
+    db.session.commit()
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -1554,6 +1805,7 @@ def create_app(config=None):
     upload_documentos = os.path.join(app.root_path, "static", "uploads", "documentos")
     upload_faciais = os.path.join(app.root_path, "static", "uploads", "faciais")
     upload_financeiro = os.path.join(app.root_path, "static", "uploads", "financeiro")
+    upload_medidores = os.path.join(app.root_path, "static", "uploads", "medidores")
 
     secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
     if not secret_key:
@@ -1580,6 +1832,7 @@ def create_app(config=None):
         UPLOAD_DOCUMENTOS_FOLDER=upload_documentos,
         UPLOAD_FACIAIS_FOLDER=upload_faciais,
         UPLOAD_FINANCEIRO_FOLDER=upload_financeiro,
+        UPLOAD_MEDIDORES_FOLDER=upload_medidores,
     )
 
     if config:
@@ -1589,6 +1842,7 @@ def create_app(config=None):
     os.makedirs(app.config["UPLOAD_LOGOS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_FACIAIS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_FINANCEIRO_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["UPLOAD_MEDIDORES_FOLDER"], exist_ok=True)
 
     @app.template_global()
     def foto_facial_url(pessoa):
@@ -1704,6 +1958,12 @@ def create_app(config=None):
         ):
             cor_primaria = condominio_ctx.configuracao.cor_primaria
 
+        leituras_medidor_abertas = 0
+        if unidade and not usuario:
+            from app.blueprints.financeiro_medidores import medidores_abertos_unidade
+
+            leituras_medidor_abertas = medidores_abertos_unidade(unidade)
+
         return {
             "sidebar_user": usuario,
             "sidebar_unidade": unidade,
@@ -1713,6 +1973,7 @@ def create_app(config=None):
             "cor_primaria_rgb": _hex_para_rgb(cor_primaria),
             "notificacoes_nao_lidas": notificacoes_nao_lidas,
             "notificacoes_habilitadas": notificacoes_habilitadas,
+            "leituras_medidor_abertas": leituras_medidor_abertas,
         }
 
     from app import routes
@@ -1734,9 +1995,20 @@ def create_app(config=None):
         _garantir_colunas_livro_servico()
         _garantir_colunas_dados_condominio()
         _garantir_colunas_financeiro()
+        _garantir_tabelas_medidores()
+        _garantir_tabela_orcamento()
+        _garantir_tabelas_caixa()
+        _garantir_colunas_planta_unidades()
         _seed_condominio_transicao()
         _seed_dados_condominio_prp()
         _seed_financeiro_prp()
+        from app.financeiro_correcao import garantir_series_indices
+        from app.financeiro_fracao import garantir_fracao_igualitaria
+        from app.planta_unidades import completar_planta_prp
+
+        garantir_series_indices()
+        garantir_fracao_igualitaria()
+        completar_planta_prp()
         _migrar_sindico_agrupamentos()
         _backfill_blocos_escopo_sindico()
         _garantir_colunas_unidades()

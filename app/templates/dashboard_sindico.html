@@ -54,6 +54,8 @@
                     <span class="badge bg-success">Aprovado</span>
                     {% elif status == 'Registrada' %}
                     <span class="badge bg-primary">Registrado no Sistema</span>
+                    {% elif status == 'Pré-Cadastro Admin' %}
+                    <span class="badge bg-secondary">Pré-cadastro</span>
                     {% else %}
                     <span class="badge bg-dark">{{ status }}</span>
                     {% endif %}
@@ -72,8 +74,8 @@
                     {% endif %}
                 </td>
                 <td class="text-end text-nowrap">
-                    {% if status == 'Aguardando Morador' %}
-                    <button type="button" class="btn btn-secondary btn-sm" disabled>Sem cadastro</button>
+                    {% if status == 'Aguardando Morador' or status == 'Pré-Cadastro Admin' %}
+                    <button type="button" class="btn btn-secondary btn-sm" disabled>Aguardando 1º acesso</button>
                     {% else %}
                     <button type="button" class="btn btn-info btn-sm"
                             data-bs-toggle="modal" data-bs-target="#modal-detalhes-{{ unidade.id }}">
@@ -124,7 +126,7 @@
     </div>
 </div>
 
-{% for item in mapa_bloco if item.unidade %}
+{% for item in mapa_bloco if item.unidade and item.status != 'Pré-Cadastro Admin' %}
 {% set unidade = item.unidade %}
 {% set pessoas = unidade.pessoas.all() %}
 {% set proprietarios = pessoas|selectattr('eh_proprietario')|list %}

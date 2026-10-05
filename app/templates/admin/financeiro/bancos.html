@@ -122,7 +122,7 @@
                     <div class="col-12">
                         <label class="form-label" for="finIndice">Índice de correção</label>
                         <select class="form-select" id="finIndice" name="fin_indice_correcao">
-                            {% for sigla in indices_siglas %}
+                            {% for sigla in indices_cobranca %}
                             <option value="{{ sigla }}" {% if condominio_fin and condominio_fin.fin_indice_correcao == sigla %}selected{% endif %}>{{ sigla }}</option>
                             {% endfor %}
                         </select>
@@ -233,6 +233,7 @@
     </div>
 </div>
 {% else %}
+<p class="mb-3">A matriz histórica, a sincronização com o Banco Central e a calculadora ficam em <a href="{{ url_for('admin_financeiro_correcao') }}">Correção Monetária</a>.</p>
 <div class="row g-4">
     <div class="col-lg-5">
         <div class="card border-0 shadow-sm">

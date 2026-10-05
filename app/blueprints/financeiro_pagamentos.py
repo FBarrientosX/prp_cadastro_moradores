@@ -232,6 +232,11 @@ def admin_financeiro_pagamento_salvar():
     if not titulo or vencimento is None or len(competencia) != 7 or operacao not in _OPERACOES:
         flash("Informe título, competência, vencimento e operação.", "danger")
         return redirect(url_for("admin_financeiro_pagamentos"))
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, competencia):
+        flash(mensagem_competencia_fechada(competencia), "warning")
+        return redirect(url_for("admin_financeiro_pagamentos", competencia=competencia))
     try:
         valor = _parse_valor(request.form.get("valor_original") or "0")
         impostos = _parse_valor(request.form.get("valor_impostos") or "0")
@@ -313,6 +318,11 @@ def admin_financeiro_pagamento_pagar(despesa_id):
     despesa = DespesaPagamento.query.filter_by(
         id=despesa_id, condominio_id=condominio_id
     ).first_or_404()
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, despesa.competencia):
+        flash(mensagem_competencia_fechada(despesa.competencia), "warning")
+        return redirect(url_for("admin_financeiro_pagamentos", abrir=despesa.id, competencia=despesa.competencia))
     if despesa.status not in StatusDespesa.ABERTAS:
         flash("Esta despesa não aceita baixa.", "warning")
         return redirect(url_for("admin_financeiro_pagamentos", abrir=despesa.id))
@@ -358,6 +368,11 @@ def admin_financeiro_pagamento_anexo(despesa_id):
     despesa = DespesaPagamento.query.filter_by(
         id=despesa_id, condominio_id=condominio_id
     ).first_or_404()
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, despesa.competencia):
+        flash(mensagem_competencia_fechada(despesa.competencia), "warning")
+        return redirect(url_for("admin_financeiro_pagamentos", abrir=despesa.id))
     try:
         nome = _salvar_anexo(request.files.get("arquivo_anexo"))
     except ValueError as erro:
@@ -424,6 +439,11 @@ def admin_financeiro_repasse_salvar():
     if bloco not in get_blocos() or len(competencia) != 7:
         flash("Informe o bloco e a competência.", "danger")
         return redirect(url_for("admin_financeiro_repasses"))
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, competencia):
+        flash(mensagem_competencia_fechada(competencia), "warning")
+        return redirect(url_for("admin_financeiro_repasses", competencia=competencia))
     data_repasse = _parse_data(request.form.get("data_repasse"))
     if data_repasse is None:
         flash("Informe a data do repasse.", "danger")

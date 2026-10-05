@@ -30,6 +30,7 @@ class StatusUnidade:
     APROVADA = "Aprovada"
     REGISTRADA = "Registrada"
     REPROVADA = "Reprovada"
+    PRE_CADASTRO = "Pré-Cadastro Admin"
 
 
 class StatusPessoa:
@@ -363,6 +364,9 @@ class Unidade(db.Model):
     atualizacao_pendente = db.Column(db.Boolean, nullable=False, default=False)
     # Administração, zeladoria e outros destinos da portaria. Não é unidade residencial.
     eh_setor_interno = db.Column(db.Boolean, nullable=False, default=False)
+    criada_pela_admin = db.Column(db.Boolean, nullable=False, default=True)
+    conta_reivindicada = db.Column(db.Boolean, nullable=False, default=False)
+    cpf_pre_autorizado = db.Column(db.String(20), nullable=True)
     # Marca a última troca de senha; usado para invalidar tokens de
     # redefinição já consumidos (evita reuso do mesmo link).
     senha_atualizada_em = db.Column(db.DateTime, nullable=True)
@@ -957,6 +961,65 @@ class IndiceEconomico(db.Model):
         return f"<IndiceEconomico {self.sigla} {self.ano_mes}>"
 
 
+class TipoCalculoIndice:
+    PERCENTUAL_MENSAL = "PERCENTUAL_MENSAL"
+    NUMERO_INDICE = "NUMERO_INDICE"
+    SOMA_SIMPLES = "SOMA_SIMPLES"
+
+
+class CatalogoIndice(db.Model):
+    """Índice de correção. Sem condomínio, vale para toda a plataforma."""
+
+    __tablename__ = "catalogo_indice"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=True, index=True
+    )
+    sigla = db.Column(db.String(20), nullable=False, index=True)
+    nome_completo = db.Column(db.String(120), nullable=False)
+    orgao = db.Column(db.String(40), nullable=False)
+    tipo_calculo = db.Column(db.String(30), nullable=False)
+    ignorar_deflacao = db.Column(db.Boolean, nullable=False, default=True)
+    codigo_sgs_bacen = db.Column(db.Integer, nullable=True)
+    url_fonte_oficial = db.Column(db.String(300), nullable=True)
+    sistema_padrao = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship("Condominio")
+    valores = db.relationship(
+        "ValorIndiceMensal",
+        back_populates="catalogo",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<CatalogoIndice {self.sigla}>"
+
+
+class ValorIndiceMensal(db.Model):
+    """Ponto da série. Percentual ou número-índice, conforme o catálogo."""
+
+    __tablename__ = "valor_indice_mensal"
+    __table_args__ = (
+        db.UniqueConstraint("catalogo_id", "ano_mes", name="uq_valor_indice_mes"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    catalogo_id = db.Column(
+        db.Integer, db.ForeignKey("catalogo_indice.id"), nullable=False, index=True
+    )
+    ano = db.Column(db.Integer, nullable=False)
+    mes = db.Column(db.Integer, nullable=False)
+    ano_mes = db.Column(db.String(7), nullable=False)
+    valor = db.Column(db.Float, nullable=False, default=0.0)
+
+    catalogo = db.relationship("CatalogoIndice", back_populates="valores")
+
+    def __repr__(self):
+        return f"<ValorIndiceMensal {self.ano_mes}>"
+
+
 class RateioCondominio(db.Model):
     """Lote de taxa mensal: uma composição por bloco ou pelo condomínio geral."""
 
@@ -974,6 +1037,10 @@ class RateioCondominio(db.Model):
     valor_unitario = db.Column(db.Float, nullable=False, default=0.0)
     total_gerado = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(20), nullable=False, default=StatusRateio.RASCUNHO)
+    grupo_fracao_id = db.Column(
+        db.Integer, db.ForeignKey("grupo_fracao.id"), nullable=True, index=True
+    )
+    modo_rateio = db.Column(db.String(20), nullable=False, default="VALOR_UNITARIO")
     criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     condominio = db.relationship(
@@ -981,9 +1048,82 @@ class RateioCondominio(db.Model):
         backref=db.backref("rateios", lazy="dynamic"),
     )
     cobrancas = db.relationship("CobrancaUnidade", back_populates="rateio", lazy="dynamic")
+    grupo_fracao = db.relationship("GrupoFracao")
 
     def __repr__(self):
         return f"<RateioCondominio {self.titulo}>"
+
+
+class ModoFracao:
+    VALOR = "VALOR"
+    PROPORCAO = "PROPORCAO"
+
+
+class TipoIsencaoFracao:
+    NENHUMA = "NENHUMA"
+    PERCENTUAL = "PERCENTUAL"
+    VALOR_FIXO = "VALOR_FIXO"
+
+
+class ModoRateio:
+    VALOR_UNITARIO = "VALOR_UNITARIO"
+    DIVIDIR_TOTAL = "DIVIDIR_TOTAL"
+
+
+class GrupoFracao(db.Model):
+    """Pesos usados para dividir a taxa entre as unidades."""
+
+    __tablename__ = "grupo_fracao"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    titulo = db.Column(db.String(160), nullable=False)
+    modo_calculo = db.Column(db.String(20), nullable=False, default=ModoFracao.VALOR)
+    redistribuir_isencoes = db.Column(db.Boolean, nullable=False, default=True)
+    padrao = db.Column(db.Boolean, nullable=False, default=False)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    itens = db.relationship(
+        "ItemFracaoUnidade",
+        back_populates="grupo",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<GrupoFracao {self.id}>"
+
+
+class ItemFracaoUnidade(db.Model):
+    """Peso e isenção de uma unidade dentro de uma fração."""
+
+    __tablename__ = "item_fracao_unidade"
+    __table_args__ = (
+        db.UniqueConstraint("grupo_fracao_id", "unidade_id", name="uq_fracao_unidade"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    grupo_fracao_id = db.Column(
+        db.Integer, db.ForeignKey("grupo_fracao.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    valor_base = db.Column(db.Float, nullable=False, default=1.0)
+    ativa_no_rateio = db.Column(db.Boolean, nullable=False, default=True)
+    isencao_tipo = db.Column(db.String(20), nullable=False, default=TipoIsencaoFracao.NENHUMA)
+    isencao_valor = db.Column(db.Float, nullable=False, default=0.0)
+    motivo_isencao = db.Column(db.String(120), nullable=True)
+
+    grupo = db.relationship("GrupoFracao", back_populates="itens")
+    unidade = db.relationship("Unidade")
+
+    def __repr__(self):
+        return f"<ItemFracaoUnidade {self.unidade_id}>"
 
 
 class StatusAcordo:
@@ -1083,6 +1223,11 @@ class CobrancaUnidade(db.Model):
     )
     codigo_ocorrencia_banco = db.Column(db.String(10), nullable=True)
     observacoes = db.Column(db.Text, nullable=True)
+    destinatario_tipo = db.Column(db.String(40), nullable=False, default="Proprietário")
+    situacao_juridica = db.Column(db.String(40), nullable=False, default="Normal")
+    notificacoes_json = db.Column(db.Text, nullable=False, default="[]")
+    anexos_json = db.Column(db.Text, nullable=False, default="[]")
+    retorno_cnab_id = db.Column(db.Integer, nullable=True, index=True)
     criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     condominio = db.relationship(
@@ -1244,6 +1389,275 @@ class RepasseBloco(db.Model):
 
     def __repr__(self):
         return f"<RepasseBloco {self.bloco} {self.competencia}>"
+
+
+class TipoRecursoMedidor:
+    AGUA = "AGUA"
+    GAS = "GAS"
+    ENERGIA = "ENERGIA"
+    OUTRO = "OUTRO"
+
+
+class NivelMedicao:
+    POR_UNIDADE = "POR_UNIDADE"
+    POR_BLOCO = "POR_BLOCO"
+    ADM_SETOR = "ADM_SETOR"
+
+
+class ModoCalculoMedidor:
+    METRAGEM = "METRAGEM"
+    POR_FAIXA = "POR_FAIXA"
+    RATEIO_FATURA = "RATEIO_FATURA"
+    MONITORAMENTO_DESPESA = "MONITORAMENTO_DESPESA"
+
+
+class StatusCicloMedidor:
+    ABERTO = "Em Aberto"
+    FECHADO = "Fechado"
+    COBRADO = "Cobrado"
+
+
+class MedidorConfig(db.Model):
+    """Regra de um relógio: individual, coletivo do bloco ou interno da administração."""
+
+    __tablename__ = "medidor_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    titulo = db.Column(db.String(160), nullable=False)
+    tipo_recurso = db.Column(db.String(20), nullable=False, default=TipoRecursoMedidor.AGUA)
+    unidade_medida = db.Column(db.String(10), nullable=False, default="m³")
+    nivel_medicao = db.Column(db.String(20), nullable=False, default=NivelMedicao.POR_UNIDADE)
+    bloco_vinculado = db.Column(db.String(20), nullable=False, default="GERAL")
+    modo_calculo = db.Column(db.String(30), nullable=False, default=ModoCalculoMedidor.METRAGEM)
+    tarifa_unitaria = db.Column(db.Float, nullable=False, default=0.0)
+    taxa_fixa_minima = db.Column(db.Float, nullable=False, default=0.0)
+    faixas_json = db.Column(db.Text, nullable=True)
+    plano_conta_id = db.Column(db.Integer, db.ForeignKey("plano_conta.id"), nullable=True)
+    fundo_id = db.Column(db.Integer, db.ForeignKey("fundo_financeiro.id"), nullable=True)
+    permitir_leitura_morador = db.Column(db.Boolean, nullable=False, default=False)
+    embutido_taxa_ordinaria = db.Column(db.Boolean, nullable=False, default=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    plano_conta = db.relationship("PlanoConta")
+    fundo = db.relationship("FundoFinanceiro")
+    participantes = db.relationship(
+        "ParticipanteMedidor",
+        back_populates="medidor",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<MedidorConfig {self.id}>"
+
+
+class ParticipanteMedidor(db.Model):
+    """Unidade ou ponto físico que entra num medidor, com o marco inicial do relógio."""
+
+    __tablename__ = "participante_medidor"
+
+    id = db.Column(db.Integer, primary_key=True)
+    medidor_id = db.Column(
+        db.Integer, db.ForeignKey("medidor_config.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(db.Integer, db.ForeignKey("unidades.id"), nullable=True, index=True)
+    identificador_ponto = db.Column(db.String(160), nullable=False)
+    numero_serie_relogio = db.Column(db.String(60), nullable=True)
+    leitura_inicial = db.Column(db.Float, nullable=False, default=0.0)
+    credito_acumulado = db.Column(db.Float, nullable=False, default=0.0)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    medidor = db.relationship("MedidorConfig", back_populates="participantes")
+    unidade = db.relationship("Unidade")
+
+    def __repr__(self):
+        return f"<ParticipanteMedidor {self.id}>"
+
+
+class CicloLeituraMedidor(db.Model):
+    """Competência em que as leituras de um medidor são lançadas."""
+
+    __tablename__ = "ciclo_leitura_medidor"
+    __table_args__ = (
+        db.UniqueConstraint("medidor_id", "competencia", name="uq_ciclo_medidor_competencia"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    medidor_id = db.Column(
+        db.Integer, db.ForeignKey("medidor_config.id"), nullable=False, index=True
+    )
+    competencia = db.Column(db.String(7), nullable=False)
+    data_leitura = db.Column(db.Date, nullable=False)
+    valor_fatura_concessionaria = db.Column(db.Float, nullable=False, default=0.0)
+    consumo_total = db.Column(db.Float, nullable=False, default=0.0)
+    valor_total_apurado = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), nullable=False, default=StatusCicloMedidor.ABERTO)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    medidor = db.relationship("MedidorConfig")
+    itens = db.relationship(
+        "ItemLeituraMedidor",
+        back_populates="ciclo",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<CicloLeituraMedidor {self.id}>"
+
+
+class ItemLeituraMedidor(db.Model):
+    """Leitura de um ponto dentro do ciclo."""
+
+    __tablename__ = "item_leitura_medidor"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ciclo_id = db.Column(
+        db.Integer, db.ForeignKey("ciclo_leitura_medidor.id"), nullable=False, index=True
+    )
+    participante_id = db.Column(
+        db.Integer, db.ForeignKey("participante_medidor.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(db.Integer, db.ForeignKey("unidades.id"), nullable=True, index=True)
+    leitura_anterior = db.Column(db.Float, nullable=False, default=0.0)
+    leitura_atual = db.Column(db.Float, nullable=True)
+    reiniciada = db.Column(db.Boolean, nullable=False, default=False)
+    consumo_apurado = db.Column(db.Float, nullable=False, default=0.0)
+    credito_abatido = db.Column(db.Float, nullable=False, default=0.0)
+    consumo_final = db.Column(db.Float, nullable=False, default=0.0)
+    valor_calculado = db.Column(db.Float, nullable=False, default=0.0)
+    foto_relogio = db.Column(db.String(120), nullable=True)
+    enviado_pelo_morador = db.Column(db.Boolean, nullable=False, default=False)
+    data_envio_morador = db.Column(db.DateTime, nullable=True)
+    alerta_anomalia = db.Column(db.Boolean, nullable=False, default=False)
+    lancamento_gerado = db.Column(db.Boolean, nullable=False, default=False)
+    cobranca_id = db.Column(db.Integer, nullable=True)
+
+    ciclo = db.relationship("CicloLeituraMedidor", back_populates="itens")
+    participante = db.relationship("ParticipanteMedidor")
+    unidade = db.relationship("Unidade")
+
+    def __repr__(self):
+        return f"<ItemLeituraMedidor {self.id}>"
+
+
+class PrevisaoOrcamentaria(db.Model):
+    """Meta mensal de uma conta, da administração geral ou de um bloco."""
+
+    __tablename__ = "previsao_orcamentaria"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "condominio_id",
+            "ano",
+            "plano_conta_id",
+            "bloco_escopo",
+            name="uq_previsao_conta_escopo",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    ano = db.Column(db.Integer, nullable=False)
+    plano_conta_id = db.Column(
+        db.Integer, db.ForeignKey("plano_conta.id"), nullable=False, index=True
+    )
+    bloco_escopo = db.Column(db.String(20), nullable=False, default="GERAL")
+    valores_mensais_json = db.Column(db.Text, nullable=True)
+    valor_anual_total = db.Column(db.Float, nullable=False, default=0.0)
+    observacoes = db.Column(db.String(300), nullable=True)
+    atualizado_em = db.Column(db.DateTime, nullable=True)
+
+    condominio = db.relationship("Condominio")
+    plano_conta = db.relationship("PlanoConta")
+
+    def __repr__(self):
+        return f"<PrevisaoOrcamentaria {self.ano} {self.plano_conta_id}>"
+
+
+class TipoLancamentoCaixa:
+    ENTRADA = "ENTRADA"
+    SAIDA = "SAIDA"
+    TRANSFERENCIA_FUNDO = "TRANSFERENCIA_FUNDO"
+
+
+class LancamentoCaixaAvulso(db.Model):
+    """Entrada, saída ou transferência entre fundos que não nasce de boleto ou despesa."""
+
+    __tablename__ = "lancamento_caixa_avulso"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    conta_bancaria_id = db.Column(
+        db.Integer, db.ForeignKey("conta_bancaria.id"), nullable=False, index=True
+    )
+    plano_conta_id = db.Column(db.Integer, db.ForeignKey("plano_conta.id"), nullable=True)
+    fundo_id = db.Column(
+        db.Integer, db.ForeignKey("fundo_financeiro.id"), nullable=False, index=True
+    )
+    tipo = db.Column(db.String(30), nullable=False)
+    fundo_destino_id = db.Column(db.Integer, db.ForeignKey("fundo_financeiro.id"), nullable=True)
+    competencia = db.Column(db.String(7), nullable=False, index=True)
+    data_lancamento = db.Column(db.Date, nullable=False)
+    descricao = db.Column(db.String(200), nullable=False)
+    bloco_escopo = db.Column(db.String(20), nullable=False, default="GERAL")
+    valor = db.Column(db.Float, nullable=False, default=0.0)
+    criado_por = db.Column(db.String(80), nullable=False, default="")
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    conta_bancaria = db.relationship("ContaBancaria")
+    plano_conta = db.relationship("PlanoConta")
+    fundo = db.relationship("FundoFinanceiro", foreign_keys=[fundo_id])
+    fundo_destino = db.relationship("FundoFinanceiro", foreign_keys=[fundo_destino_id])
+
+    def __repr__(self):
+        return f"<LancamentoCaixaAvulso {self.id}>"
+
+
+class FechamentoMensal(db.Model):
+    """Competência auditada. Fechada, não aceita novo lançamento nem baixa."""
+
+    __tablename__ = "fechamento_mensal"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "condominio_id", "competencia", name="uq_fechamento_competencia_tenant"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    competencia = db.Column(db.String(7), nullable=False)
+    fechado = db.Column(db.Boolean, nullable=False, default=True)
+    saldo_inicial_mes = db.Column(db.Float, nullable=False, default=0.0)
+    total_receitas = db.Column(db.Float, nullable=False, default=0.0)
+    total_despesas = db.Column(db.Float, nullable=False, default=0.0)
+    total_repasses = db.Column(db.Float, nullable=False, default=0.0)
+    saldo_final_mes = db.Column(db.Float, nullable=False, default=0.0)
+    resumo_snapshot_json = db.Column(db.Text, nullable=True)
+    fechado_por = db.Column(db.String(80), nullable=False, default="")
+    fechado_em = db.Column(db.DateTime, nullable=True)
+    motivo_reabertura = db.Column(db.String(300), nullable=True)
+
+    condominio = db.relationship("Condominio")
+
+    def __repr__(self):
+        return f"<FechamentoMensal {self.competencia}>"
 
 
 class Veiculo(db.Model):

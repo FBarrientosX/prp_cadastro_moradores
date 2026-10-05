@@ -144,6 +144,12 @@ Transicao de schema:
   `condominio_id` NOT NULL.
 - Constraint de `Unidade`: `UniqueConstraint("condominio_id", "bloco", "apartamento")`.
  Lookups de negocio sempre filtram `condominio_id`.
+- Planta física: `criada_pela_admin`, `conta_reivindicada` e `cpf_pre_autorizado`.
+  O boot do `prp` completa as 496 unidades (blocos 1–8) que ainda não existem,
+  com status `Pré-Cadastro Admin` e sem senha do morador. Quem já tinha
+  cadastro fica `conta_reivindicada=True`. O autocadastro só reivindica
+  unidade da planta; conta já reivindicada não refaz o cadastro. A fração
+  igualitária e o rateio incluem as 496, mesmo sem pagador.
 - Setor interno: `eh_setor_interno=True`, `bloco="ADM"`, `apartamento` = nome
  do setor (ex.: "Administração"). O boot cria Administração em todo condomínio
  (`garantir_setor_administracao`), status `Aprovada`, senha aleatória.
@@ -285,8 +291,11 @@ Somente Admin local:
 - exclusao de unidade: rota `@admin_or_assistente_required`, botao na UI so para admin;
   bloqueia se houver encomenda pendente
 - atalho para `/portaria/dashboard` com botao "Voltar ao Painel Admin"
-- Financeiro (`@admin_required`): `/admin/financeiro`, `/bancos`, `/rateios`,
-  `/cobrancas`, `/acordos`, `/conciliacao`, `/pagamentos`, `/repasses`.
+- Financeiro (`@admin_required`): `/admin/financeiro`, `/bancos`, `/fracoes`,
+  `/rateios`, `/cobrancas`, `/acordos`, `/conciliacao`, `/pagamentos`, `/repasses`,
+  `/medidores`.
+  Planta e pagadores: `GET /admin/cadastros` e `GET /admin/financeiro/pagadores`
+  (admin e síndico do bloco; assistente não entra).
   Repasse por bloco quando `fin_repasses_ativos`; caixa unico quando desligado.
   Boleto e recibo em `/financeiro/boleto/<id>` e `/financeiro/recibo/<id>`
   (admin do tenant ou a unidade dona). Morador vê a 2ª via em `/boletos`.
@@ -460,12 +469,58 @@ Financeiro (`app/blueprints/financeiro.py`, calculo em `app/financeiro_boleto.py
   Liquidação `06`/`07`/`08`/`10` baixa o título, soma o saldo da conta e
   quita o acordo quando todas as parcelas ficam pagas. Ocorrência `02`
   só registra. Arquivo repetido não soma o saldo de novo.
+  A liquidação grava `retorno_cnab_id` no título.
+- Cobranças: `destinatario_tipo`, `situacao_juridica`, `notificacoes_json`
+  e `anexos_json` nascem no ALTER do boot. A lista esconde canceladas por
+  padrão; o switch inclui o valor delas só no card Total. Busca com `#id`,
+  `@nosso número` ou `*acordo` ignora o mês. E-mail e WhatsApp gravam o
+  envio; abrir o boleto do morador ou com `?track=1` preenche `lido_em`.
+  Anexo fica em `static/uploads/financeiro` e só sai pela rota autenticada
+  da própria cobrança.
 - Contas a pagar: `Fornecedor`, `DespesaPagamento` e `RepasseBloco` nascem
   no `create_all`. Baixa de despesa e repasse debitam `saldo_atual` uma vez.
   Anexo fica em `static/uploads/financeiro` e só sai por rota autenticada.
   `apurar_repasses_blocos` lê boletos pagos: plano `ADM_GERAL` fica retido;
   plano `BLOCO` segue o bloco da unidade; despesa paga do bloco e repasse
   já feito abatem o saldo. O síndico só vê o próprio `blocos_escopo`.
+- Correção monetária: `CatalogoIndice` (global quando `condominio_id` é nulo)
+  e `ValorIndiceMensal`. O boot semeia os 22 índices e a série da UFIR-RJ
+  (2009–2026) mais IPCA, IGP-M e Poupança recentes. `calcular_encargos_atraso`
+  usa fator nominal ou percentual mensal, e ignora deflação quando o índice
+  manda. No mês do vencimento a correção continua zerada.
+- Frações: `GrupoFracao` e `ItemFracaoUnidade`. O boot cria a fração igualitária
+  (peso 1) se o condomínio ainda não tiver nenhuma, sem setores internos.
+  Rateio com `grupo_fracao_id` nulo continua cobrando a mesma cota de todas
+  as elegíveis. Com fração, `VALOR_UNITARIO` usa a composição como cota do
+  peso 1 e `DIVIDIR_TOTAL` reparte o montante. Isenção de 100% não gera boleto.
+  Unidade inativa sai do denominador. `Ativar Todas as Unidades` religa
+  todas as residenciais da fração. `Definir Peso 1,0` também reativa todas
+  e volta `modo_calculo` para `VALOR`. Fração usada em rateio não é excluída.
+- Medidores: `MedidorConfig`, `ParticipanteMedidor`, `CicloLeituraMedidor`
+  e `ItemLeituraMedidor`. Escopos por unidade, por bloco e da administração.
+  O síndico só gerencia o medidor do bloco do mandato. A autoleitura do
+  morador vale com o ciclo em aberto. `embutido_taxa_ordinaria` nasce
+  marcado: a fatura vai para Contas a Pagar e a rota de boleto/avulsa
+  recusa o lançamento. Com a trava desmarcada, a cobrança extra só nasce
+  depois da confirmação que mostra o impacto. Recalcular não altera boleto.
+  Boleto já remetido ao banco não é alterado.
+- Previsão orçamentária: `PrevisaoOrcamentaria` guarda o valor mensal de
+  cada plano, no escopo `GERAL` ou de um bloco. A tela compara o orçado
+  com boletos pagos (receita) e com `DespesaPagamento` não cancelada
+  (despesa, pelo `valor_original` e `bloco_alocado`). Despesa acima de
+  100% do teto fica vermelha. A fatura lançada pelo medidor entra na
+  competência e no plano daquele relógio.
+- Livro-caixa e fechamento: `LancamentoCaixaAvulso` registra entrada, saída
+  ou transferência entre fundos. Entrada e saída alteram `saldo_atual` da
+  conta; transferência só move o saldo contábil entre fundos. O extrato
+  une boletos pagos, despesas pagas, repasses realizados e lançamentos
+  avulsos. `FechamentoMensal` guarda o retrato da competência. Com o mês
+  fechado, criar, editar, baixar ou excluir cobrança, despesa, repasse e
+  lançamento avulso daquela competência é recusado, inclusive a baixa do
+  retorno CNAB. Reabrir exige justificativa e é só do admin. O balancete
+  impresso do admin usa o snapshot do fechamento. O síndico imprime só o
+  demonstrativo dos blocos do mandato, apurado ao vivo, sem o saldo das
+  contas bancárias do condomínio.
 
 ==================================================
 6) ROTAS E FLUXOS PRINCIPAIS
@@ -500,13 +555,22 @@ Administracao local (`app/blueprints/admin.py`):
 - `/admin/mudancas`
 - Financeiro (`app/blueprints/financeiro.py`, so admin local):
   `GET /admin/financeiro`, `GET /admin/financeiro/bancos`,
-  `GET|POST /admin/financeiro/rateios`, `GET /admin/financeiro/cobrancas`,
+  `GET /admin/cadastros`, `GET /admin/financeiro/pagadores`,
+  `GET|POST /admin/financeiro/fracoes`, `GET /admin/financeiro/medidores`,
+  `GET|POST /admin/financeiro/orcamento`,
+  `GET|POST /admin/financeiro/lancamentos`,
+  `GET|POST /admin/financeiro/fechamento`,
+  `GET /sindico/medidores`, `GET|POST /admin/financeiro/rateios`,
+  `GET /admin/financeiro/cobrancas`,
+  `GET /admin/financeiro/cobrancas/imprimir`,
   `GET|POST /admin/financeiro/acordos`,
   `GET /admin/financeiro/conciliacao`,
-  `GET /admin/financeiro/pagamentos`, `GET /admin/financeiro/repasses`.
+  `GET /admin/financeiro/pagamentos`, `GET /admin/financeiro/repasses`,
+  `GET /admin/financeiro/correcao-monetaria`.
   Boleto e recibo: `GET /financeiro/boleto/<id>`, `GET /financeiro/recibo/<id>`.
   Demonstrativo: `GET /financeiro/repasse/<id>` (admin do tenant ou síndico
-  do bloco). Morador: `GET /boletos`. Síndico: `GET /sindico/financeiro`.
+  do bloco). Morador: `GET /boletos`. Síndico: `GET /sindico/financeiro`,
+  `GET /sindico/financeiro/balancete`.
 
 Super Admin (`app/blueprints/superadmin.py`):
 - `/superadmin/login`, `/superadmin`, `/superadmin/condominios*`
@@ -628,7 +692,8 @@ Separacao de contextos (obrigatorio):
   Admin e sindico usam secoes colapsaveis; a secao do item ativo abre sozinha.
   Admin agrupa Visao geral, Condominio, Portaria & acesso, Financeiro e Configuracoes.
   Financeiro (so admin) fica abaixo de Portaria & Acesso: dashboard, bancos,
-  rateios, cobrancas, acordos, conciliacao CNAB, pagamentos e repasses.
+  planta de unidades, fracoes, medidores, previsao orcamentaria, rateios, cobrancas, acordos, conciliacao CNAB,
+  pagamentos, lancamentos, fechamento do mes, repasses e correcao monetaria.
   O síndico tem `Prestação de Contas / Bloco` na seção Condomínio.
   O morador tem `Boletos / 2ª Via` abaixo de Encomendas.
   `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre

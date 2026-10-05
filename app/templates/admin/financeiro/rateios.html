@@ -54,6 +54,29 @@
                         {% endfor %}
                     </select>
                 </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="grupo_fracao_id">Base de fração</label>
+                    <select class="form-select" id="grupo_fracao_id" name="grupo_fracao_id">
+                        <option value="" {% if not grupo_atual %}selected{% endif %}>Cota igual para todas as unidades elegíveis</option>
+                        {% for grupo in grupos_fracao %}
+                        <option value="{{ grupo.id }}" {% if grupo_atual|string == grupo.id|string %}selected{% endif %}>
+                            {{ grupo.titulo }}{% if grupo.padrao %} (padrão){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div class="form-text">Sem fração, cada unidade elegível recebe o mesmo valor da composição.</div>
+                </div>
+                <div class="col-12">
+                    <span class="form-label d-block">Modo de cálculo</span>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="modo_rateio" id="modoUnitario" value="VALOR_UNITARIO" {% if modo_rateio_atual != 'DIVIDIR_TOTAL' %}checked{% endif %}>
+                        <label class="form-check-label" for="modoUnitario">Valor base por unidade — a composição é a cota do peso 1,0. Peso 2,0 paga o dobro. Isenção de 100% não gera boleto.</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="modo_rateio" id="modoTotal" value="DIVIDIR_TOTAL" {% if modo_rateio_atual == 'DIVIDIR_TOTAL' %}checked{% endif %}>
+                        <label class="form-check-label" for="modoTotal">Ratear despesa total pela fração ideal — a composição é o montante global, dividido pelo coeficiente de cada unidade ativa.</label>
+                    </div>
+                </div>
             </div>
 
             <h2 class="h6 mt-4">Composição do boleto</h2>
@@ -139,7 +162,13 @@
                     <span class="ms-2">{{ rateio.competencia|competencia_extenso }}</span>
                 </button>
                 <div class="d-flex flex-wrap align-items-center gap-2">
+                    {% if rateio.grupo_fracao_id and rateio.modo_rateio == 'DIVIDIR_TOTAL' %}
+                    <span>despesa total {{ rateio.valor_unitario|reais }}</span>
+                    {% elif rateio.grupo_fracao_id %}
+                    <span>{{ rateio.valor_unitario|reais }} por peso 1</span>
+                    {% else %}
                     <span>{{ rateio.valor_unitario|reais }} / unidade</span>
+                    {% endif %}
                     <span class="badge {{ rateio.status|badge_status }}">{{ rateio.status }}</span>
                     {% if rateio.status == 'Rascunho' %}
                     <form method="post" action="{{ url_for('admin_financeiro_rateio_gerar', rateio_id=rateio.id) }}"
@@ -158,7 +187,10 @@
         </div>
         <div class="collapse" id="rateio{{ rateio.id }}">
             <div class="card-body">
-                <p class="text-muted small mb-2">Vencimento {{ rateio.vencimento_padrao.strftime('%d/%m/%Y') }}</p>
+                <p class="text-muted small mb-2">
+                    Vencimento {{ rateio.vencimento_padrao.strftime('%d/%m/%Y') }}
+                    {% if rateio.grupo_fracao %} · {{ rateio.grupo_fracao.titulo }}{% endif %}
+                </p>
                 <div class="table-responsive">
                     <table class="table table-sm mb-0">
                         <thead>
@@ -181,7 +213,7 @@
                         </tbody>
                         <tfoot>
                             <tr>
-                                <th colspan="3">Total do boleto</th>
+                                <th colspan="3">{% if rateio.modo_rateio == 'DIVIDIR_TOTAL' and rateio.grupo_fracao_id %}Despesa total{% else %}Referência da composição{% endif %}</th>
                                 <th class="text-end">{{ rateio.valor_unitario|reais }}</th>
                             </tr>
                         </tfoot>

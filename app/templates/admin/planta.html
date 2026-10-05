@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block title %}Planta de Unidades & Pagadores{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">🏠 Planta de Unidades &amp; Pagadores</h1>
+        <p class="text-muted mb-0">Unidades da planta oficial, com ou sem o morador ter feito o 1º acesso.</p>
+    </div>
+    {% if pode_editar %}
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalImportar">📥 Importar Pagadores em Lote (CSV/Texto)</button>
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalPagador" id="btnNovoPagador">+ Pré-Cadastrar Unidade / Pagador</button>
+    </div>
+    {% endif %}
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+    <a class="btn btn-sm {% if filtro == 'todas' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ url_for(request.endpoint, filtro='todas') }}">Todas ({{ contagens.todas }})</a>
+    <a class="btn btn-sm {% if filtro == 'ativas' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ url_for(request.endpoint, filtro='ativas') }}">Com Morador Cadastrado ({{ contagens.ativas }})</a>
+    <a class="btn btn-sm {% if filtro == 'pre' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ url_for(request.endpoint, filtro='pre') }}">Pré-Cadastro Admin ({{ contagens.pre }})</a>
+    <a class="btn btn-sm {% if filtro == 'pendentes' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ url_for(request.endpoint, filtro='pendentes') }}">Pendentes de Aprovação ({{ contagens.pendentes }})</a>
+</div>
+
+<form class="row g-2 align-items-end mb-3" method="get">
+    <input type="hidden" name="filtro" value="{{ filtro }}">
+    <div class="col-md-3">
+        <label class="form-label" for="bloco">Bloco</label>
+        <select class="form-select" id="bloco" name="bloco">
+            <option value="">Todos</option>
+            {% for bloco in blocos %}
+            <option value="{{ bloco }}" {% if bloco_atual == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-5">
+        <label class="form-label" for="q">Busca de unidade</label>
+        <input class="form-control" id="q" name="q" value="{{ busca }}" placeholder="Bloco, apartamento ou pagador">
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-outline-secondary" type="submit">Filtrar</button>
+    </div>
+</form>
+
+<p class="text-muted small">{{ linhas|length }} unidade(s) neste filtro.</p>
+
+<div class="table-responsive card border-0 shadow-sm">
+    <table class="table table-sm align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Bloco / Apto</th>
+                <th>Pagador</th>
+                <th>CPF/CNPJ</th>
+                <th>Situação</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for linha in linhas %}
+            <tr>
+                <td class="text-nowrap">{{ linha.unidade.bloco }} / {{ linha.unidade.apartamento }}</td>
+                <td>{{ linha.nome }}</td>
+                <td>{{ linha.documento or '—' }}</td>
+                <td>
+                    {% if linha.situacao == 'pre' %}
+                    <span class="badge bg-secondary">Pré-cadastro</span>
+                    {% elif linha.situacao == 'pendente' %}
+                    <span class="badge bg-warning text-dark">Pendente de aprovação</span>
+                    {% else %}
+                    <span class="badge bg-success">Conta ativa</span>
+                    {% endif %}
+                </td>
+                <td class="text-end text-nowrap">
+                    {% if pode_editar %}
+                    <button type="button" class="btn btn-sm btn-outline-primary js-editar"
+                            data-bs-toggle="modal" data-bs-target="#modalPagador"
+                            data-bloco="{{ linha.unidade.bloco }}"
+                            data-apartamento="{{ linha.unidade.apartamento }}"
+                            data-nome="{{ linha.unidade.proprietario_nome or '' }}"
+                            data-documento="{{ linha.unidade.cpf_pre_autorizado or linha.unidade.proprietario_cpf or '' }}"
+                            data-email="{{ linha.unidade.proprietario_email or '' }}"
+                            data-telefone="{{ linha.unidade.proprietario_telefone or '' }}">Editar</button>
+                    {% endif %}
+                    <form class="d-inline" method="post" action="{{ url_for('admin_cadastros_liberar', unidade_id=linha.unidade.id) }}"
+                          onsubmit="return confirm('Liberar um novo 1º acesso nesta unidade?');">
+                        <button class="btn btn-sm btn-outline-warning" type="submit">🔓 Liberar Novo 1º Acesso</button>
+                    </form>
+                    <button type="button" class="btn btn-sm btn-outline-secondary js-senha"
+                            data-bs-toggle="modal" data-bs-target="#modalSenha"
+                            data-action="{{ url_for('admin_cadastros_senha', unidade_id=linha.unidade.id) }}">Senha temporária</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-muted">Nenhuma unidade neste filtro.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if pode_editar %}
+<div class="modal fade" id="modalPagador" tabindex="-1" aria-labelledby="modalPagadorTitulo" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_cadastros_salvar') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalPagadorTitulo">Pré-cadastrar unidade / pagador</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="filtro" value="{{ filtro }}">
+                <div class="row g-3">
+                    <div class="col-6">
+                        <label class="form-label" for="pagadorBloco">Bloco</label>
+                        <select class="form-select" id="pagadorBloco" name="bloco" required>
+                            {% for bloco in blocos %}
+                            <option value="{{ bloco }}">Bloco {{ bloco }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label" for="pagadorApto">Apartamento</label>
+                        <input class="form-control" id="pagadorApto" name="apartamento" required placeholder="101">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="pagadorNome">Nome do proprietário/pagador</label>
+                        <input class="form-control" id="pagadorNome" name="nome" maxlength="200">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="pagadorDocumento">CPF/CNPJ</label>
+                        <input class="form-control" id="pagadorDocumento" name="documento" inputmode="numeric">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="pagadorEmail">E-mail</label>
+                        <input class="form-control" id="pagadorEmail" name="email" type="email">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="pagadorTelefone">Telefone</label>
+                        <input class="form-control" id="pagadorTelefone" name="telefone">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Salvar pagador</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalImportar" tabindex="-1" aria-labelledby="modalImportarTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <form class="modal-content" method="post" action="{{ url_for('admin_cadastros_importar') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalImportarTitulo">Importar pagadores</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Uma unidade por linha: <code>bloco;apartamento;nome;cpf;email;telefone</code>. Vírgula também serve. A primeira linha pode ser o cabeçalho.</p>
+                <textarea class="form-control" name="texto" rows="8" placeholder="1;102;Nome do pagador;00000000000;email@exemplo.com;21999999999"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Importar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="modalSenha" tabindex="-1" aria-labelledby="modalSenhaTitulo" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" id="formSenha" action="">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalSenhaTitulo">Senha temporária da unidade</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label" for="senhaTemp">Nova senha</label>
+                <input class="form-control mb-3" id="senhaTemp" name="senha" type="password" minlength="6" required autocomplete="new-password">
+                <label class="form-label" for="senhaTemp2">Confirmar</label>
+                <input class="form-control" id="senhaTemp2" name="confirmar" type="password" minlength="6" required autocomplete="new-password">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Definir senha temporária</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var modal = document.getElementById("modalPagador");
+    if (modal) {
+        modal.addEventListener("show.bs.modal", function (evento) {
+            var origem = evento.relatedTarget;
+            var editar = origem && origem.classList.contains("js-editar");
+            document.getElementById("pagadorBloco").value = editar ? origem.getAttribute("data-bloco") : (document.getElementById("pagadorBloco").options[0] || {}).value;
+            document.getElementById("pagadorApto").value = editar ? origem.getAttribute("data-apartamento") : "";
+            document.getElementById("pagadorNome").value = editar ? origem.getAttribute("data-nome") : "";
+            document.getElementById("pagadorDocumento").value = editar ? origem.getAttribute("data-documento") : "";
+            document.getElementById("pagadorEmail").value = editar ? origem.getAttribute("data-email") : "";
+            document.getElementById("pagadorTelefone").value = editar ? origem.getAttribute("data-telefone") : "";
+        });
+    }
+    var formSenha = document.getElementById("formSenha");
+    document.querySelectorAll(".js-senha").forEach(function (botao) {
+        botao.addEventListener("click", function () {
+            if (formSenha) formSenha.action = botao.getAttribute("data-action");
+        });
+    });
+})();
+</script>
+{% endblock %}

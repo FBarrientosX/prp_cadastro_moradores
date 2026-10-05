@@ -382,16 +382,14 @@ def _buscar_unidade(bloco, apartamento, condominio_id=None):
 
 
 def _unidade_exige_senha(unidade):
-    """Unidade cadastrada (exceto reprovada) pede senha no login do morador."""
-    if not unidade:
+    """Conta já reivindicada pede senha. Pré-cadastro segue para o 1º acesso."""
+    if not unidade or unidade.eh_setor_interno:
+        return False
+    if not unidade.conta_reivindicada:
         return False
     if unidade.status == StatusUnidade.REPROVADA:
         return False
-    return unidade.status in (
-        StatusUnidade.PENDENTE,
-        StatusUnidade.APROVADA,
-        StatusUnidade.REGISTRADA,
-    )
+    return True
 
 
 def _unidade_do_tenant(unidade_id, condominio_id):
@@ -1687,8 +1685,22 @@ def verificar_unidade(slug):
         )
 
     unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
+    from app.planta_unidades import MENSAGEM_FORA_DA_PLANTA, MENSAGEM_TRAVA
 
-    if not unidade:
+    if (
+        not unidade
+        or unidade.eh_setor_interno
+        or not unidade.criada_pela_admin
+    ):
+        flash(MENSAGEM_FORA_DA_PLANTA, "danger")
+        return _render_tenant_login(
+            condominio,
+            active_tab="morador",
+            bloco=bloco,
+            apartamento=apartamento,
+        )
+
+    if not unidade.conta_reivindicada:
         session["cadastro_bloco"] = bloco
         session["cadastro_apartamento"] = apartamento
         session["cadastro_condominio_id"] = condominio.id
@@ -1696,13 +1708,13 @@ def verificar_unidade(slug):
         return redirect(url_for("cadastro_inicial", slug=condominio.slug))
 
     if unidade.status == StatusUnidade.REPROVADA:
-        db.session.delete(unidade)
-        db.session.commit()
-        session["cadastro_bloco"] = bloco
-        session["cadastro_apartamento"] = apartamento
-        session["cadastro_condominio_id"] = condominio.id
-        session["cadastro_slug"] = condominio.slug
-        return redirect(url_for("cadastro_inicial", slug=condominio.slug))
+        flash(MENSAGEM_TRAVA, "warning")
+        return _render_tenant_login(
+            condominio,
+            active_tab="morador",
+            bloco=bloco,
+            apartamento=apartamento,
+        )
 
     senha = request.form.get("senha", "").strip()
     exige_senha = _unidade_exige_senha(unidade)
@@ -1759,12 +1771,18 @@ def status_unidade(slug):
         return resposta
 
     unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
+    na_planta = bool(
+        unidade and not unidade.eh_setor_interno and unidade.criada_pela_admin
+    )
     exige_senha = _unidade_exige_senha(unidade)
+    primeiro_acesso = bool(na_planta and not unidade.conta_reivindicada)
     resposta = jsonify(
         {
             "ok": True,
             "cadastrada": exige_senha,
             "exige_senha": exige_senha,
+            "primeiro_acesso": primeiro_acesso,
+            "na_planta": na_planta,
         }
     )
     resposta.headers["Cache-Control"] = "no-store"
@@ -1948,10 +1966,25 @@ def cadastro_inicial(slug):
         flash("Selecione um bloco e apartamento válidos.", "warning")
         return redirect(url_for("tenant_login", slug=condominio.slug))
 
-    if _buscar_unidade(bloco, apartamento, condominio_id=condominio.id):
-        flash("Esta unidade já possui cadastro.", "warning")
+    from app.planta_unidades import (
+        MENSAGEM_FORA_DA_PLANTA,
+        MENSAGEM_TRAVA,
+        documento_pre_autorizado,
+        mascarar_documento,
+        mascarar_email,
+        mascarar_nome,
+        mascarar_telefone,
+    )
+
+    unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio.id)
+    if not unidade or unidade.eh_setor_interno or not unidade.criada_pela_admin:
+        flash(MENSAGEM_FORA_DA_PLANTA, "danger")
+        return redirect(url_for("tenant_login", slug=condominio.slug))
+    if unidade.conta_reivindicada:
+        flash(MENSAGEM_TRAVA, "warning")
         return redirect(url_for("tenant_login", slug=condominio.slug))
 
+    documento = documento_pre_autorizado(unidade)
     return render_template(
         "cadastro_morador.html",
         bloco=bloco,
@@ -1960,6 +1993,14 @@ def cadastro_inicial(slug):
         vinculos=VinculoPessoa.CHOICES,
         condominio=condominio,
         slug=condominio.slug,
+        pre_cadastro=True,
+        exige_cpf=bool(documento),
+        mascara={
+            "nome": mascarar_nome(unidade.proprietario_nome),
+            "documento": mascarar_documento(documento),
+            "email": mascarar_email(unidade.proprietario_email),
+            "telefone": mascarar_telefone(unidade.proprietario_telefone),
+        },
     )
 
 
@@ -3095,24 +3136,34 @@ def salvar_cadastro():
                     raise ValueError("A senha deve ter ao menos 6 caracteres.")
                 unidade.set_password(senha)
         else:
-            if _buscar_unidade(bloco, apartamento, condominio_id=condominio_id):
-                raise ValueError("Esta unidade já possui cadastro.")
+            from app.planta_unidades import (
+                MENSAGEM_CPF,
+                MENSAGEM_FORA_DA_PLANTA,
+                MENSAGEM_TRAVA,
+                cpf_confere,
+            )
 
+            unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio_id)
+            if (
+                not unidade
+                or unidade.eh_setor_interno
+                or not unidade.criada_pela_admin
+            ):
+                raise ValueError(MENSAGEM_FORA_DA_PLANTA)
+            if unidade.conta_reivindicada:
+                raise ValueError(MENSAGEM_TRAVA)
+            if not cpf_confere(unidade, request.form.get("cpf_confirmacao")):
+                raise ValueError(MENSAGEM_CPF)
             if not senha or senha != confirmar_senha:
                 raise ValueError("Informe e confirme a senha do cadastro.")
             if len(senha) < 6:
                 raise ValueError("A senha deve ter ao menos 6 caracteres.")
 
-            unidade = Unidade(
-                bloco=bloco,
-                apartamento=apartamento,
-                status=StatusUnidade.PENDENTE,
-                documento_status=StatusDocumento.PENDENTE,
-                condominio_id=condominio_id,
-            )
+            unidade.status = StatusUnidade.PENDENTE
+            unidade.documento_status = StatusDocumento.PENDENTE
+            unidade.conta_reivindicada = True
+            unidade.criada_pela_admin = True
             unidade.set_password(senha)
-            db.session.add(unidade)
-            db.session.flush()
 
         if not listas_separadas:
             _aplicar_papeis_formulario_legado(
@@ -3794,6 +3845,7 @@ def init_app(app):
     from app.blueprints import admin as admin_routes
     from app.blueprints import api as api_routes
     from app.blueprints import financeiro as financeiro_routes
+    from app.blueprints import planta as planta_routes
     from app.blueprints import parceiro as parceiro_routes
     from app.blueprints import portaria as portaria_routes
     from app.blueprints import sindico as sindico_routes
@@ -3804,6 +3856,7 @@ def init_app(app):
     sindico_routes.register(app)
     admin_routes.register(app)
     financeiro_routes.register(app)
+    planta_routes.register(app)
     portaria_routes.register(app)
     api_routes.register(app)
 

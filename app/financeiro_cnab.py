@@ -460,6 +460,11 @@ def aplicar_retorno(condominio_id, texto):
         if cobranca.status == StatusCobranca.PAGA:
             relatorio["ja_pagos"].append(cobranca.id)
             continue
+        from app.financeiro_fechamento import competencia_esta_fechada
+
+        if competencia_esta_fechada(condominio_id, cobranca.competencia):
+            relatorio.setdefault("fechados", []).append(cobranca.id)
+            continue
         valor = round(float(item.get("valor") or 0), 2)
         if valor <= 0:
             relatorio["ignorados"].append(cobranca.id)

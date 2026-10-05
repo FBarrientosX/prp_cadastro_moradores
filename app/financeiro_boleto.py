@@ -150,18 +150,30 @@ def calcular_encargos_atraso(cobranca, data_ref=None, condominio=None, indices_p
     )
     correcao = 0.0
     if not mesmo_mes and original:
-        if indices_por_mes is None and condominio is not None and sigla:
-            linhas = IndiceEconomico.query.filter_by(
-                condominio_id=condominio.id, sigla=sigla
-            ).all()
-            indices_por_mes = {
-                linha.ano_mes: float(linha.fator_mensal or 0) for linha in linhas
-            }
-        fator = 1.0
-        for ano_mes in _somar_meses(cobranca.vencimento, data_ref):
-            percentual = float((indices_por_mes or {}).get(ano_mes) or 0.0)
-            fator *= 1.0 + (percentual / 100.0)
-        correcao = round(original * (fator - 1.0), 2)
+        from app.financeiro_correcao import correcao_por_sigla
+
+        serie = correcao_por_sigla(
+            sigla,
+            original,
+            cobranca.vencimento,
+            data_ref,
+            condominio_id=getattr(condominio, "id", None),
+        )
+        if serie is not None and not serie.get("faltantes"):
+            correcao = serie["correcao"]
+        else:
+            if indices_por_mes is None and condominio is not None and sigla:
+                linhas = IndiceEconomico.query.filter_by(
+                    condominio_id=condominio.id, sigla=sigla
+                ).all()
+                indices_por_mes = {
+                    linha.ano_mes: float(linha.fator_mensal or 0) for linha in linhas
+                }
+            fator = 1.0
+            for ano_mes in _somar_meses(cobranca.vencimento, data_ref):
+                percentual = float((indices_por_mes or {}).get(ano_mes) or 0.0)
+                fator *= 1.0 + (percentual / 100.0)
+            correcao = round(original * (fator - 1.0), 2)
 
     dias = (data_ref - cobranca.vencimento).days
     base = original + correcao

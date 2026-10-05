@@ -260,6 +260,27 @@
               enctype="multipart/form-data"
               novalidate>
             <div class="wizard-etapa" data-etapa="1">
+                {% if pre_cadastro is defined and pre_cadastro %}
+                <div class="alert alert-info">
+                    <strong>Pré-cadastro da administração.</strong>
+                    Confirme os dados mascarados, crie a senha de acesso e complete moradores, fotos e veículos.
+                    <ul class="mb-0 mt-2">
+                        {% if mascara.nome %}<li>Pagador: {{ mascara.nome }}</li>{% endif %}
+                        {% if mascara.documento %}<li>CPF/CNPJ: {{ mascara.documento }}</li>{% endif %}
+                        {% if mascara.email %}<li>E-mail: {{ mascara.email }}</li>{% endif %}
+                        {% if mascara.telefone %}<li>Telefone: {{ mascara.telefone }}</li>{% endif %}
+                        {% if not mascara.nome and not mascara.documento %}
+                        <li>A administração ainda não informou o pagador desta unidade.</li>
+                        {% endif %}
+                    </ul>
+                </div>
+                {% if exige_cpf %}
+                <div class="mb-4">
+                    <label class="form-label" for="cpf_confirmacao">Confirme o CPF/CNPJ do pagador</label>
+                    <input class="form-control" id="cpf_confirmacao" name="cpf_confirmacao" inputmode="numeric" required autocomplete="off">
+                </div>
+                {% endif %}
+                {% endif %}
                 <h2 class="h5 mb-1">Senha da Unidade</h2>
                 <p class="text-muted small mb-3">
                     Crie uma senha segura (mínimo 6 caracteres). Ela será necessária para

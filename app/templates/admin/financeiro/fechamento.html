@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Fechamento do Mês{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">🔒 Fechamento do Mês</h1>
+        <p class="text-muted small mb-0">Depois de fechada, a competência não aceita boleto, despesa, repasse nem lançamento avulso.</p>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" target="_blank" href="{{ url_for('admin_financeiro_balancete', competencia=competencia.replace('/', '-')) }}">🖨️ Gerar Balancete / Pasta de Prestação de Contas (PDF/Impressão)</a>
+</div>
+
+<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_fechamento') }}">
+    <div class="col-md-3">
+        <label class="form-label" for="ano">Ano</label>
+        <select class="form-select" id="ano" name="ano" onchange="this.form.submit()">
+            {% for item in anos %}
+            <option value="{{ item }}" {% if item == ano %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</form>
+
+<div class="row g-2 mb-4">
+    {% for mes in meses %}
+    <div class="col-6 col-md-3">
+        <a class="card border-0 shadow-sm h-100 text-decoration-none {% if mes.competencia == competencia %}border border-primary{% endif %}" href="{{ url_for('admin_financeiro_fechamento', ano=ano, competencia=mes.competencia) }}">
+            <div class="card-body">
+                <div class="fw-semibold text-body">{{ mes.rotulo }}</div>
+                <div class="small {% if mes.fechado %}text-secondary{% else %}text-success{% endif %}">
+                    {% if mes.fechado %}🔒 Mês Fechado (Auditado){% else %}🟢 Aberto / Em Movimentação{% endif %}
+                </div>
+            </div>
+        </a>
+    </div>
+    {% endfor %}
+</div>
+
+<h2 class="h5">{{ competencia_rotulo }}</h2>
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="text-muted small">Boletos recebidos</div>
+        <div class="h5 mb-0">{{ apuracao.boletos_recebidos }}</div>
+    </div></div></div>
+    <div class="col-6 col-lg-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="text-muted small">Despesas pagas</div>
+        <div class="h5 mb-0">{{ apuracao.despesas_pagas }}</div>
+    </div></div></div>
+    <div class="col-6 col-lg-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="text-muted small">Despesas vencidas sem baixa</div>
+        <div class="h5 mb-0 {% if apuracao.despesas_vencidas %}text-danger{% endif %}">{{ apuracao.despesas_vencidas }}</div>
+    </div></div></div>
+    <div class="col-6 col-lg-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="text-muted small">Saldo final apurado</div>
+        <div class="h5 mb-0">{{ apuracao.saldo_final|reais }}</div>
+        <div class="small text-muted">Inicial {{ apuracao.saldo_inicial|reais }} · resultado {{ apuracao.resultado|reais }}</div>
+    </div></div></div>
+</div>
+
+{% if registro and registro.fechado %}
+<form method="post" action="{{ url_for('admin_financeiro_fechamento_reabrir') }}" class="card border-0 shadow-sm">
+    <div class="card-body">
+        <input type="hidden" name="competencia" value="{{ competencia }}">
+        <label class="form-label" for="motivo">Justificativa para reabrir</label>
+        <input class="form-control mb-2" id="motivo" name="motivo_reabertura" maxlength="300" required>
+        <button class="btn btn-outline-danger" type="submit">🔓 Reabrir Competência</button>
+    </div>
+</form>
+{% else %}
+<form method="post" action="{{ url_for('admin_financeiro_fechamento_fechar') }}" onsubmit="return confirm('Fechar {{ competencia }} para prestação de contas?');">
+    <input type="hidden" name="competencia" value="{{ competencia }}">
+    <button class="btn btn-dark" type="submit">🔒 Fechar Competência {{ competencia }}</button>
+</form>
+{% if registro and registro.motivo_reabertura %}
+<p class="small text-muted mt-2">Última reabertura: {{ registro.motivo_reabertura }}</p>
+{% endif %}
+{% endif %}
+{% endblock %}

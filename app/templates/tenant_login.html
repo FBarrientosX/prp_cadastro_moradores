@@ -170,7 +170,7 @@
         });
     }
 
-    function aplicarEstadoSenha(exigeSenha) {
+    function aplicarEstadoSenha(exigeSenha, primeiroAcesso) {
         if (!campoSenha || !senhaInput || !btnContinuar) return;
         if (exigeSenha) {
             campoSenha.hidden = false;
@@ -182,7 +182,7 @@
             senhaInput.required = false;
             senhaInput.disabled = true;
             senhaInput.value = "";
-            btnContinuar.textContent = "Continuar";
+            btnContinuar.textContent = primeiroAcesso ? "Fazer 1º acesso" : "Continuar";
         }
     }
 
@@ -214,7 +214,7 @@
                 return resp.json();
             })
             .then((data) => {
-                aplicarEstadoSenha(Boolean(data && data.exige_senha));
+                aplicarEstadoSenha(Boolean(data && data.exige_senha), Boolean(data && data.primeiro_acesso));
             })
             .catch((err) => {
                 if (err.name === "AbortError") return;

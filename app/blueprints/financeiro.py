@@ -9,7 +9,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from flask import Response, abort, flash, redirect, render_template, request, url_for
-from sqlalchemy import func, or_
+from sqlalchemy import String, and_, cast, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app import db
@@ -39,13 +39,16 @@ from app.financeiro_cnab import (
 from app.models import (
     AcordoFinanceiro,
     ArquivoCnabLog,
+    CatalogoIndice,
     CobrancaUnidade,
     Condominio,
     ContaBancaria,
     DespesaPagamento,
     EscopoRepasse,
     FundoFinanceiro,
+    GrupoFracao,
     IndiceEconomico,
+    ModoRateio,
     PlanoConta,
     RateioCondominio,
     Role,
@@ -226,7 +229,7 @@ def _unidades_elegiveis(condominio_id, criterio):
     consulta = Unidade.query.filter(
         Unidade.condominio_id == condominio_id,
         Unidade.eh_setor_interno.is_(False),
-        Unidade.status.in_((StatusUnidade.APROVADA, StatusUnidade.REGISTRADA)),
+        Unidade.criada_pela_admin.is_(True),
     )
     if criterio and criterio != "GERAL":
         consulta = consulta.filter(Unidade.bloco == criterio)
@@ -239,7 +242,7 @@ def _blocos_com_unidades(condominio_id):
         .filter(
             Unidade.condominio_id == condominio_id,
             Unidade.eh_setor_interno.is_(False),
-            Unidade.status.in_((StatusUnidade.APROVADA, StatusUnidade.REGISTRADA)),
+            Unidade.criada_pela_admin.is_(True),
         )
         .distinct()
         .all()
@@ -310,16 +313,56 @@ def gerar_cobrancas_do_rateio(rateio, hoje=None):
     conta = _conta_ativa(rateio.condominio_id)
     if conta is None:
         return False, "Cadastre uma conta bancária ativa antes de gerar as cobranças.", 0
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(rateio.condominio_id, rateio.competencia):
+        return False, mensagem_competencia_fechada(rateio.competencia), 0
+
+    if rateio.grupo_fracao_id:
+        from app.financeiro_fracao import cotas_para_rateio, escalar_composicao
+
+        grupo = db.session.get(GrupoFracao, rateio.grupo_fracao_id)
+        if grupo is None or grupo.condominio_id != rateio.condominio_id:
+            return False, "A fração deste rateio não existe neste condomínio.", 0
+        cotas = cotas_para_rateio(grupo, unidades, valor, rateio.modo_rateio or ModoRateio.VALOR_UNITARIO)
+        if not cotas:
+            return False, "A fração não tem peso positivo entre as unidades deste critério.", 0
+        por_unidade = {unidade.id: unidade for unidade in unidades}
+        alvos = []
+        for cota in cotas:
+            if float(cota["final"]) <= 0:
+                continue
+            unidade = por_unidade.get(cota["unidade_id"])
+            if unidade is None:
+                continue
+            alvos.append((unidade, cota))
+        if not alvos:
+            return False, "Nenhuma unidade ficou com valor a cobrar nesta fração.", 0
+    else:
+        alvos = [(unidade, None) for unidade in unidades]
 
     hoje = hoje or _hoje()
-    numeros = _reservar_nossos_numeros(rateio.condominio_id, len(unidades))
-    for unidade, numero in zip(unidades, numeros):
+    numeros = _reservar_nossos_numeros(rateio.condominio_id, len(alvos))
+    for (unidade, cota), numero in zip(alvos, numeros):
         nome, documento, email, telefone = _pagador_da_unidade(unidade)
+        if not (nome or "").strip():
+            from app.planta_unidades import nome_pagador_publico
+
+            nome = nome_pagador_publico(unidade)
         status = (
             StatusCobranca.A_VENCER
             if rateio.vencimento_padrao >= hoje
             else StatusCobranca.VENCIDA
         )
+        if cota is None:
+            composicao = copy.deepcopy(itens)
+            valor_original = valor
+            observacoes = None
+        else:
+            valor_original = round(float(cota["final"]), 2)
+            composicao = escalar_composicao(itens, valor_original)
+            motivo = (cota.get("motivo") or "").strip()
+            observacoes = motivo[:500] if motivo and float(cota.get("desconto") or 0) > 0 else None
         db.session.add(
             CobrancaUnidade(
                 condominio_id=rateio.condominio_id,
@@ -334,21 +377,26 @@ def gerar_cobrancas_do_rateio(rateio, hoje=None):
                 pagador_documento=documento,
                 pagador_email=email,
                 pagador_telefone=telefone,
-                composicao_json=copy.deepcopy(itens),
-                valor_original=valor,
+                composicao_json=composicao,
+                valor_original=valor_original,
+                valor_desconto=0.0,
                 status=status,
                 remessa_gerada=False,
+                observacoes=observacoes,
             )
         )
     rateio.valor_unitario = valor
-    rateio.total_gerado = round(valor * len(unidades), 2)
+    if rateio.grupo_fracao_id:
+        rateio.total_gerado = round(sum(float(cota["final"]) for _unidade, cota in alvos), 2)
+    else:
+        rateio.total_gerado = round(valor * len(unidades), 2)
     rateio.status = StatusRateio.RATEADO
     try:
         db.session.flush()
     except IntegrityError:
         db.session.rollback()
         return False, "Não foi possível reservar o nosso número. Tente novamente.", 0
-    return True, "", len(unidades)
+    return True, "", len(alvos)
 
 
 def _linhas_do_form(form, planos_por_id, bloco=None):
@@ -450,6 +498,20 @@ def _montar_rateios(condominio_id, form, planos_por_id):
     else:
         criterios = ["GERAL"]
 
+    grupo_bruto = (form.get("grupo_fracao_id") or "").strip()
+    grupo_id = None
+    if grupo_bruto:
+        try:
+            grupo_id = int(grupo_bruto)
+        except ValueError:
+            return None, "Fração inválida."
+        grupo = GrupoFracao.query.filter_by(id=grupo_id, condominio_id=condominio_id).first()
+        if grupo is None:
+            return None, "Fração inválida para este condomínio."
+    modo_rateio = (form.get("modo_rateio") or ModoRateio.VALOR_UNITARIO).strip()
+    if modo_rateio not in (ModoRateio.VALOR_UNITARIO, ModoRateio.DIVIDIR_TOTAL):
+        return None, "Escolha o modo de cálculo do rateio."
+
     titulo_form = form.get("titulo")
     rateios = []
     for criterio in criterios:
@@ -471,6 +533,8 @@ def _montar_rateios(condominio_id, form, planos_por_id):
                 valor_unitario=round(sum(item["valor"] for item in itens), 2),
                 total_gerado=0.0,
                 status=StatusRateio.RASCUNHO,
+                grupo_fracao_id=grupo_id,
+                modo_rateio=modo_rateio,
             )
         )
     for rateio in rateios:
@@ -559,7 +623,30 @@ def _contexto_rateios(condominio_id, condominio, abrir_form=False, form=None):
         "competencia_atual": (form.get("competencia") if form else "") or "",
         "vencimento_atual": (form.get("vencimento") if form else "") or "",
         "titulo_atual": (form.get("titulo") if form else "") or "",
+        "grupos_fracao": GrupoFracao.query.filter_by(condominio_id=condominio_id)
+        .order_by(GrupoFracao.padrao.desc(), GrupoFracao.titulo.asc())
+        .all(),
+        "grupo_atual": _grupo_fracao_atual(condominio_id, form),
+        "modo_rateio_atual": (form.get("modo_rateio") if form else None) or ModoRateio.VALOR_UNITARIO,
     }
+
+
+def _grupo_fracao_atual(condominio_id, form):
+    if form is not None and "grupo_fracao_id" in form:
+        return (form.get("grupo_fracao_id") or "").strip()
+    padrao = (
+        GrupoFracao.query.filter_by(condominio_id=condominio_id, padrao=True)
+        .order_by(GrupoFracao.id.asc())
+        .first()
+    )
+    if padrao is not None:
+        return str(padrao.id)
+    primeiro = (
+        GrupoFracao.query.filter_by(condominio_id=condominio_id)
+        .order_by(GrupoFracao.id.asc())
+        .first()
+    )
+    return str(primeiro.id) if primeiro is not None else ""
 
 
 def _aplicar_principal(conta):
@@ -809,6 +896,12 @@ def admin_financeiro_bancos():
         .order_by(IndiceEconomico.ano_mes.desc(), IndiceEconomico.sigla.asc())
         .all()
     )
+    from app.financeiro_correcao import catalogos_visiveis
+
+    siglas_cobranca = [item.sigla for item in catalogos_visiveis(condominio_id)]
+    atual = (condominio.fin_indice_correcao or "").strip() if condominio else ""
+    if atual and atual not in siglas_cobranca:
+        siglas_cobranca.insert(0, atual)
     return render_template(
         "admin/financeiro/bancos.html",
         condominio_fin=condominio,
@@ -818,6 +911,7 @@ def admin_financeiro_bancos():
         planos=planos,
         indices=indices,
         indices_siglas=_INDICES,
+        indices_cobranca=siglas_cobranca or list(_INDICES),
     )
 
 
@@ -883,9 +977,14 @@ def admin_financeiro_parametros():
     except (TypeError, ValueError):
         flash("Informe multa e juros válidos.", "danger")
         return redirect(url_for("admin_financeiro_bancos", aba="contas"))
+    from app.financeiro_correcao import catalogo_da_sigla
+
     indice = (request.form.get("fin_indice_correcao") or "").strip()
-    if indice not in _INDICES:
+    if indice not in _INDICES and catalogo_da_sigla(indice, condominio_id) is None:
         flash("Escolha o índice de correção.", "danger")
+        return redirect(url_for("admin_financeiro_bancos", aba="contas"))
+    if len(indice) > 20:
+        flash("A sigla do índice passa do tamanho aceito.", "danger")
         return redirect(url_for("admin_financeiro_bancos", aba="contas"))
     condominio.fin_repasses_ativos = _marcado("fin_repasses_ativos")
     condominio.fin_multa_percentual = multa
@@ -1219,6 +1318,11 @@ def _enriquecer_cobrancas(cobrancas, condominio, planos, indices):
                 "boleto": boleto,
                 "vencimento_boleto": vencimento_boleto,
                 "whatsapp": _link_whatsapp(cobranca, boleto, condominio),
+                "tem_whatsapp": _telefone_whatsapp(cobranca.pagador_telefone) is not None
+                and boleto is not None,
+                "notificacoes": _como_lista(cobranca.notificacoes_json),
+                "anexos": _como_lista(cobranca.anexos_json),
+                "criado_rotulo": _formatar_criado(cobranca.criado_em),
             }
         )
     return linhas
@@ -1279,6 +1383,49 @@ def _anexar_observacao(cobranca, texto):
     cobranca.observacoes = f"{atual}\n{texto}".strip() if atual else texto
 
 
+_SITUACOES_JURIDICAS = ("Normal", "Extrajudicial / Jurídica", "Ajuizada")
+_DESTINATARIOS_COBRANCA = ("Proprietário", "Inquilino / Morador")
+_STATUS_LISTA = (
+    ("exceto", "Todas (Exceto Canceladas)"),
+    ("abertas", "Abertas (A Vencer + Vencidas)"),
+    ("a_vencer", "A Vencer"),
+    ("vencidas", "Vencidas"),
+    ("pagas", "Pagas / Quitadas"),
+    ("juridicas", "Jurídicas / Extrajudicial"),
+    ("ajuizadas", "Ajuizadas"),
+    ("acordo", "Em Acordo"),
+    ("canceladas", "Canceladas"),
+)
+_STATUS_LEGADO = {
+    StatusCobranca.A_VENCER: "a_vencer",
+    StatusCobranca.VENCIDA: "vencidas",
+    StatusCobranca.PAGA: "pagas",
+    StatusCobranca.CANCELADA: "canceladas",
+    StatusCobranca.ACORDO: "acordo",
+}
+_FORMAS_LISTA = (
+    ("", "Todas"),
+    ("cnab", "Boleto - Retorno CNAB"),
+    ("manual", "Boleto - Baixa Manual"),
+    ("pix", "PIX"),
+    ("acordo", "Acordo"),
+)
+_ORIGENS_LISTA = (
+    ("", "Todas"),
+    ("rateio", "Rateio Mensal"),
+    ("acordo", "Parcela de Acordo"),
+    ("medidor", "Medidor / Consumo"),
+    ("avulsa", "Avulsa"),
+)
+_TIPOS_DATA = (
+    ("vencimento", "Vencimento"),
+    ("pagamento", "Recebida / Quitada em (Data Pagamento)"),
+    ("extrato", "Data do Extrato (Crédito Bancário)"),
+    ("competencia", "Competência"),
+    ("criado", "Criado / Emitido em"),
+)
+
+
 def _sincronizar_acordo(acordo):
     if acordo is None or acordo.status != StatusAcordo.ATIVO:
         return
@@ -1289,61 +1436,315 @@ def _sincronizar_acordo(acordo):
         acordo.status = StatusAcordo.QUITADO
 
 
-@admin_required
-def admin_financeiro_cobrancas():
+def _agora_rotulo():
+    return datetime.now(_FUSO).strftime("%d/%m/%Y %H:%M")
+
+
+def _formatar_criado(quando):
+    if quando is None:
+        return "—"
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=ZoneInfo("UTC"))
+    return quando.astimezone(_FUSO).strftime("%d/%m/%Y %H:%M")
+
+
+def _rotulo_indice(condominio):
+    sigla = ((condominio.fin_indice_correcao if condominio else "") or "UFIR-RJ").strip()
+    catalogo = CatalogoIndice.query.filter_by(sigla=sigla, condominio_id=None).first()
+    if catalogo is not None and (catalogo.nome_completo or "").strip():
+        return catalogo.nome_completo
+    return sigla
+
+
+def _competencias_entre(inicio, fim):
+    if inicio > fim:
+        inicio, fim = fim, inicio
+    atual = date(inicio.year, inicio.month, 1)
+    limite = date(fim.year, fim.month, 1)
+    chaves = []
+    while atual <= limite and len(chaves) < 120:
+        chaves.append(f"{atual.month:02d}/{atual.year}")
+        if atual.month == 12:
+            atual = date(atual.year + 1, 1, 1)
+        else:
+            atual = date(atual.year, atual.month + 1, 1)
+    return chaves
+
+
+def _normalizar_status_lista(bruto):
+    status = (bruto or "").strip() or "exceto"
+    return _STATUS_LEGADO.get(status, status if status in dict(_STATUS_LISTA) else "exceto")
+
+
+def _filtrar_status(consulta, status):
+    if status == "abertas":
+        return consulta.filter(CobrancaUnidade.status.in_(StatusCobranca.ABERTAS))
+    if status == "a_vencer":
+        return consulta.filter(CobrancaUnidade.status == StatusCobranca.A_VENCER)
+    if status == "vencidas":
+        return consulta.filter(CobrancaUnidade.status == StatusCobranca.VENCIDA)
+    if status == "pagas":
+        return consulta.filter(CobrancaUnidade.status == StatusCobranca.PAGA)
+    if status == "juridicas":
+        return consulta.filter(CobrancaUnidade.situacao_juridica == "Extrajudicial / Jurídica")
+    if status == "ajuizadas":
+        return consulta.filter(CobrancaUnidade.situacao_juridica == "Ajuizada")
+    if status == "acordo":
+        return consulta.filter(CobrancaUnidade.status == StatusCobranca.ACORDO)
+    if status == "canceladas":
+        return consulta.filter(CobrancaUnidade.status == StatusCobranca.CANCELADA)
+    return consulta.filter(CobrancaUnidade.status != StatusCobranca.CANCELADA)
+
+
+def _filtrar_forma(consulta, forma):
+    if forma == "cnab":
+        return consulta.filter(CobrancaUnidade.forma_pagamento == FORMA_RETORNO)
+    if forma == "manual":
+        return consulta.filter(CobrancaUnidade.forma_pagamento == "Boleto - Título")
+    if forma == "pix":
+        return consulta.filter(CobrancaUnidade.forma_pagamento == "PIX")
+    if forma == "acordo":
+        return consulta.filter(CobrancaUnidade.acordo_id.isnot(None))
+    return consulta
+
+
+def _marca_medidor():
+    return cast(CobrancaUnidade.composicao_json, String).like('%"medidor_item_id"%')
+
+
+def _filtrar_origem(consulta, origem):
+    if origem == "rateio":
+        return consulta.filter(
+            CobrancaUnidade.rateio_id.isnot(None),
+            CobrancaUnidade.acordo_id.is_(None),
+        )
+    if origem == "acordo":
+        return consulta.filter(CobrancaUnidade.acordo_id.isnot(None))
+    if origem == "medidor":
+        return consulta.filter(
+            CobrancaUnidade.rateio_id.is_(None),
+            CobrancaUnidade.acordo_id.is_(None),
+            _marca_medidor(),
+        )
+    if origem == "avulsa":
+        return consulta.filter(
+            CobrancaUnidade.rateio_id.is_(None),
+            CobrancaUnidade.acordo_id.is_(None),
+            ~_marca_medidor(),
+        )
+    return consulta
+
+
+def _filtrar_periodo(consulta, tipo_data, inicio, fim):
+    if tipo_data == "competencia" and (inicio or fim):
+        if inicio is None:
+            inicio = fim
+        if fim is None:
+            fim = inicio
+        chaves = _competencias_entre(inicio, fim)
+        if chaves:
+            return consulta.filter(CobrancaUnidade.competencia.in_(chaves))
+        return consulta
+    coluna = {
+        "vencimento": CobrancaUnidade.vencimento,
+        "pagamento": CobrancaUnidade.data_pagamento,
+        "extrato": CobrancaUnidade.data_extrato,
+        "criado": CobrancaUnidade.criado_em,
+    }.get(tipo_data)
+    if coluna is None or (inicio is None and fim is None):
+        return consulta
+    if tipo_data == "criado":
+        if inicio is not None:
+            consulta = consulta.filter(coluna >= datetime.combine(inicio, datetime.min.time()))
+        if fim is not None:
+            consulta = consulta.filter(coluna <= datetime.combine(fim, datetime.max.time()))
+        return consulta
+    if inicio is not None:
+        consulta = consulta.filter(coluna >= inicio)
+    if fim is not None:
+        consulta = consulta.filter(coluna <= fim)
+    return consulta
+
+
+def _unir_unidade(consulta, condominio_id):
+    return consulta.join(Unidade, CobrancaUnidade.unidade_id == Unidade.id).filter(
+        Unidade.condominio_id == condominio_id
+    )
+
+
+def _filtrar_busca(consulta, busca, condominio_id, ja_uniu):
+    bruto = (busca or "").strip()
+    if not bruto:
+        return consulta, False
+    if bruto.startswith("#") and bruto[1:].isdigit():
+        return consulta.filter(CobrancaUnidade.id == int(bruto[1:])), True
+    if bruto.startswith("@") and bruto[1:].strip():
+        termo = f"%{bruto[1:].strip()}%"
+        return consulta.filter(CobrancaUnidade.nosso_numero.ilike(termo)), True
+    if bruto.startswith("*") and bruto[1:].strip().isdigit():
+        return consulta.filter(CobrancaUnidade.acordo_id == int(bruto[1:].strip())), True
+    if not ja_uniu:
+        consulta = _unir_unidade(consulta, condominio_id)
+    termo = f"%{bruto}%"
+    digitos = "".join(caractere for caractere in bruto if caractere.isdigit())
+    clausulas = [
+        CobrancaUnidade.pagador_nome.ilike(termo),
+        CobrancaUnidade.pagador_documento.ilike(termo),
+        CobrancaUnidade.titulo.ilike(termo),
+        CobrancaUnidade.nosso_numero.ilike(termo),
+        Unidade.apartamento.ilike(termo),
+        Unidade.bloco == bruto,
+    ]
+    if "/" in bruto:
+        bloco_txt, apto_txt = bruto.split("/", 1)
+        clausulas.append(
+            and_(
+                Unidade.bloco == bloco_txt.strip(),
+                Unidade.apartamento.ilike(f"%{apto_txt.strip()}%"),
+            )
+        )
+    if digitos and digitos != bruto:
+        clausulas.append(CobrancaUnidade.pagador_documento.ilike(f"%{digitos}%"))
+    return consulta.filter(or_(*clausulas)), False
+
+
+def _registrar_notificacao(cobranca, canal, destinatario, usuario):
+    import json
+
+    lista = list(_como_lista(cobranca.notificacoes_json))
+    lista.append(
+        {
+            "canal": canal,
+            "destinatario": (destinatario or "").strip(),
+            "enviado_em": _agora_rotulo(),
+            "enviado_por": (usuario.username if usuario is not None else "")[:80],
+            "lido_em": "",
+        }
+    )
+    cobranca.notificacoes_json = json.dumps(lista, ensure_ascii=False)
+
+
+def _marcar_leitura(cobranca):
+    import json
+
+    lista = list(_como_lista(cobranca.notificacoes_json))
+    alvo = None
+    for item in reversed(lista):
+        if isinstance(item, dict) and not (item.get("lido_em") or "").strip():
+            alvo = item
+            break
+    if alvo is None:
+        return False
+    alvo["lido_em"] = _agora_rotulo()
+    cobranca.notificacoes_json = json.dumps(lista, ensure_ascii=False)
+    return True
+
+
+def _gravar_lista_json(cobranca, campo, lista):
+    import json
+
+    setattr(cobranca, campo, json.dumps(lista, ensure_ascii=False))
+
+
+def _parametros_cobranca():
+    hoje = _hoje()
+    status = _normalizar_status_lista(request.values.get("status"))
+    competencia_param = request.values.get("competencia")
+    if competencia_param is None:
+        competencia = _competencia_de(hoje)
+    elif str(competencia_param).strip() == "todas":
+        competencia = ""
+    else:
+        competencia = str(competencia_param).strip()
+    bloco = (request.values.get("bloco") or "").strip()
+    if bloco and bloco not in get_blocos():
+        bloco = ""
+    busca = (request.values.get("q") or "").strip()
+    tipo_data = (request.values.get("tipo_data") or "").strip()
+    if tipo_data not in dict(_TIPOS_DATA):
+        tipo_data = ""
+    forma = (request.values.get("forma") or "").strip()
+    if forma not in dict(_FORMAS_LISTA):
+        forma = ""
+    origem = (request.values.get("origem") or "").strip()
+    if origem not in dict(_ORIGENS_LISTA):
+        origem = ""
+    inicio = _parse_data(request.values.get("de"))
+    fim = _parse_data(request.values.get("ate"))
+    totalizar = "1" in request.values.getlist("totalizar")
+    return {
+        "status": status,
+        "competencia": competencia,
+        "bloco": bloco,
+        "q": busca,
+        "tipo_data": tipo_data,
+        "de": inicio.isoformat() if inicio else "",
+        "ate": fim.isoformat() if fim else "",
+        "inicio": inicio,
+        "fim": fim,
+        "forma": forma,
+        "origem": origem,
+        "totalizar": totalizar,
+    }
+
+
+def _manter_cobranca(parametros, competencia=None):
+    manter = {}
+    if competencia is not None:
+        manter["competencia"] = competencia or "todas"
+    elif parametros["competencia"]:
+        manter["competencia"] = parametros["competencia"]
+    else:
+        manter["competencia"] = "todas"
+    for chave in ("status", "bloco", "q", "tipo_data", "de", "ate", "forma", "origem"):
+        if parametros.get(chave):
+            manter[chave] = parametros[chave]
+    if parametros.get("status") == "exceto":
+        manter["status"] = "exceto"
+    if parametros.get("totalizar"):
+        manter["totalizar"] = "1"
+    return manter
+
+
+def _carregar_cobrancas(limite=200):
     condominio_id, condominio = _condominio_atual()
     hoje = _hoje()
     _atualizar_vencidas(condominio_id, hoje)
-    status = (request.args.get("status") or "").strip()
-    competencia_param = request.args.get("competencia")
-    if competencia_param is None:
-        competencia = _competencia_de(hoje)
-    elif competencia_param == "todas":
-        competencia = ""
-    else:
-        competencia = competencia_param.strip()
-    bloco = (request.args.get("bloco") or "").strip()
-    busca = (request.args.get("q") or "").strip()
+    parametros = _parametros_cobranca()
     consulta = CobrancaUnidade.query.filter(CobrancaUnidade.condominio_id == condominio_id)
-    if status in (
-        StatusCobranca.A_VENCER,
-        StatusCobranca.VENCIDA,
-        StatusCobranca.PAGA,
-        StatusCobranca.CANCELADA,
-        StatusCobranca.ACORDO,
-    ):
-        consulta = consulta.filter(CobrancaUnidade.status == status)
-    if competencia:
-        consulta = consulta.filter(CobrancaUnidade.competencia == competencia)
-    precisa_unidade = bool(bloco or busca)
-    if precisa_unidade:
-        consulta = consulta.join(Unidade, CobrancaUnidade.unidade_id == Unidade.id).filter(
-            Unidade.condominio_id == condominio_id
-        )
-    if bloco:
-        consulta = consulta.filter(Unidade.bloco == bloco)
-    if busca:
-        termo = f"%{busca}%"
-        consulta = consulta.filter(
-            or_(
-                CobrancaUnidade.pagador_nome.ilike(termo),
-                CobrancaUnidade.nosso_numero.ilike(termo),
-                CobrancaUnidade.titulo.ilike(termo),
-                Unidade.apartamento.ilike(termo),
-                Unidade.bloco == busca,
-            )
-        )
-    cobrancas = consulta.order_by(
-        CobrancaUnidade.vencimento.desc(), CobrancaUnidade.id.desc()
-    ).all()
+    ja_uniu = False
+    if parametros["bloco"]:
+        consulta = _unir_unidade(consulta, condominio_id)
+        consulta = consulta.filter(Unidade.bloco == parametros["bloco"])
+        ja_uniu = True
+    consulta, ignora_competencia = _filtrar_busca(
+        consulta, parametros["q"], condominio_id, ja_uniu
+    )
+    if parametros["competencia"] and not ignora_competencia:
+        consulta = consulta.filter(CobrancaUnidade.competencia == parametros["competencia"])
+    consulta = _filtrar_periodo(
+        consulta, parametros["tipo_data"], parametros["inicio"], parametros["fim"]
+    )
+    consulta = _filtrar_forma(consulta, parametros["forma"])
+    consulta = _filtrar_origem(consulta, parametros["origem"])
+    base = consulta
+    cobrancas = (
+        _filtrar_status(base, parametros["status"])
+        .order_by(CobrancaUnidade.vencimento.desc(), CobrancaUnidade.id.desc())
+        .all()
+    )
     recebido = 0.0
     a_receber = 0.0
+    canceladas_valor = 0.0
     indices = _indices_do_condominio(condominio)
     planos = {
         plano.id: plano
         for plano in PlanoConta.query.filter_by(condominio_id=condominio_id).all()
     }
     for cobranca in cobrancas:
+        if cobranca.status == StatusCobranca.CANCELADA:
+            canceladas_valor += float(cobranca.valor_original or 0)
+            continue
         encargos = calcular_encargos_atraso(
             cobranca, hoje, condominio=condominio, indices_por_mes=indices
         )
@@ -1355,33 +1756,86 @@ def admin_financeiro_cobrancas():
             StatusCobranca.ACORDO,
         ):
             a_receber += encargos["total_atualizado"]
-    referencia = competencia or _competencia_de(hoje)
-    return render_template(
-        "admin/financeiro/cobrancas.html",
-        condominio_fin=condominio,
-        linhas=_enriquecer_cobrancas(cobrancas[:200], condominio, planos, indices),
-        total_lista=len(cobrancas),
-        recebido=round(recebido, 2),
-        a_receber=round(a_receber, 2),
-        total=round(recebido + a_receber, 2),
-        filtro_status=status,
-        filtro_competencia=competencia,
-        filtro_bloco=bloco,
-        filtro_q=busca,
-        competencia_rotulo=_rotulo_competencia_longo(referencia) if competencia else "Todas as competências",
-        competencia_anterior=_deslocar_competencia(referencia, -1),
-        competencia_proxima=_deslocar_competencia(referencia, 1),
-        blocos=get_blocos(),
-        planos=list(planos.values()),
-        abrir_id=request.args.get("abrir", type=int),
-        statuses=(
-            ("", "Todos"),
-            (StatusCobranca.A_VENCER, "A Vencer"),
-            (StatusCobranca.VENCIDA, "Vencida"),
-            (StatusCobranca.PAGA, "Paga"),
-            (StatusCobranca.ACORDO, "Acordo"),
-            (StatusCobranca.CANCELADA, "Cancelada"),
+    if parametros["status"] == "exceto" and parametros["totalizar"]:
+        extras = base.filter(CobrancaUnidade.status == StatusCobranca.CANCELADA).all()
+        canceladas_valor += sum(float(item.valor_original or 0) for item in extras)
+    recebido = round(recebido, 2)
+    a_receber = round(a_receber, 2)
+    total = round(recebido + a_receber, 2)
+    if parametros["totalizar"]:
+        total = round(total + canceladas_valor, 2)
+    referencia = parametros["competencia"] or _competencia_de(hoje)
+    ativos = 0
+    if parametros["status"] != "exceto":
+        ativos += 1
+    if parametros["tipo_data"] and (parametros["de"] or parametros["ate"]):
+        ativos += 1
+    if parametros["forma"]:
+        ativos += 1
+    if parametros["origem"]:
+        ativos += 1
+    if parametros["totalizar"]:
+        ativos += 1
+    manter = _manter_cobranca(parametros)
+    nav = {chave: valor for chave, valor in manter.items() if chave != "competencia"}
+    return {
+        "condominio_fin": condominio,
+        "linhas": _enriquecer_cobrancas(cobrancas[:limite], condominio, planos, indices),
+        "total_lista": len(cobrancas),
+        "recebido": recebido,
+        "a_receber": a_receber,
+        "total": total,
+        "filtro_status": parametros["status"],
+        "filtro_competencia": parametros["competencia"],
+        "filtro_bloco": parametros["bloco"],
+        "filtro_q": parametros["q"],
+        "filtro_tipo_data": parametros["tipo_data"],
+        "filtro_de": parametros["de"],
+        "filtro_ate": parametros["ate"],
+        "filtro_forma": parametros["forma"],
+        "filtro_origem": parametros["origem"],
+        "filtro_totalizar": parametros["totalizar"],
+        "filtros_ativos": ativos,
+        "manter": manter,
+        "nav": nav,
+        "competencia_rotulo": (
+            _rotulo_competencia_longo(referencia) if parametros["competencia"] else "Todas as competências"
         ),
+        "competencia_anterior": _deslocar_competencia(referencia, -1),
+        "competencia_proxima": _deslocar_competencia(referencia, 1),
+        "blocos": get_blocos(),
+        "planos": list(planos.values()),
+        "abrir_id": request.values.get("abrir", type=int),
+        "statuses": _STATUS_LISTA,
+        "formas": _FORMAS_LISTA,
+        "origens": _ORIGENS_LISTA,
+        "tipos_data": _TIPOS_DATA,
+        "situacoes": _SITUACOES_JURIDICAS,
+        "destinatarios": _DESTINATARIOS_COBRANCA,
+        "indice_rotulo": _rotulo_indice(condominio),
+        "emitido": _agora_rotulo(),
+    }
+
+
+def _voltar_cobranca(cobranca):
+    parametros = _parametros_cobranca()
+    if not (request.form.get("competencia") or "").strip():
+        parametros["competencia"] = cobranca.competencia
+    manter = _manter_cobranca(parametros)
+    manter["abrir"] = cobranca.id
+    return redirect(url_for("admin_financeiro_cobrancas", **manter))
+
+
+@admin_required
+def admin_financeiro_cobrancas():
+    return render_template("admin/financeiro/cobrancas.html", **_carregar_cobrancas(200))
+
+
+@admin_required
+def admin_financeiro_cobrancas_imprimir():
+    return render_template(
+        "admin/financeiro/cobrancas_impressao.html",
+        **_carregar_cobrancas(1000),
     )
 
 
@@ -1400,6 +1854,11 @@ def admin_financeiro_cobranca_avulsa():
     if vencimento is None or len(competencia) != 7 or not titulo:
         flash("Informe título, competência e vencimento.", "danger")
         return redirect(url_for("admin_financeiro_cobrancas"))
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, competencia):
+        flash(mensagem_competencia_fechada(competencia), "warning")
+        return redirect(url_for("admin_financeiro_cobrancas", competencia=competencia))
     planos = {
         plano.id: plano
         for plano in PlanoConta.query.filter_by(condominio_id=condominio_id).all()
@@ -1413,6 +1872,9 @@ def admin_financeiro_cobranca_avulsa():
         flash("Cadastre uma conta bancária ativa antes de lançar a cobrança.", "danger")
         return redirect(url_for("admin_financeiro_cobrancas"))
     nome, documento, email, telefone = _pagador_da_unidade(unidade)
+    destinatario = (request.form.get("destinatario_tipo") or "Proprietário").strip()
+    if destinatario not in _DESTINATARIOS_COBRANCA:
+        destinatario = "Proprietário"
     numero = _reservar_nossos_numeros(condominio_id, 1)[0]
     status = (
         StatusCobranca.A_VENCER if vencimento >= _hoje() else StatusCobranca.VENCIDA
@@ -1434,6 +1896,7 @@ def admin_financeiro_cobranca_avulsa():
             valor_original=round(sum(item["valor"] for item in itens), 2),
             status=status,
             observacoes=(request.form.get("observacoes") or "").strip() or None,
+            destinatario_tipo=destinatario,
             remessa_gerada=False,
         )
     )
@@ -1448,6 +1911,11 @@ def admin_financeiro_cobranca_pagar(cobranca_id):
 
     condominio_id, condominio = _condominio_atual()
     cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    if competencia_esta_fechada(condominio_id, cobranca.competencia):
+        flash(mensagem_competencia_fechada(cobranca.competencia), "warning")
+        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
     if cobranca.status in (StatusCobranca.PAGA, StatusCobranca.CANCELADA):
         flash("Esta cobrança não aceita baixa.", "warning")
         return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
@@ -1456,7 +1924,7 @@ def admin_financeiro_cobranca_pagar(cobranca_id):
         flash("Informe a data do pagamento.", "danger")
         return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
     forma = (request.form.get("forma_pagamento") or "").strip()
-    if forma not in ("Boleto - Título", "PIX"):
+    if forma not in ("Boleto - Título", FORMA_RETORNO, "PIX"):
         flash("Escolha a forma de pagamento.", "danger")
         return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
     indices = _indices_do_condominio(condominio)
@@ -1490,7 +1958,7 @@ def admin_financeiro_cobranca_pagar(cobranca_id):
         _registrar_auditoria(usuario, f"Baixa da cobrança #{cobranca.id}.")
     db.session.commit()
     flash("Baixa registrada.", "success")
-    return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+    return _voltar_cobranca(cobranca)
 
 
 @admin_required
@@ -1501,12 +1969,12 @@ def admin_financeiro_cobranca_email(cobranca_id):
     cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
     if not (cobranca.pagador_email or "").strip():
         flash("Esta cobrança não tem e-mail do pagador.", "warning")
-        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+        return _voltar_cobranca(cobranca)
     pacote = _preparar_documento(cobranca, condominio)
     boleto = pacote["boleto"]
     if boleto is None:
         flash("A linha digitável está disponível para contas Itaú 341.", "warning")
-        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+        return _voltar_cobranca(cobranca)
     try:
         enviar_email_boleto(
             cobranca.pagador_email.strip(),
@@ -1514,13 +1982,162 @@ def admin_financeiro_cobranca_email(cobranca_id):
             cobranca.vencimento.strftime("%d/%m/%Y"),
             _reais(pacote["encargos"]["total_atualizado"]),
             boleto["linha_digitavel"],
-            url_for("financeiro_boleto", cobranca_id=cobranca.id, _external=True),
+            url_for("financeiro_boleto", cobranca_id=cobranca.id, track=1, _external=True),
         )
     except Exception:
         flash("Não foi possível enviar o e-mail agora.", "danger")
-        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+        return _voltar_cobranca(cobranca)
+    _registrar_notificacao(
+        cobranca, "E-mail", cobranca.pagador_email.strip(), get_current_user()
+    )
+    db.session.commit()
     flash("E-mail do boleto enviado.", "success")
-    return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+    return _voltar_cobranca(cobranca)
+
+
+def _pasta_anexos_cobranca():
+    import os
+
+    from flask import current_app
+
+    pasta = current_app.config.get("UPLOAD_FINANCEIRO_FOLDER")
+    if not pasta:
+        pasta = os.path.join(current_app.root_path, "static", "uploads", "financeiro")
+    os.makedirs(pasta, exist_ok=True)
+    return os.path.realpath(pasta)
+
+
+def _salvar_anexo_cobranca(arquivo):
+    import os
+    import uuid
+
+    if arquivo is None or not getattr(arquivo, "filename", ""):
+        raise ValueError("Escolha um arquivo.")
+    extensao = arquivo.filename.rsplit(".", 1)[-1].lower() if "." in arquivo.filename else ""
+    if extensao not in {"pdf", "png", "jpg", "jpeg"}:
+        raise ValueError("Anexe um PDF ou uma imagem (png, jpg).")
+    nome = f"{uuid.uuid4().hex}.{extensao}"
+    arquivo.save(os.path.join(_pasta_anexos_cobranca(), nome))
+    original = os.path.basename(arquivo.filename).replace("\\", "/").split("/")[-1][:120]
+    return nome, original or nome
+
+
+@admin_required
+def admin_financeiro_cobranca_whatsapp(cobranca_id):
+    condominio_id, condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    if cobranca.status == StatusCobranca.CANCELADA:
+        flash("Cobrança cancelada não é enviada.", "warning")
+        return _voltar_cobranca(cobranca)
+    pacote = _preparar_documento(cobranca, condominio)
+    boleto = pacote["boleto"]
+    numero = _telefone_whatsapp(cobranca.pagador_telefone)
+    if not numero or boleto is None:
+        flash("Não há telefone ou linha digitável para o WhatsApp.", "warning")
+        return _voltar_cobranca(cobranca)
+    _registrar_notificacao(
+        cobranca, "WhatsApp", cobranca.pagador_telefone or numero, get_current_user()
+    )
+    db.session.commit()
+    link = url_for("financeiro_boleto", cobranca_id=cobranca.id, track=1, _external=True)
+    nome = condominio.nome if condominio else "Condomínio"
+    texto = (
+        f"Boleto {nome}\n"
+        f"Vencimento: {cobranca.vencimento.strftime('%d/%m/%Y')}\n"
+        f"Linha digitável: {boleto['linha_digitavel']}\n"
+        f"{link}"
+    )
+    return redirect(f"https://wa.me/{numero}?text={quote(texto)}")
+
+
+@admin_required
+def admin_financeiro_cobranca_situacao(cobranca_id):
+    from app.routes import _registrar_auditoria
+
+    condominio_id, _condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    situacao = (request.form.get("situacao_juridica") or "").strip()
+    if situacao not in _SITUACOES_JURIDICAS:
+        flash("Escolha a situação jurídica.", "warning")
+        return _voltar_cobranca(cobranca)
+    cobranca.situacao_juridica = situacao
+    usuario = get_current_user()
+    if usuario is not None:
+        _registrar_auditoria(usuario, f"Situação jurídica da cobrança #{cobranca.id}: {situacao}.")
+    db.session.commit()
+    flash("Situação jurídica atualizada.", "success")
+    return _voltar_cobranca(cobranca)
+
+
+@admin_required
+def admin_financeiro_cobranca_destinatario(cobranca_id):
+    condominio_id, _condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    destinatario = (request.form.get("destinatario_tipo") or "").strip()
+    if destinatario not in _DESTINATARIOS_COBRANCA:
+        flash("Escolha o destinatário.", "warning")
+        return _voltar_cobranca(cobranca)
+    cobranca.destinatario_tipo = destinatario
+    db.session.commit()
+    flash("Destinatário atualizado.", "success")
+    return _voltar_cobranca(cobranca)
+
+
+@admin_required
+def admin_financeiro_cobranca_observacao(cobranca_id):
+    condominio_id, _condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    texto = (request.form.get("observacoes") or "").strip()
+    cobranca.observacoes = texto or None
+    db.session.commit()
+    flash("Observação salva.", "success")
+    return _voltar_cobranca(cobranca)
+
+
+@admin_required
+def admin_financeiro_cobranca_anexo(cobranca_id):
+    condominio_id, _condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    try:
+        arquivo, original = _salvar_anexo_cobranca(request.files.get("arquivo"))
+    except ValueError as erro:
+        flash(str(erro), "warning")
+        return _voltar_cobranca(cobranca)
+    lista = list(_como_lista(cobranca.anexos_json))
+    usuario = get_current_user()
+    lista.append(
+        {
+            "arquivo": arquivo,
+            "nome": original,
+            "enviado_em": _agora_rotulo(),
+            "enviado_por": (usuario.username if usuario is not None else "")[:80],
+        }
+    )
+    _gravar_lista_json(cobranca, "anexos_json", lista)
+    db.session.commit()
+    flash("Documento anexado à cobrança.", "success")
+    return _voltar_cobranca(cobranca)
+
+
+@admin_required
+def admin_financeiro_cobranca_anexo_baixar(cobranca_id, nome):
+    import os
+
+    from flask import send_file
+
+    condominio_id, _condominio = _condominio_atual()
+    cobranca = _cobranca_do_tenant(cobranca_id, condominio_id)
+    seguro = os.path.basename(nome or "")
+    if not seguro or not any(
+        isinstance(item, dict) and item.get("arquivo") == seguro
+        for item in _como_lista(cobranca.anexos_json)
+    ):
+        abort(404)
+    base = _pasta_anexos_cobranca()
+    caminho = os.path.realpath(os.path.join(base, seguro))
+    if os.path.commonpath([base, caminho]) != base or not os.path.isfile(caminho):
+        abort(404)
+    return send_file(caminho, as_attachment=True, download_name=seguro)
 
 
 def _preparar_documento(cobranca, condominio=None):
@@ -1562,7 +2179,7 @@ def _link_whatsapp(cobranca, boleto, condominio):
     numero = _telefone_whatsapp(cobranca.pagador_telefone)
     if not numero or boleto is None:
         return None
-    link = url_for("financeiro_boleto", cobranca_id=cobranca.id, _external=True)
+    link = url_for("financeiro_boleto", cobranca_id=cobranca.id, track=1, _external=True)
     nome = condominio.nome if condominio else "Condomínio"
     texto = (
         f"Boleto {nome}\n"
@@ -1594,6 +2211,15 @@ def financeiro_boleto(cobranca_id):
         return cobranca
     if cobranca.status == StatusCobranca.CANCELADA:
         abort(404)
+    unidade = get_unidade_logada()
+    morador = (
+        unidade is not None
+        and unidade.id == cobranca.unidade_id
+        and unidade.condominio_id == cobranca.condominio_id
+    )
+    if morador or request.args.get("track") == "1":
+        if _marcar_leitura(cobranca):
+            db.session.commit()
     pacote = _preparar_documento(cobranca)
     return render_template(
         "financeiro/boleto.html",
@@ -1768,6 +2394,22 @@ def admin_financeiro_acordo_criar():
                 apartamento=unidade.apartamento,
             )
         )
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+
+    competencias_tocadas = [cobranca.competencia for cobranca in cobrancas]
+    competencias_tocadas.extend(
+        _competencia_de(somar_meses_data(primeiro, indice)) for indice in range(parcelas)
+    )
+    for chave in competencias_tocadas:
+        if competencia_esta_fechada(condominio_id, chave):
+            flash(mensagem_competencia_fechada(chave), "warning")
+            return redirect(
+                url_for(
+                    "admin_financeiro_acordos",
+                    bloco=unidade.bloco,
+                    apartamento=unidade.apartamento,
+                )
+            )
     plano = PlanoConta.query.filter_by(condominio_id=condominio_id, codigo="1.2.2").first()
     if plano is None:
         flash("Cadastre o plano 1.2.2 - Acordos antes de parcelar.", "danger")
@@ -2164,6 +2806,10 @@ def admin_financeiro_conciliacao_retorno():
     )
     db.session.add(log)
     db.session.flush()
+    for item in relatorio.get("liquidados") or []:
+        titulo = db.session.get(CobrancaUnidade, item.get("id"))
+        if titulo is not None and titulo.condominio_id == condominio_id:
+            titulo.retorno_cnab_id = log.id
     usuario = get_current_user()
     if usuario is not None:
         _registrar_auditoria(
@@ -2176,6 +2822,12 @@ def admin_financeiro_conciliacao_retorno():
         f"{len(relatorio['confirmados'])} confirmados.",
         "success",
     )
+    if relatorio.get("fechados"):
+        from app.financeiro_fechamento import mensagem_competencia_fechada
+
+        amostra = db.session.get(CobrancaUnidade, relatorio["fechados"][0])
+        if amostra is not None:
+            flash(mensagem_competencia_fechada(amostra.competencia), "warning")
     return redirect(url_for("admin_financeiro_conciliacao", lote=log.id))
 
 
@@ -2211,9 +2863,19 @@ def admin_financeiro_conciliacao_retorno_teste():
 
 
 def register(app):
+    from app.blueprints.financeiro_correcao import register as register_correcao
+    from app.blueprints.financeiro_fracoes import register as register_fracoes
+    from app.blueprints.financeiro_medidores import register as register_medidores
+    from app.blueprints.financeiro_caixa import register as register_caixa
+    from app.blueprints.financeiro_orcamento import register as register_orcamento
     from app.blueprints.financeiro_pagamentos import register as register_pagamentos
 
     register_pagamentos(app)
+    register_correcao(app)
+    register_fracoes(app)
+    register_medidores(app)
+    register_orcamento(app)
+    register_caixa(app)
 
     app.add_template_filter(_reais, "reais")
     app.add_template_filter(_competencia_extenso, "competencia_extenso")
@@ -2295,10 +2957,52 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/admin/financeiro/cobrancas/imprimir",
+        "admin_financeiro_cobrancas_imprimir",
+        admin_financeiro_cobrancas_imprimir,
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/admin/financeiro/cobrancas/<int:cobranca_id>/email",
         "admin_financeiro_cobranca_email",
         admin_financeiro_cobranca_email,
         methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/whatsapp",
+        "admin_financeiro_cobranca_whatsapp",
+        admin_financeiro_cobranca_whatsapp,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/situacao",
+        "admin_financeiro_cobranca_situacao",
+        admin_financeiro_cobranca_situacao,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/destinatario",
+        "admin_financeiro_cobranca_destinatario",
+        admin_financeiro_cobranca_destinatario,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/observacao",
+        "admin_financeiro_cobranca_observacao",
+        admin_financeiro_cobranca_observacao,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/anexo",
+        "admin_financeiro_cobranca_anexo",
+        admin_financeiro_cobranca_anexo,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/anexos/<nome>",
+        "admin_financeiro_cobranca_anexo_baixar",
+        admin_financeiro_cobranca_anexo_baixar,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/admin/financeiro/acordos",

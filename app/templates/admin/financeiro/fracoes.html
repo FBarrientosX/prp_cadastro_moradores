@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+
+{% block title %}Frações — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Frações &amp; Regras de Rateio</h1>
+        <p class="text-muted mb-0">O peso de cada unidade define quanto ela entra na taxa.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#modalAjuda">❓ Como funciona</button>
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalNova">+ Cadastrar Nova Fração</button>
+    </div>
+</div>
+
+{% if grupos %}
+<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_fracoes') }}">
+    <div class="col-md-6">
+        <label class="form-label" for="grupo">Grupo de fração</label>
+        <select class="form-select" id="grupo" name="grupo" onchange="this.form.submit()">
+            {% for item in grupos %}
+            <option value="{{ item.id }}" {% if grupo and grupo.id == item.id %}selected{% endif %}>
+                {{ item.titulo }}{% if item.padrao %} — padrão{% endif %}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-3">
+        <label class="form-label" for="filtroBloco">Bloco</label>
+        <select class="form-select" id="filtroBloco">
+            <option value="">Todos</option>
+            {% for bloco in blocos %}
+            <option value="{{ bloco }}">Bloco {{ bloco }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-3">
+        <label class="form-label" for="filtroBusca">Busca de unidade</label>
+        <input class="form-control" id="filtroBusca" type="search" placeholder="Bloco, apto ou responsável">
+    </div>
+</form>
+{% else %}
+<div class="alert alert-warning">Este condomínio ainda não tem fração. Cadastre a primeira.</div>
+{% endif %}
+
+{% if grupo %}
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Unidades Participantes (Ativas)</div>
+                <div class="h4 mb-0">{{ resumo.ativas }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Soma Total de Valores/Pesos</div>
+                <div class="h4 mb-0" id="cardSoma">{{ '%.4f'|format(resumo.soma)|replace('.', ',') }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Unidades com Isenção</div>
+                <div class="h4 mb-0">{{ resumo.isencoes }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Unidades Inativas / Fora do Rateio</div>
+                <div class="h4 mb-0">{{ resumo.inativas }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    {% if novas %}
+    <span class="badge bg-danger">Novas Unidades ({{ novas|length }})</span>
+    <form method="post" action="{{ url_for('admin_financeiro_fracao_incluir_novas', grupo_id=grupo.id) }}">
+        <button class="btn btn-danger btn-sm" type="submit">Incluir na fração</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('admin_financeiro_fracao_peso_igual', grupo_id=grupo.id) }}"
+          onsubmit="return confirm('Definir peso 1,0, reativar todas as unidades e voltar o cálculo para peso ou fração?');">
+        <button class="btn btn-outline-primary btn-sm" type="submit">= Definir Peso 1,0 para Todas (Igualitário)</button>
+    </form>
+    <form method="post" action="{{ url_for('admin_financeiro_fracao_ativar_todas', grupo_id=grupo.id) }}"
+          onsubmit="return confirm('Reativar todas as unidades residenciais desta fração?');">
+        <button class="btn btn-outline-success btn-sm" type="submit">✅ Ativar Todas as Unidades (Todos os Blocos)</button>
+    </form>
+    <form class="d-flex gap-2" method="post" action="{{ url_for('admin_financeiro_fracao_ativar_bloco', grupo_id=grupo.id) }}"
+          onsubmit="return confirm('Ativar só o bloco escolhido e desativar os demais nesta fração?');">
+        <select class="form-select form-select-sm" name="bloco" aria-label="Bloco que permanece ativo">
+            {% for bloco in blocos %}
+            <option value="{{ bloco }}">Bloco {{ bloco }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-outline-primary btn-sm text-nowrap" type="submit">🏢 Ativar Apenas Unidades de um Bloco...</button>
+    </form>
+    <form method="post" action="{{ url_for('admin_financeiro_fracao_excluir', grupo_id=grupo.id) }}"
+          onsubmit="return confirm('Excluir esta fração?');">
+        <button class="btn btn-outline-danger btn-sm" type="submit">Excluir fração</button>
+    </form>
+</div>
+
+<form method="post" action="{{ url_for('admin_financeiro_fracao_salvar', grupo_id=grupo.id) }}" id="formFracao">
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body row g-3">
+            <div class="col-md-5">
+                <label class="form-label" for="titulo">Título</label>
+                <input class="form-control" id="titulo" name="titulo" maxlength="160" value="{{ grupo.titulo }}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="modo_calculo">Como ler o valor</label>
+                <select class="form-select" id="modo_calculo" name="modo_calculo">
+                    <option value="VALOR" {% if grupo.modo_calculo == 'VALOR' %}selected{% endif %}>Peso, m² ou fração de matrícula</option>
+                    <option value="PROPORCAO" {% if grupo.modo_calculo == 'PROPORCAO' %}selected{% endif %}>Percentual direto</option>
+                </select>
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+                <div class="form-check">
+                    <input type="hidden" name="padrao" value="0">
+                    <input class="form-check-input" type="checkbox" id="padrao" name="padrao" value="1" {% if grupo.padrao %}checked{% endif %}>
+                    <label class="form-check-label" for="padrao">Fração padrão deste condomínio</label>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="form-check form-switch">
+                    <input type="hidden" name="redistribuir_isencoes" value="0">
+                    <input class="form-check-input" type="checkbox" id="redistribuir_isencoes" name="redistribuir_isencoes" value="1"
+                           {% if grupo.redistribuir_isencoes %}checked{% endif %}>
+                    <label class="form-check-label" for="redistribuir_isencoes">Redistribuir valor de unidades isentas entre as demais unidades</label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-responsive card border-0 shadow-sm">
+        <table class="table table-sm align-middle mb-0" id="tabelaFracao">
+            <thead>
+                <tr>
+                    <th>Bloco / Apto</th>
+                    <th>Responsável</th>
+                    <th>Participa?</th>
+                    <th>Valor / Peso (m² ou Fração)</th>
+                    <th>Proporção / Coeficiente (%)</th>
+                    <th>Isenção</th>
+                    <th>Peso Efetivo Final</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr data-bloco="{{ linha.bloco }}" data-busca="{{ linha.busca }}">
+                    <td class="text-nowrap">{{ linha.bloco }} / {{ linha.apartamento }}</td>
+                    <td>{{ linha.responsavel or '—' }}</td>
+                    <td>
+                        <div class="form-check form-switch mb-0">
+                            <input type="hidden" name="item_{{ linha.item.id }}_ativa" value="0">
+                            <input class="form-check-input js-ativa" type="checkbox" name="item_{{ linha.item.id }}_ativa" value="1"
+                                   {% if linha.item.ativa_no_rateio %}checked{% endif %} aria-label="Participa do rateio">
+                        </div>
+                    </td>
+                    <td style="min-width:8rem">
+                        <input class="form-control form-control-sm js-valor" name="item_{{ linha.item.id }}_valor"
+                               value="{{ '%.6f'|format(linha.item.valor_base)|replace('.', ',') }}" inputmode="decimal">
+                    </td>
+                    <td class="js-coef text-nowrap">{{ '%.6f'|format(linha.coeficiente)|replace('.', ',') }}</td>
+                    <td style="min-width:16rem">
+                        <div class="d-flex flex-wrap gap-1">
+                            <select class="form-select form-select-sm js-isencao" name="item_{{ linha.item.id }}_isencao" style="max-width:9rem">
+                                <option value="NENHUMA" {% if linha.item.isencao_tipo == 'NENHUMA' %}selected{% endif %}>Nenhuma</option>
+                                <option value="PERCENTUAL" {% if linha.item.isencao_tipo == 'PERCENTUAL' %}selected{% endif %}>% Percentual</option>
+                                <option value="VALOR_FIXO" {% if linha.item.isencao_tipo == 'VALOR_FIXO' %}selected{% endif %}>R$ Fixo</option>
+                            </select>
+                            <input class="form-control form-control-sm js-isencao-valor" name="item_{{ linha.item.id }}_isencao_valor"
+                                   value="{{ '%.2f'|format(linha.item.isencao_valor or 0)|replace('.', ',') }}" inputmode="decimal" style="max-width:6rem" aria-label="Valor da isenção">
+                            <input class="form-control form-control-sm" name="item_{{ linha.item.id }}_motivo" maxlength="120"
+                                   value="{{ linha.item.motivo_isencao or '' }}" placeholder="Motivo, ex.: Síndico">
+                        </div>
+                    </td>
+                    <td class="js-efetivo text-nowrap">{{ '%.6f'|format(linha.peso_efetivo)|replace('.', ',') }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-muted">Nenhuma unidade nesta fração.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="mt-3">
+        <button class="btn btn-primary" type="submit">💾 Salvar Alterações da Fração</button>
+    </div>
+</form>
+{% endif %}
+
+<div class="modal fade" id="modalNova" tabindex="-1" aria-labelledby="modalNovaTitulo" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_fracao_nova') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalNovaTitulo">Cadastrar nova fração</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label" for="tituloNova">Título</label>
+                <input class="form-control mb-3" id="tituloNova" name="titulo" maxlength="160" required placeholder="Ex.: Fração por Área (m²)">
+                <label class="form-label" for="modoNova">Como ler o valor</label>
+                <select class="form-select mb-3" id="modoNova" name="modo_calculo">
+                    <option value="VALOR">Peso, m² ou fração de matrícula</option>
+                    <option value="PROPORCAO">Percentual direto</option>
+                </select>
+                <div class="form-check">
+                    <input type="hidden" name="padrao" value="0">
+                    <input class="form-check-input" type="checkbox" id="padraoNova" name="padrao" value="1">
+                    <label class="form-check-label" for="padraoNova">Usar como fração padrão</label>
+                </div>
+                <p class="text-muted small mt-3 mb-0">As unidades residenciais entram agora com peso 1,0. Setores internos ficam de fora.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Criar fração</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalAjuda" tabindex="-1" aria-labelledby="modalAjudaTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalAjudaTitulo">❓ Como funciona</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <ul class="nav nav-tabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="aba-como" data-bs-toggle="tab" data-bs-target="#painel-como" type="button" role="tab">Como funciona</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="aba-glossario" data-bs-toggle="tab" data-bs-target="#painel-glossario" type="button" role="tab">Glossário</button>
+                    </li>
+                </ul>
+                <div class="tab-content pt-3">
+                    <div class="tab-pane fade show active" id="painel-como" role="tabpanel">
+                        <p>Cada fração é uma tabela de pesos. Na hora de gerar o rateio, o administrador escolhe qual tabela usar.</p>
+                        <p><strong>Valor base por unidade.</strong> O número digitado na composição é a cota de quem tem peso 1,0. Peso 2,0 paga o dobro. Uma cobertura com o dobro da área entra com o dobro da taxa.</p>
+                        <p><strong>Ratear despesa total.</strong> O número digitado é o montante da despesa, por exemplo R$ 48.840,32. Cada unidade ativa recebe a sua parte: peso dividido pela soma dos pesos.</p>
+                        <p>Isenção de 100% não gera boleto. Isenção parcial reduz o valor cobrado, e os encargos de atraso incidem sobre o que restou. Com a chave de redistribuição ligada, o que foi isento é diluído entre as outras unidades ativas, e o total arrecadado se mantém. Desligada, só a unidade isenta paga menos.</p>
+                        <p class="mb-0">Unidade inativa sai do cálculo e não recebe esta cobrança. Unidade cadastrada depois da fração aparece no aviso vermelho até alguém incluí-la com um clique.</p>
+                    </div>
+                    <div class="tab-pane fade" id="painel-glossario" role="tabpanel">
+                        <dl class="mb-0">
+                            <dt>Fração ideal</dt>
+                            <dd>A parte da unidade no todo do condomínio. Pode ser a fração da matrícula, a área em m² ou um peso combinado em assembleia.</dd>
+                            <dt>Coeficiente / proporção</dt>
+                            <dd>No modo peso, é o valor da unidade dividido pela soma das unidades ativas, em percentual com seis casas. No modo percentual, o número digitado já é o coeficiente e não é recalculado.</dd>
+                            <dt>Isenção</dt>
+                            <dd>Desconto de uma unidade. Percentual (100% zera a cota; 50% reduz pela metade) ou valor fixo em reais, tirado da cota dela. O motivo fica registrado, por exemplo “Isenção Síndico”.</dd>
+                            <dt>Inativa</dt>
+                            <dd>A unidade não participa desta fração: fica fora da soma e não recebe boleto deste rateio.</dd>
+                            <dt>Redistribuir</dt>
+                            <dd>O valor isento não some do orçamento. Ele é dividido entre as unidades que ainda têm cota, na proporção do que cada uma já pagaria.</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var tabela = document.getElementById("tabelaFracao");
+    if (!tabela) return;
+    var filtroBloco = document.getElementById("filtroBloco");
+    var filtroBusca = document.getElementById("filtroBusca");
+    var modo = document.getElementById("modo_calculo");
+
+    function numero(texto) {
+        var bruto = (texto || "").trim().replace(/\s/g, "");
+        if (!bruto) return 0;
+        if (bruto.indexOf(",") >= 0 && bruto.indexOf(".") >= 0) {
+            bruto = bruto.replace(/\./g, "").replace(",", ".");
+        } else {
+            bruto = bruto.replace(",", ".");
+        }
+        var valor = parseFloat(bruto);
+        return isNaN(valor) || valor < 0 ? 0 : valor;
+    }
+
+    function casas(valor) {
+        return valor.toFixed(6).replace(".", ",");
+    }
+
+    function filtrar() {
+        var bloco = filtroBloco ? filtroBloco.value : "";
+        var busca = filtroBusca ? filtroBusca.value.trim().toLowerCase() : "";
+        tabela.querySelectorAll("tbody tr[data-bloco]").forEach(function (tr) {
+            var okBloco = !bloco || tr.getAttribute("data-bloco") === bloco;
+            var okBusca = !busca || (tr.getAttribute("data-busca") || "").indexOf(busca) >= 0;
+            tr.classList.toggle("d-none", !(okBloco && okBusca));
+        });
+    }
+
+    function recalcular() {
+        var modoValor = !modo || modo.value !== "PROPORCAO";
+        var linhas = Array.prototype.slice.call(tabela.querySelectorAll("tbody tr[data-bloco]"));
+        var soma = 0;
+        linhas.forEach(function (tr) {
+            var ativa = tr.querySelector(".js-ativa");
+            if (ativa && ativa.checked) soma += numero(tr.querySelector(".js-valor").value);
+        });
+        linhas.forEach(function (tr) {
+            var ativa = tr.querySelector(".js-ativa");
+            var participa = !!(ativa && ativa.checked);
+            var base = numero(tr.querySelector(".js-valor").value);
+            var tipo = tr.querySelector(".js-isencao").value;
+            var isencao = numero(tr.querySelector(".js-isencao-valor").value);
+            var coef = 0;
+            var efetivo = 0;
+            if (participa) {
+                coef = modoValor ? (soma > 0 ? base / soma * 100 : 0) : base;
+                efetivo = base;
+                if (tipo === "PERCENTUAL") {
+                    var percentual = Math.min(Math.max(isencao, 0), 100);
+                    efetivo = base * (1 - percentual / 100);
+                }
+            }
+            tr.querySelector(".js-coef").textContent = casas(coef);
+            tr.querySelector(".js-efetivo").textContent = casas(efetivo);
+        });
+    }
+
+    if (filtroBloco) filtroBloco.addEventListener("change", filtrar);
+    if (filtroBusca) filtroBusca.addEventListener("input", filtrar);
+    tabela.addEventListener("input", recalcular);
+    tabela.addEventListener("change", recalcular);
+    if (modo) modo.addEventListener("change", recalcular);
+})();
+</script>
+{% endblock %}

@@ -2,13 +2,20 @@
 
 {% block title %}Cobranças / Boletos — Administração{% endblock %}
 
+{% macro voltar() %}
+{% for chave, valor in nav.items() %}
+<input type="hidden" name="{{ chave }}" value="{{ valor }}">
+{% endfor %}
+<input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
+{% endmacro %}
+
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
     <div>
         <h1 class="h4 mb-1">Cobranças / Boletos</h1>
-        <p class="text-muted mb-0">Clique numa linha para ver a composição, a baixa e a 2ª via.</p>
+        <p class="text-muted mb-0">Clique numa linha para auditar o título, o envio e o recebimento.</p>
     </div>
-    <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalAvulsa">+ Nova Cobrança Avulsa</button>
+    <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalAvulsa">+ Nova Cobrança</button>
 </div>
 
 <div class="row g-3 mb-4">
@@ -31,49 +38,106 @@
     <div class="col-md-4">
         <div class="card border-0 shadow-sm border-start border-4 border-primary">
             <div class="card-body">
-                <div class="text-muted small">Total</div>
+                <div class="text-muted small">Total{% if filtro_totalizar %} (com canceladas){% endif %}</div>
                 <div class="fs-4 fw-semibold">{{ total|reais }}</div>
             </div>
         </div>
     </div>
 </div>
 
-<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_cobrancas') }}">
-    <div class="col-md-4">
-        <label class="form-label">Competência</label>
-        <div class="input-group">
-            <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_cobrancas', competencia=competencia_anterior, status=filtro_status, bloco=filtro_bloco, q=filtro_q) }}" aria-label="Competência anterior">&lt;</a>
-            <span class="input-group-text flex-grow-1 justify-content-center">{{ competencia_rotulo }}</span>
-            <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_cobrancas', competencia=competencia_proxima, status=filtro_status, bloco=filtro_bloco, q=filtro_q) }}" aria-label="Próxima competência">&gt;</a>
+<form class="mb-3" id="filtrosCobrancas" method="get" action="{{ url_for('admin_financeiro_cobrancas') }}">
+    <input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
+    <div class="d-flex flex-wrap align-items-end gap-2">
+        <div>
+            <label class="form-label">Competência</label>
+            <div class="input-group">
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_cobrancas', competencia=competencia_anterior, **nav) }}" aria-label="Competência anterior">&lt;</a>
+                <span class="input-group-text justify-content-center" style="min-width: 9rem;">{{ competencia_rotulo }}</span>
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_cobrancas', competencia=competencia_proxima, **nav) }}" aria-label="Próxima competência">&gt;</a>
+            </div>
         </div>
-        <input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
+        <div style="min-width: 8rem;">
+            <label class="form-label" for="filtroBloco">Bloco</label>
+            <select class="form-select" id="filtroBloco" name="bloco" onchange="this.form.submit()">
+                <option value="">Todos</option>
+                {% for bloco in blocos %}
+                <option value="{{ bloco }}" {% if filtro_bloco == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="flex-grow-1" style="min-width: 16rem;">
+            <label class="form-label" for="filtroQ">Busca</label>
+            <input class="form-control" id="filtroQ" name="q" value="{{ filtro_q }}" placeholder="Nome, CPF, bloco/apto, #código, @nosso número ou *acordo">
+        </div>
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#gavetaFiltros" aria-expanded="{{ 'true' if filtros_ativos else 'false' }}">
+            🌪️ Filtros Avançados{% if filtros_ativos %} <span class="badge text-bg-primary">{{ filtros_ativos }}</span>{% endif %}
+        </button>
+        <a class="btn btn-outline-dark" target="_blank" rel="noopener" href="{{ url_for('admin_financeiro_cobrancas_imprimir', **manter) }}">🖨️ Imprimir Relatório da Lista Filtrada</a>
     </div>
-    <div class="col-sm-4 col-md-2">
-        <label class="form-label" for="filtroBloco">Bloco</label>
-        <select class="form-select" id="filtroBloco" name="bloco">
-            <option value="">Todos</option>
-            {% for bloco in blocos %}
-            <option value="{{ bloco }}" {% if filtro_bloco == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="col-sm-4 col-md-2">
-        <label class="form-label" for="filtroStatus">Status</label>
-        <select class="form-select" id="filtroStatus" name="status">
-            {% for valor, rotulo in statuses %}
-            <option value="{{ valor }}" {% if filtro_status == valor %}selected{% endif %}>{{ rotulo }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="col-sm-6 col-md-3">
-        <label class="form-label" for="filtroQ">Pagador, unidade ou código</label>
-        <input class="form-control" id="filtroQ" name="q" value="{{ filtro_q }}" placeholder="Nome, apto ou nosso número">
-    </div>
-    <div class="col-auto">
-        <button type="submit" class="btn btn-outline-primary">Filtrar</button>
-        {% if filtro_competencia %}
-        <a class="btn btn-link" href="{{ url_for('admin_financeiro_cobrancas', competencia='todas', status=filtro_status, bloco=filtro_bloco, q=filtro_q) }}">Ver todas</a>
-        {% endif %}
+
+    <div class="collapse {% if filtros_ativos %}show{% endif %} mt-3" id="gavetaFiltros">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-lg-4">
+                        <label class="form-label" for="tipoData">Tipo de Data</label>
+                        <select class="form-select" id="tipoData" name="tipo_data">
+                            <option value="">Sem período extra</option>
+                            {% for valor, rotulo in tipos_data %}
+                            <option value="{{ valor }}" {% if filtro_tipo_data == valor %}selected{% endif %}>{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-sm-6 col-lg-2">
+                        <label class="form-label" for="filtroDe">Início (De)</label>
+                        <input class="form-control datepicker" id="filtroDe" name="de" type="text" value="{{ filtro_de }}">
+                    </div>
+                    <div class="col-sm-6 col-lg-2">
+                        <label class="form-label" for="filtroAte">Fim (Até)</label>
+                        <input class="form-control datepicker" id="filtroAte" name="ate" type="text" value="{{ filtro_ate }}">
+                    </div>
+                    <div class="col-lg-4 d-flex align-items-end gap-2">
+                        <button class="btn btn-outline-secondary btn-sm" type="button" data-atalho="hoje">Hoje</button>
+                        <button class="btn btn-outline-secondary btn-sm" type="button" data-atalho="semana">Esta Semana</button>
+                        <button class="btn btn-outline-secondary btn-sm" type="button" data-atalho="mes">Este Mês</button>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="filtroStatus">Status &amp; Jurídico</label>
+                        <select class="form-select" id="filtroStatus" name="status">
+                            {% for valor, rotulo in statuses %}
+                            <option value="{{ valor }}" {% if filtro_status == valor %}selected{% endif %}>{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="filtroForma">Forma de Operação / Transação</label>
+                        <select class="form-select" id="filtroForma" name="forma">
+                            {% for valor, rotulo in formas %}
+                            <option value="{{ valor }}" {% if filtro_forma == valor %}selected{% endif %}>{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="filtroOrigem">Origem da Cobrança</label>
+                        <select class="form-select" id="filtroOrigem" name="origem">
+                            {% for valor, rotulo in origens %}
+                            <option value="{{ valor }}" {% if filtro_origem == valor %}selected{% endif %}>{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <input type="hidden" name="totalizar" value="0">
+                        <div class="form-check form-switch mt-4">
+                            <input class="form-check-input" type="checkbox" id="totalizarCanceladas" name="totalizar" value="1" {% if filtro_totalizar %}checked{% endif %}>
+                            <label class="form-check-label" for="totalizarCanceladas">Totalizar Canceladas? (Não / Sim)</label>
+                        </div>
+                    </div>
+                    <div class="col-md-6 text-md-end">
+                        <button class="btn btn-primary mt-3" type="submit">Aplicar filtros</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </form>
 
@@ -102,77 +166,153 @@
                 <td>{{ c.vencimento.strftime('%d/%m/%Y') }}</td>
                 <td><code>{{ c.nosso_numero }}</code></td>
                 <td class="text-end">{{ linha.encargos.total_atualizado|reais }}</td>
-                <td><span class="badge {{ c.status|badge_status }}">{{ c.status }}</span></td>
+                <td>
+                    <span class="badge {{ c.status|badge_status }}">{{ c.status }}</span>
+                    {% if c.situacao_juridica == 'Ajuizada' %}
+                    <span class="badge text-bg-dark">Ajuizada</span>
+                    {% elif c.situacao_juridica == 'Extrajudicial / Jurídica' %}
+                    <span class="badge text-bg-warning">Jurídica</span>
+                    {% endif %}
+                </td>
             </tr>
             <tr>
                 <td colspan="8" class="p-0 border-0">
                     <div class="collapse {% if abrir_id == c.id %}show{% endif %}" id="detalhe-{{ c.id }}">
                         <div class="border rounded m-2 p-3 bg-light">
                             {% if c.acordo_id %}
-                            <div class="alert alert-warning py-2">Cobrança gerada a partir do Acordo #{{ c.acordo_id }}.</div>
+                            <div class="alert alert-warning py-2">⚠️ Cobrança gerada a partir do Acordo #{{ c.acordo_id }}, portanto a composição principal é bloqueada para edição direta.</div>
                             {% endif %}
                             <div class="row g-3">
                                 <div class="col-lg-7">
-                                    <div class="fw-semibold d-flex flex-wrap align-items-center gap-2">
-                                        <span>#{{ c.id }} · {{ c.titulo }}</span>
-                                        {% if c.status_banco == 'Liquidado Retorno' %}
-                                        <span class="badge text-bg-success">Conciliado CNAB</span>
-                                        {% elif c.status_banco == 'Registrado no Banco' %}
-                                        <span class="badge text-bg-primary">Registrado</span>
-                                        {% elif c.status_banco == 'Remessa Gerada' %}
-                                        <span class="badge text-bg-info">Remessa Gerada</span>
-                                        {% elif c.status_banco == 'Rejeitado' %}
-                                        <span class="badge text-bg-danger">Rejeitado</span>
-                                        {% else %}
-                                        <span class="badge text-bg-light border">Não enviado</span>
-                                        {% endif %}
+                                    <div class="small mb-2">
+                                        <span class="me-3"><span class="text-muted">Código:</span> <strong>#{{ c.id }}</strong></span>
+                                        <span><span class="text-muted">Nosso Número:</span> <code>{{ c.nosso_numero }}</code></span>
                                     </div>
-                                    <div class="small text-muted mb-2">Correção monetária: {{ condominio_fin.fin_indice_correcao or 'UFIR-RJ' }}</div>
-                                    <dl class="row small mb-0">
+                                    <div class="fw-semibold">{{ c.titulo }}</div>
+                                    <div class="small text-muted mb-2">Correção Monetária: {{ indice_rotulo }}</div>
+                                    <dl class="row small mb-2">
                                         <dt class="col-sm-4">Competência</dt>
-                                        <dd class="col-sm-8">{{ c.competencia }}</dd>
+                                        <dd class="col-sm-8">{{ c.competencia|competencia_extenso }}</dd>
                                         <dt class="col-sm-4">Vencimento</dt>
                                         <dd class="col-sm-8">{{ c.vencimento.strftime('%d/%m/%Y') }}</dd>
+                                        {% if c.acordo_id and c.unidade %}
+                                        <dt class="col-sm-4">Originada por acordo</dt>
+                                        <dd class="col-sm-8"><a href="{{ url_for('admin_financeiro_acordos', bloco=c.unidade.bloco, apartamento=c.unidade.apartamento) }}">Acordo #{{ c.acordo_id }}</a></dd>
+                                        {% endif %}
+                                        <dt class="col-sm-4">Status</dt>
+                                        <dd class="col-sm-8">
+                                            <span class="badge {{ c.status|badge_status }}">{{ c.status }}</span>
+                                            <form class="d-inline-flex align-items-center gap-2 ms-2" method="post" action="{{ url_for('admin_financeiro_cobranca_situacao', cobranca_id=c.id) }}">
+                                                {{ voltar() }}
+                                                <label class="visually-hidden" for="situacao-{{ c.id }}">Situação jurídica</label>
+                                                <select class="form-select form-select-sm" id="situacao-{{ c.id }}" name="situacao_juridica" onchange="this.form.submit()">
+                                                    {% for situacao in situacoes %}
+                                                    <option value="{{ situacao }}" {% if c.situacao_juridica == situacao %}selected{% endif %}>{{ situacao }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </form>
+                                        </dd>
                                         <dt class="col-sm-4">Unidade</dt>
-                                        <dd class="col-sm-8">{% if c.unidade %}Bloco {{ c.unidade.bloco }}, Apto {{ c.unidade.apartamento }}{% endif %}</dd>
+                                        <dd class="col-sm-8">{% if c.unidade %}Bloco {{ c.unidade.bloco }} - Apto {{ c.unidade.apartamento }}{% endif %}</dd>
                                         <dt class="col-sm-4">Pagador</dt>
                                         <dd class="col-sm-8">
-                                            {{ c.pagador_nome or "—" }}<br>
-                                            {{ c.pagador_documento or "CPF não informado" }} · {{ c.pagador_email or "sem e-mail" }} · {{ c.pagador_telefone or "sem telefone" }}
+                                            {{ c.pagador_nome or "—" }} — {{ c.pagador_documento or "CPF/CNPJ não informado" }}
+                                            {% if c.pagador_email %} — <a href="mailto:{{ c.pagador_email }}">{{ c.pagador_email }}</a>{% endif %}
+                                            {% if c.pagador_telefone %} — <a href="tel:{{ c.pagador_telefone }}">{{ c.pagador_telefone }}</a>{% endif %}
                                         </dd>
-                                        <dt class="col-sm-4">Observações</dt>
-                                        <dd class="col-sm-8">{{ c.observacoes or "—" }}</dd>
+                                        <dt class="col-sm-4">Destinatário</dt>
+                                        <dd class="col-sm-8">
+                                            <form class="d-inline-flex gap-2" method="post" action="{{ url_for('admin_financeiro_cobranca_destinatario', cobranca_id=c.id) }}">
+                                                {{ voltar() }}
+                                                <label class="visually-hidden" for="destinatario-{{ c.id }}">Destinatário</label>
+                                                <select class="form-select form-select-sm" id="destinatario-{{ c.id }}" name="destinatario_tipo" onchange="this.form.submit()">
+                                                    {% for item in destinatarios %}
+                                                    <option value="{{ item }}" {% if c.destinatario_tipo == item %}selected{% endif %}>{{ 'Inquilino' if item.startswith('Inquilino') else 'Proprietário' }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </form>
+                                        </dd>
                                     </dl>
+                                    <button class="btn btn-link btn-sm px-0" type="button" data-bs-toggle="collapse" data-bs-target="#mais-{{ c.id }}">+ mais detalhes</button>
+                                    <div class="collapse" id="mais-{{ c.id }}">
+                                        <dl class="row small mb-0">
+                                            <dt class="col-sm-4">Criado em</dt>
+                                            <dd class="col-sm-8">{{ linha.criado_rotulo }}</dd>
+                                            <dt class="col-sm-4">Rateio de origem</dt>
+                                            <dd class="col-sm-8">{% if c.rateio_id %}#{{ c.rateio_id }}{% else %}—{% endif %}</dd>
+                                            <dt class="col-sm-4">Remessa CNAB</dt>
+                                            <dd class="col-sm-8">{{ c.status_banco }}{% if c.remessa_lote_id %} · lote #{{ c.remessa_lote_id }}{% endif %}</dd>
+                                            <dt class="col-sm-4">Ocorrência bancária</dt>
+                                            <dd class="col-sm-8">{{ c.codigo_ocorrencia_banco or "—" }}</dd>
+                                        </dl>
+                                    </div>
                                 </div>
                                 <div class="col-lg-5">
-                                    <div class="card border-0 shadow-sm">
+                                    <div class="card border-0 shadow-sm mb-3">
                                         <div class="card-body">
-                                            <div class="text-muted small">Resumo do boleto</div>
-                                            <div class="fs-5 fw-semibold">{{ linha.encargos.total_atualizado|reais }} para {{ linha.vencimento_boleto.strftime('%d/%m/%Y') }}</div>
+                                            <div class="fw-semibold">💵 Boleto: {{ linha.encargos.total_atualizado|reais }} para {{ linha.vencimento_boleto.strftime('%d/%m/%Y') }}</div>
                                             <div class="d-flex flex-wrap gap-2 mt-3">
                                                 {% if c.status not in ['Paga', 'Cancelada'] %}
-                                                <button class="btn btn-sm btn-success" type="button" data-bs-toggle="modal" data-bs-target="#pagar-{{ c.id }}">💵 Pagar / Baixa Manual</button>
+                                                <button class="btn btn-sm btn-success" type="button" data-bs-toggle="modal" data-bs-target="#pagar-{{ c.id }}">Pagar / Baixa</button>
                                                 {% endif %}
                                                 {% if c.status != 'Cancelada' %}
-                                                <a class="btn btn-sm btn-outline-dark" href="{{ url_for('financeiro_boleto', cobranca_id=c.id) }}" target="_blank" rel="noopener">🖨️ Imprimir Boleto</a>
-                                                {% endif %}
-                                                {% if linha.whatsapp and c.status != 'Cancelada' %}
-                                                <a class="btn btn-sm btn-outline-success" href="{{ linha.whatsapp }}" target="_blank" rel="noopener">📲 Enviar por WhatsApp</a>
+                                                <a class="btn btn-sm btn-outline-dark" href="{{ url_for('financeiro_boleto', cobranca_id=c.id) }}" target="_blank" rel="noopener">Imprimir</a>
                                                 {% endif %}
                                                 {% if c.pagador_email and linha.boleto and c.status != 'Cancelada' %}
                                                 <form method="post" action="{{ url_for('admin_financeiro_cobranca_email', cobranca_id=c.id) }}">
-                                                    <button class="btn btn-sm btn-outline-primary" type="submit">✉️ Enviar E-mail</button>
+                                                    {{ voltar() }}
+                                                    <button class="btn btn-sm btn-outline-primary" type="submit">Enviar E-mail</button>
+                                                </form>
+                                                {% endif %}
+                                                {% if linha.tem_whatsapp and c.status != 'Cancelada' %}
+                                                <form method="post" action="{{ url_for('admin_financeiro_cobranca_whatsapp', cobranca_id=c.id) }}" target="_blank">
+                                                    {{ voltar() }}
+                                                    <button class="btn btn-sm btn-outline-success" type="submit">Enviar WhatsApp</button>
                                                 </form>
                                                 {% endif %}
                                             </div>
                                         </div>
                                     </div>
+                                    <div class="mb-2 fw-semibold">✉️ Notificações</div>
+                                    {% for aviso in linha.notificacoes %}
+                                    <div class="alert alert-success py-2 small mb-2">
+                                        Boleto {{ c.pagador_nome or "pagador" }} - {{ aviso.destinatario }} (enviado em {{ aviso.enviado_em }} por {{ aviso.enviado_por or "admin" }}){% if aviso.lido_em %} (visualizado em {{ aviso.lido_em }}){% endif %}
+                                    </div>
+                                    {% else %}
+                                    <p class="text-muted small">Nenhum envio registrado.</p>
+                                    {% endfor %}
                                 </div>
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-lg-6">
+                                    <h2 class="h6">📌 Observações</h2>
+                                    <form method="post" action="{{ url_for('admin_financeiro_cobranca_observacao', cobranca_id=c.id) }}">
+                                        {{ voltar() }}
+                                        <textarea class="form-control form-control-sm mb-2" name="observacoes" rows="3" aria-label="Observações da cobrança {{ c.id }}">{{ c.observacoes or '' }}</textarea>
+                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Salvar observação</button>
+                                    </form>
+                                    <h2 class="h6 mt-3">📎 Documentos</h2>
+                                    <ul class="list-unstyled small mb-2">
+                                        {% for anexo in linha.anexos %}
+                                        <li>
+                                            <a href="{{ url_for('admin_financeiro_cobranca_anexo_baixar', cobranca_id=c.id, nome=anexo.arquivo) }}">{{ anexo.nome }}</a>
+                                            <span class="text-muted">{{ anexo.enviado_em }}</span>
+                                        </li>
+                                        {% else %}
+                                        <li class="text-muted">Nenhum documento anexado.</li>
+                                        {% endfor %}
+                                    </ul>
+                                    <form method="post" enctype="multipart/form-data" action="{{ url_for('admin_financeiro_cobranca_anexo', cobranca_id=c.id) }}">
+                                        {{ voltar() }}
+                                        <div class="input-group input-group-sm">
+                                            <input class="form-control" type="file" name="arquivo" accept=".pdf,.png,.jpg,.jpeg" aria-label="Anexar documento" required>
+                                            <button class="btn btn-outline-primary" type="submit">+ Anexar Documento</button>
+                                        </div>
+                                    </form>
+                                </div>
+                                <div class="col-lg-6">
                                     <h2 class="h6">📘 Composição</h2>
-                                    <table class="table table-sm bg-white mb-0">
+                                    <table class="table table-sm bg-white mb-3">
                                         <thead>
                                             <tr>
                                                 <th>Descrição</th>
@@ -193,7 +333,7 @@
                                             {% if linha.encargos.vencida and linha.encargos.correcao %}
                                             <tr>
                                                 <td>Correção por atraso</td>
-                                                <td>{{ condominio_fin.fin_indice_correcao or 'UFIR-RJ' }}</td>
+                                                <td>{{ indice_rotulo }}</td>
                                                 <td></td>
                                                 <td class="text-end">{{ linha.encargos.correcao|reais }}</td>
                                             </tr>
@@ -216,21 +356,22 @@
                                             {% endif %}
                                         </tbody>
                                     </table>
-                                </div>
-                                <div class="col-lg-6">
-                                    <h2 class="h6">💲 Recebimentos</h2>
+                                    <h2 class="h6">$ Recebimentos</h2>
                                     {% if c.status == 'Paga' %}
-                                    <table class="table table-sm bg-white mb-2">
-                                        <tbody>
-                                            <tr>
-                                                <td>{{ c.forma_pagamento or "Boleto - Título" }}</td>
-                                                <td>{{ c.data_pagamento.strftime('%d/%m/%Y') if c.data_pagamento else "—" }}</td>
-                                                <td>{{ c.data_extrato.strftime('%d/%m/%Y') if c.data_extrato else "—" }}</td>
-                                                <td class="text-end">{{ (c.valor_pago or 0)|reais }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                    <a class="btn btn-success btn-sm" href="{{ url_for('financeiro_recibo', cobranca_id=c.id) }}" target="_blank" rel="noopener">🧾 Recibo</a>
+                                    <div class="bg-white border rounded p-2 small mb-2">
+                                        {{ c.forma_pagamento or "Boleto - Título" }}
+                                        | {{ c.data_pagamento.strftime('%d/%m/%Y') if c.data_pagamento else "—" }}
+                                        - extrato: {{ c.data_extrato.strftime('%d/%m/%Y') if c.data_extrato else "—" }}
+                                        | {{ (c.valor_pago or 0)|reais }}
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <a class="btn btn-success btn-sm" href="{{ url_for('financeiro_recibo', cobranca_id=c.id) }}" target="_blank" rel="noopener">🧾 Recibo</a>
+                                        {% if c.retorno_cnab_id %}
+                                        <a href="{{ url_for('admin_financeiro_conciliacao', lote=c.retorno_cnab_id) }}">Ver conciliação</a>
+                                        {% else %}
+                                        <a href="{{ url_for('admin_financeiro_lancamentos', competencia=c.competencia, titulo=c.id) }}">Ver conciliação</a>
+                                        {% endif %}
+                                    </div>
                                     {% else %}
                                     <p class="text-muted small mb-0">Nenhum recebimento lançado.</p>
                                     {% endif %}
@@ -258,6 +399,7 @@
 <div class="modal fade" id="pagar-{{ c.id }}" tabindex="-1" aria-labelledby="pagarTitulo-{{ c.id }}">
     <div class="modal-dialog">
         <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_cobranca_pagar', cobranca_id=c.id) }}">
+            {{ voltar() }}
             <div class="modal-header">
                 <h2 class="modal-title h5" id="pagarTitulo-{{ c.id }}">Baixa da cobrança #{{ c.id }}</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
@@ -265,17 +407,18 @@
             <div class="modal-body">
                 <p class="small text-muted">Valor atualizado: {{ linha.encargos.total_atualizado|reais }}</p>
                 <div class="mb-3">
-                    <label class="form-label" for="dataPagamento-{{ c.id }}">Data do pagamento</label>
+                    <label class="form-label" for="dataPagamento-{{ c.id }}">Data do Pagamento</label>
                     <input class="form-control datepicker" id="dataPagamento-{{ c.id }}" name="data_pagamento" type="text" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="dataExtrato-{{ c.id }}">Data do extrato</label>
+                    <label class="form-label" for="dataExtrato-{{ c.id }}">Data do Extrato (Crédito em Conta)</label>
                     <input class="form-control datepicker" id="dataExtrato-{{ c.id }}" name="data_extrato" type="text">
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="forma-{{ c.id }}">Forma</label>
+                    <label class="form-label" for="forma-{{ c.id }}">Operação</label>
                     <select class="form-select" id="forma-{{ c.id }}" name="forma_pagamento" required>
                         <option value="Boleto - Título">Boleto - Título</option>
+                        <option value="Boleto - Retorno CNAB">Boleto - Retorno CNAB</option>
                         <option value="PIX">PIX</option>
                     </select>
                 </div>
@@ -298,7 +441,7 @@
     <div class="modal-dialog modal-lg">
         <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_cobranca_avulsa') }}">
             <div class="modal-header">
-                <h2 class="modal-title h5" id="avulsaTitulo">Nova cobrança avulsa</h2>
+                <h2 class="modal-title h5" id="avulsaTitulo">Nova cobrança</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
@@ -326,6 +469,13 @@
                     <div class="col-md-4">
                         <label class="form-label" for="avulsaVencimento">Vencimento</label>
                         <input class="form-control datepicker" id="avulsaVencimento" name="vencimento" type="text" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="avulsaDestinatario">Destinatário</label>
+                        <select class="form-select" id="avulsaDestinatario" name="destinatario_tipo">
+                            <option value="Proprietário">Proprietário</option>
+                            <option value="Inquilino / Morador">Inquilino / Morador</option>
+                        </select>
                     </div>
                     <div class="col-12">
                         <label class="form-label" for="avulsaObs">Observações</label>
@@ -373,6 +523,53 @@ document.querySelectorAll(".datepicker").forEach(function (campo) {
         altFormat: "d/m/Y",
         locale: "pt",
         allowInput: true
+    });
+});
+
+function isoData(data) {
+    var mes = String(data.getMonth() + 1).padStart(2, "0");
+    var dia = String(data.getDate()).padStart(2, "0");
+    return data.getFullYear() + "-" + mes + "-" + dia;
+}
+
+function definirData(campo, valor) {
+    if (campo && campo._flatpickr) {
+        campo._flatpickr.setDate(valor, true);
+        return;
+    }
+    if (campo) {
+        campo.value = valor;
+    }
+}
+
+document.querySelectorAll("[data-atalho]").forEach(function (botao) {
+    botao.addEventListener("click", function () {
+        var hoje = new Date();
+        var inicio = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+        var fim = new Date(inicio);
+        var atalho = botao.getAttribute("data-atalho");
+        var tipo = document.getElementById("tipoData");
+        if (tipo && !tipo.value) {
+            tipo.value = "vencimento";
+        }
+        if (atalho === "semana") {
+            var dia = (hoje.getDay() + 6) % 7;
+            inicio.setDate(inicio.getDate() - dia);
+            fim = new Date(inicio);
+            fim.setDate(inicio.getDate() + 6);
+        } else if (atalho === "mes") {
+            var competencia = (document.querySelector("#filtrosCobrancas [name=competencia]") || {}).value || "";
+            var partes = competencia.split("/");
+            if (partes.length === 2 && partes[0] !== "todas") {
+                inicio = new Date(parseInt(partes[1], 10), parseInt(partes[0], 10) - 1, 1);
+            } else {
+                inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+            }
+            fim = new Date(inicio.getFullYear(), inicio.getMonth() + 1, 0);
+        }
+        definirData(document.getElementById("filtroDe"), isoData(inicio));
+        definirData(document.getElementById("filtroAte"), isoData(fim));
+        document.getElementById("filtrosCobrancas").submit();
     });
 });
 </script>
