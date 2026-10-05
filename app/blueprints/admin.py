@@ -697,6 +697,21 @@ def admin_excluir_unidade(unidade_id):
         )
         return redirect(url_for("admin_index"))
 
+    if unidade.criada_pela_admin and not unidade.eh_setor_interno:
+        from app.planta_unidades import reabrir_primeiro_acesso
+        from app.routes import _registrar_auditoria
+
+        reabrir_primeiro_acesso(unidade, limpar_moradores=True)
+        _registrar_auditoria(
+            usuario, f"Cadastro da unidade #{unidade.id} liberado para novo 1º acesso."
+        )
+        db.session.commit()
+        flash(
+            "Cadastro do morador removido. A unidade continua na planta e o 1º acesso foi liberado.",
+            "success",
+        )
+        return redirect(url_for("admin_cadastros"))
+
     db.session.delete(unidade)
     db.session.commit()
 

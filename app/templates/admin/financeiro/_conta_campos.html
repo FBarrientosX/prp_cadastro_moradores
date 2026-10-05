@@ -1,0 +1,54 @@
+<div class="row g-2">
+    <div class="col-8">
+        <label class="form-label">Banco</label>
+        <input class="form-control" name="nome_banco" value="{{ conta.nome_banco if conta else '' }}" required>
+    </div>
+    <div class="col-4">
+        <label class="form-label">Código</label>
+        <input class="form-control" name="codigo_banco" value="{{ conta.codigo_banco if conta else '' }}" required>
+    </div>
+    <div class="col-8">
+        <label class="form-label">Agência</label>
+        <input class="form-control" name="agencia" value="{{ conta.agencia if conta else '' }}" required>
+    </div>
+    <div class="col-4">
+        <label class="form-label">DV</label>
+        <input class="form-control" name="agencia_dv" value="{{ conta.agencia_dv if conta and conta.agencia_dv else '' }}">
+    </div>
+    <div class="col-8">
+        <label class="form-label">Conta</label>
+        <input class="form-control" name="conta" value="{{ conta.conta if conta else '' }}" required>
+    </div>
+    <div class="col-4">
+        <label class="form-label">DV</label>
+        <input class="form-control" name="conta_dv" value="{{ conta.conta_dv if conta and conta.conta_dv else '' }}">
+    </div>
+    <div class="col-6">
+        <label class="form-label">Carteira</label>
+        <input class="form-control" name="carteira" value="{{ conta.carteira if conta and conta.carteira else '' }}">
+    </div>
+    <div class="col-6">
+        <label class="form-label">Convênio</label>
+        <input class="form-control" name="convenio" value="{{ conta.convenio if conta and conta.convenio else '' }}">
+    </div>
+    <div class="col-6">
+        <label class="form-label">Saldo inicial</label>
+        <input class="form-control" name="saldo_inicial" value="{{ conta.saldo_inicial if conta else '0' }}">
+    </div>
+    <div class="col-6">
+        <label class="form-label">Saldo atual</label>
+        <input class="form-control" name="saldo_atual" value="{{ conta.saldo_atual if conta else '0' }}">
+    </div>
+</div>
+<div class="form-check mt-3">
+    <input type="hidden" name="principal" value="0">
+    <input class="form-check-input" type="checkbox" name="principal" value="1" id="principal{{ conta.id if conta else 'nova' }}"
+           {% if (conta and conta.principal) or (nova and contas|length == 0) %}checked{% endif %}>
+    <label class="form-check-label" for="principal{{ conta.id if conta else 'nova' }}">Conta principal</label>
+</div>
+<div class="form-check">
+    <input type="hidden" name="ativa" value="0">
+    <input class="form-check-input" type="checkbox" name="ativa" value="1" id="ativa{{ conta.id if conta else 'nova' }}"
+           {% if not conta or conta.ativa %}checked{% endif %}>
+    <label class="form-check-label" for="ativa{{ conta.id if conta else 'nova' }}">Ativa</label>
+</div>

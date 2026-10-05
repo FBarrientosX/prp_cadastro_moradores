@@ -389,12 +389,14 @@ def sindico_validar_unidade(unidade_id):
             "Aguarde novo cadastro de moradores.",
         )
     else:
-        db.session.delete(unidade)
+        from app.planta_unidades import reabrir_primeiro_acesso
+
+        reabrir_primeiro_acesso(unidade, limpar_moradores=True)
         _registrar_auditoria(
             usuario,
             f"O síndico {usuario.username} reprovou todos os moradores da unidade "
-            f"'{unidade_identificador}'. Cadastro removido e unidade voltou para "
-            "Aguardando Morador.",
+            f"'{unidade_identificador}'. O 1º acesso foi liberado e a unidade "
+            "permanece na planta.",
         )
 
     db.session.commit()
@@ -430,7 +432,7 @@ def sindico_validar_unidade(unidade_id):
     else:
         flash(
             f"Todos os moradores da unidade {unidade_identificador} foram reprovados. "
-            "A unidade voltou para Aguardando Morador.",
+            "A unidade permanece na planta e o 1º acesso foi liberado.",
             "info",
         )
 

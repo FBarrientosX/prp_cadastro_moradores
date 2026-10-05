@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Boleto {{ cobranca.nosso_numero }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f4f5f7; color: #111; }
+        .folha { max-width: 980px; margin: 1.5rem auto; background: #fff; padding: 1.25rem; }
+        .corte { border-top: 1px dashed #333; margin: 1.25rem 0; }
+        .grade td, .grade th { border: 1px solid #222; font-size: 12px; padding: 4px 6px; vertical-align: top; }
+        .rotulo { font-size: 9px; text-transform: uppercase; color: #444; display: block; }
+        .linha-digitavel { font-family: "Courier New", monospace; font-size: 15px; letter-spacing: 0.4px; font-weight: 700; }
+        .banco { font-size: 22px; font-weight: 700; color: #EC7000; letter-spacing: -0.5px; }
+        .codigo-banco { font-size: 20px; font-weight: 700; border-left: 2px solid #111; border-right: 2px solid #111; padding: 0 8px; }
+        @media print {
+            body { background: #fff; }
+            .no-print { display: none !important; }
+            .folha { margin: 0; max-width: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+<div class="folha">
+    <div class="d-flex justify-content-between align-items-center mb-3 no-print">
+        <button class="btn btn-outline-dark btn-sm" type="button" onclick="window.print()">Imprimir</button>
+        {% if boleto %}
+        <button class="btn btn-outline-primary btn-sm" type="button" id="copiarLinha">📋 Copiar Linha Digitável</button>
+        {% endif %}
+    </div>
+
+    <div class="d-flex justify-content-between">
+        <div>
+            <div class="fw-bold">{{ condominio.razao_social or condominio.nome }}</div>
+            <div class="small">CNPJ {{ condominio.cnpj or "—" }}</div>
+            <div class="small">{{ endereco }}</div>
+        </div>
+        <div class="text-end small">
+            <div>Recibo do pagador</div>
+            <div>Unidade: Bloco {{ cobranca.unidade.bloco }} · {{ cobranca.unidade.apartamento }}</div>
+            <div>{{ cobranca.pagador_nome or "Pagador" }}</div>
+            <div>{{ cobranca.pagador_documento or "" }}</div>
+        </div>
+    </div>
+
+    <h1 class="h6 mt-3">Demonstrativo de composição</h1>
+    <table class="table table-sm grade">
+        <thead>
+            <tr>
+                <th>Descrição</th>
+                <th>Plano</th>
+                <th>Fundo</th>
+                <th class="text-end">Valor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in composicao %}
+            <tr>
+                <td>{{ item.descricao }}</td>
+                <td>{{ item.plano }}</td>
+                <td>{{ item.fundo }}</td>
+                <td class="text-end">{{ item.valor|reais }}</td>
+            </tr>
+            {% endfor %}
+            {% if encargos.vencida and encargos.correcao %}
+            <tr>
+                <td>Correção por atraso</td>
+                <td>{{ condominio.fin_indice_correcao or "UFIR-RJ" }}</td>
+                <td></td>
+                <td class="text-end">{{ encargos.correcao|reais }}</td>
+            </tr>
+            {% endif %}
+            {% if encargos.vencida and encargos.multa %}
+            <tr>
+                <td>Multa por atraso</td>
+                <td></td>
+                <td></td>
+                <td class="text-end">{{ encargos.multa|reais }}</td>
+            </tr>
+            {% endif %}
+            {% if encargos.vencida and encargos.juros %}
+            <tr>
+                <td>Juros por atraso</td>
+                <td></td>
+                <td></td>
+                <td class="text-end">{{ encargos.juros|reais }}</td>
+            </tr>
+            {% endif %}
+            <tr>
+                <td colspan="3" class="text-end fw-bold">Total do documento</td>
+                <td class="text-end fw-bold">{{ encargos.total_atualizado|reais }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="corte"></div>
+
+    {% if boleto %}
+    <div class="d-flex align-items-center gap-3 mb-2">
+        <span class="banco">Itaú</span>
+        <span class="codigo-banco">{{ boleto.codigo_banco }}</span>
+        <span class="linha-digitavel flex-grow-1 text-end" id="linhaDigitavel">{{ boleto.linha_digitavel }}</span>
+    </div>
+    <table class="table table-sm grade mb-2">
+        <tr>
+            <td colspan="5">
+                <span class="rotulo">Local de pagamento</span>
+                Pagável em qualquer banco até o vencimento
+            </td>
+            <td>
+                <span class="rotulo">Vencimento</span>
+                <strong>{{ vencimento_boleto.strftime('%d/%m/%Y') }}</strong>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="5">
+                <span class="rotulo">Beneficiário</span>
+                {{ condominio.razao_social or condominio.nome }} — CNPJ {{ condominio.cnpj or "—" }}
+            </td>
+            <td>
+                <span class="rotulo">Agência / código beneficiário</span>
+                {{ boleto.agencia_codigo }}
+            </td>
+        </tr>
+        <tr>
+            <td>
+                <span class="rotulo">Data do documento</span>
+                {{ cobranca.criado_em.strftime('%d/%m/%Y') if cobranca.criado_em else "" }}
+            </td>
+            <td>
+                <span class="rotulo">Nº do documento</span>
+                {{ cobranca.id }}
+            </td>
+            <td>
+                <span class="rotulo">Espécie</span>
+                DM
+            </td>
+            <td>
+                <span class="rotulo">Aceite</span>
+                N
+            </td>
+            <td>
+                <span class="rotulo">Nosso número</span>
+                {{ boleto.nosso_numero_formatado }}
+            </td>
+            <td>
+                <span class="rotulo">Valor do documento</span>
+                <strong>{{ encargos.total_atualizado|reais }}</strong>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="5" style="height: 88px;">
+                <span class="rotulo">Instruções</span>
+                Após o vencimento cobrar multa de {{ '%.0f'|format(condominio.fin_multa_percentual or 2) }}% e juros de {{ '%.0f'|format(condominio.fin_juros_mensal or 1) }}% a.m.
+                {% if cobranca.observacoes %}<br>{{ cobranca.observacoes }}{% endif %}
+            </td>
+            <td>
+                <span class="rotulo">Carteira</span>
+                {{ boleto.carteira }}
+            </td>
+        </tr>
+        <tr>
+            <td colspan="6">
+                <span class="rotulo">Pagador</span>
+                {{ cobranca.pagador_nome or "—" }}
+                {% if cobranca.pagador_documento %} — {{ cobranca.pagador_documento }}{% endif %}
+                <br>
+                Bloco {{ cobranca.unidade.bloco }}, Apto {{ cobranca.unidade.apartamento }}
+                {% if cobranca.pagador_email %} · {{ cobranca.pagador_email }}{% endif %}
+            </td>
+        </tr>
+    </table>
+    <div class="mt-2">{{ boleto.svg|safe }}</div>
+    {% else %}
+    <p class="mb-0">A ficha de compensação está disponível para a conta Itaú 341. O demonstrativo acima permanece válido.</p>
+    {% endif %}
+</div>
+<script>
+var botao = document.getElementById("copiarLinha");
+if (botao) {
+    botao.addEventListener("click", function () {
+        var texto = document.getElementById("linhaDigitavel").textContent.trim();
+        navigator.clipboard.writeText(texto).then(function () {
+            botao.textContent = "Linha copiada";
+        });
+    });
+}
+</script>
+</body>
+</html>
