@@ -7,6 +7,7 @@
 {% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'admin_ocorrencias_atualizar_status', 'admin_ocorrencias_responder', 'admin_ocorrencias_encaminhar'] %}
 {% set clube_ativo = ep in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics', 'admin_clube_sugerir_parceiro'] %}
 {% set acesso_ativo = ep in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar', 'admin_controle_acesso_sincronizar_faciais'] %}
+{% set financeiro_ativo = ep.startswith('admin_financeiro') %}
 {% set config_portaria_ativo = ep in ['admin_portaria_configuracoes', 'admin_portaria_configuracoes_gerais', 'admin_portaria_guarita_salvar', 'admin_portaria_guarita_toggle', 'admin_portaria_checklist_salvar', 'admin_portaria_checklist_toggle'] %}
 {% set setores_ativo = ep.startswith('admin_setores') %}
 {% set dados_condominio_ativo = ep == 'admin_condominio' %}
@@ -41,6 +42,9 @@
         <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
         {% endif %}
     </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_boletos', 'financeiro_boleto', 'financeiro_recibo'] %}active{% endif %}" href="{{ url_for('morador_boletos') }}">
+        🧾 Boletos / 2ª Via
+    </a>
     <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_clube_vantagens', 'clube_vantagens'] %}active{% endif %}" href="{{ url_for('morador_clube_vantagens') }}">
         <i class="bi bi-gift me-2"></i>Clube de Vantagens
     </a>
@@ -63,7 +67,7 @@
         <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
     </a>
 {% elif sidebar_user and sidebar_user.role == 'sindico' %}
-    {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or ep == 'sindico_mudancas' or ep == 'reservas' %}
+    {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or ep == 'sindico_mudancas' or ep == 'reservas' or ep == 'sindico_financeiro' or ep.startswith('financeiro_repasse') %}
     {% set portaria_aberto = portaria_ativo %}
     {% set config_aberto = setores_ativo or dados_condominio_ativo %}
     {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix) %}
@@ -81,6 +85,9 @@
             {% if reservas_pendentes_count > 0 %}
             <span class="badge bg-danger rounded-pill">{{ reservas_pendentes_count }}</span>
             {% endif %}
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_financeiro' or ep.startswith('financeiro_repasse') %}active{% endif %}" href="{{ url_for('sindico_financeiro') }}">
+            💰 Prestação de Contas / Bloco
         </a>
     {% endcall %}
     {% if sidebar_user.perm_portaria %}
@@ -159,6 +166,32 @@
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if acesso_ativo %}active{% endif %}" href="{{ url_for('admin_controle_acesso') }}">
             <i class="bi bi-key me-2"></i>Controle de Acesso
+        </a>
+    {% endcall %}
+    {% call grupo('financeiro', '💰 Financeiro', 'bi-cash-coin', financeiro_ativo, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro' %}active{% endif %}" href="{{ url_for('admin_financeiro') }}">
+            📊 Dashboard Financeiro
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_bancos' %}active{% endif %}" href="{{ url_for('admin_financeiro_bancos') }}">
+            🏦 Banco / Caixa e Plano de Contas
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_rateios' %}active{% endif %}" href="{{ url_for('admin_financeiro_rateios') }}">
+            <i class="bi bi-pie-chart me-2"></i>Rateios / Taxa Condomínio
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_cobrancas' %}active{% endif %}" href="{{ url_for('admin_financeiro_cobrancas') }}">
+            🧾 Cobranças / Boletos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_acordo') %}active{% endif %}" href="{{ url_for('admin_financeiro_acordos') }}">
+            🤝 Acordos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_concil') %}active{% endif %}" href="{{ url_for('admin_financeiro_conciliacao') }}">
+            🔄 Conciliação &amp; CNAB (Remessa/Retorno)
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_pagamento') %}active{% endif %}" href="{{ url_for('admin_financeiro_pagamentos') }}">
+            💸 Pagamentos / Despesas
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_repasse') or ep.startswith('financeiro_repasse') %}active{% endif %}" href="{{ url_for('admin_financeiro_repasses') }}">
+            🤝 Repasses
         </a>
     {% endcall %}
     {% call grupo('config', 'Configurações', 'bi-gear', config_aberto, menu_prefix) %}

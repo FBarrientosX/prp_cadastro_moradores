@@ -1,0 +1,32 @@
+<div class="row g-2">
+    <div class="col-4">
+        <label class="form-label">Código</label>
+        <input class="form-control" name="codigo" value="{{ plano.codigo if plano is defined and plano else '' }}" required>
+    </div>
+    <div class="col-8">
+        <label class="form-label">Nome</label>
+        <input class="form-control" name="nome" value="{{ plano.nome if plano is defined and plano else '' }}" required>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Tipo</label>
+        <select class="form-select" name="tipo">
+            <option value="RECEITA" {% if plano is defined and plano and plano.tipo == 'RECEITA' %}selected{% endif %}>Receita</option>
+            <option value="DESPESA" {% if plano is defined and plano and plano.tipo == 'DESPESA' %}selected{% endif %}>Despesa</option>
+        </select>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Escopo do repasse</label>
+        <select class="form-select" name="escopo_repasse">
+            <option value="ADM_GERAL" {% if plano is defined and plano and plano.escopo_repasse == 'ADM_GERAL' %}selected{% endif %}>ADM geral</option>
+            <option value="BLOCO" {% if plano is defined and plano and plano.escopo_repasse == 'BLOCO' %}selected{% endif %}>Bloco</option>
+        </select>
+    </div>
+    <div class="col-12 mb-3">
+        <label class="form-label">Fundo</label>
+        <select class="form-select" name="fundo_id" required>
+            {% for fundo in fundos %}
+            <option value="{{ fundo.id }}" {% if plano is defined and plano and plano.fundo_id == fundo.id %}selected{% endif %}>{{ fundo.nome }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>

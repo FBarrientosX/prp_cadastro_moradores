@@ -1153,6 +1153,141 @@ def _seed_dados_condominio_prp():
         db.session.commit()
 
 
+def _garantir_colunas_financeiro():
+    """Colunas financeiras do condomínio. Roda antes de qualquer Condominio.query."""
+    inspetor = inspect(db.engine)
+    if "condominio" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("condominio")}
+    definicoes = (
+        ("fin_repasses_ativos", "BOOLEAN NOT NULL DEFAULT 1"),
+        ("fin_multa_percentual", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("fin_juros_mensal", "FLOAT NOT NULL DEFAULT 1.0"),
+        ("fin_indice_correcao", "VARCHAR(20) NOT NULL DEFAULT 'UFIR-RJ'"),
+    )
+    alterou = False
+    for nome, tipo in definicoes:
+        if nome in colunas:
+            continue
+        db.session.execute(text(f"ALTER TABLE condominio ADD COLUMN {nome} {tipo}"))
+        alterou = True
+    if alterou:
+        db.session.commit()
+    if hasattr(inspetor, "clear_cache"):
+        inspetor.clear_cache()
+    if "cobranca_unidade" not in inspetor.get_table_names():
+        return
+    colunas_cobranca = {
+        coluna["name"] for coluna in inspetor.get_columns("cobranca_unidade")
+    }
+    definicoes_cobranca = (
+        ("remessa_lote_id", "INTEGER"),
+        ("status_banco", "VARCHAR(30) NOT NULL DEFAULT 'Nao Enviado'"),
+        ("codigo_ocorrencia_banco", "VARCHAR(10)"),
+    )
+    alterou_cobranca = False
+    for nome, tipo in definicoes_cobranca:
+        if nome in colunas_cobranca:
+            continue
+        db.session.execute(
+            text(f"ALTER TABLE cobranca_unidade ADD COLUMN {nome} {tipo}")
+        )
+        alterou_cobranca = True
+    if alterou_cobranca:
+        db.session.commit()
+
+
+def _seed_financeiro_prp():
+    """Conta, fundos e plano de contas do PRP, só quando os dois ainda não existem."""
+    from app.models import (
+        Condominio,
+        ContaBancaria,
+        EscopoRepasse,
+        FundoFinanceiro,
+        PlanoConta,
+        TipoPlanoConta,
+    )
+
+    inspetor = inspect(db.engine)
+    tabelas = set(inspetor.get_table_names())
+    if "conta_bancaria" not in tabelas or "plano_conta" not in tabelas:
+        return
+    if "fundo_financeiro" not in tabelas:
+        return
+
+    prp = Condominio.query.filter_by(slug="prp").first()
+    if prp is None:
+        return
+    tem_conta = (
+        ContaBancaria.query.filter_by(condominio_id=prp.id).first() is not None
+    )
+    tem_plano = PlanoConta.query.filter_by(condominio_id=prp.id).first() is not None
+    if tem_conta or tem_plano:
+        return
+
+    conta = ContaBancaria(
+        condominio_id=prp.id,
+        nome_banco="Itaú",
+        codigo_banco="341",
+        agencia="0358",
+        conta="43029",
+        conta_dv="6",
+        carteira="109",
+        saldo_inicial=0.0,
+        saldo_atual=0.0,
+        principal=True,
+        ativa=True,
+    )
+    db.session.add(conta)
+    fundos = {
+        "1": FundoFinanceiro(
+            condominio_id=prp.id, codigo="1", nome="1 - CAIXA"
+        ),
+        "2": FundoFinanceiro(
+            condominio_id=prp.id, codigo="2", nome="2 - FUNDO DE RESERVA"
+        ),
+        "3": FundoFinanceiro(
+            condominio_id=prp.id, codigo="3", nome="3 - FUNDO DE OBRAS"
+        ),
+    }
+    for fundo in fundos.values():
+        db.session.add(fundo)
+    db.session.flush()
+
+    planos = (
+        ("1.1.1.9", "TAXA ADM", TipoPlanoConta.RECEITA, "1", EscopoRepasse.ADM_GERAL),
+        ("1.1.1.10", "TAXA EXTRA", TipoPlanoConta.RECEITA, "3", EscopoRepasse.BLOCO),
+        ("1.1.1.11", "TAXA BLOCO", TipoPlanoConta.RECEITA, "1", EscopoRepasse.BLOCO),
+        ("1.2.2", "Acordos", TipoPlanoConta.RECEITA, "1", EscopoRepasse.ADM_GERAL),
+        (
+            "2.1.1",
+            "Despesas Operacionais / Fornecedores",
+            TipoPlanoConta.DESPESA,
+            "1",
+            EscopoRepasse.ADM_GERAL,
+        ),
+        (
+            "2.1.2",
+            "Repasse / Despesas de Bloco",
+            TipoPlanoConta.DESPESA,
+            "1",
+            EscopoRepasse.BLOCO,
+        ),
+    )
+    for codigo, nome, tipo, fundo_codigo, escopo in planos:
+        db.session.add(
+            PlanoConta(
+                condominio_id=prp.id,
+                codigo=codigo,
+                nome=nome,
+                tipo=tipo,
+                fundo_id=fundos[fundo_codigo].id,
+                escopo_repasse=escopo,
+            )
+        )
+    db.session.commit()
+
+
 def _seed_guaritas_padrao():
     """Garante ao menos uma guarita ativa por condomínio (Portaria Principal)."""
     from app.models import Condominio, Guarita
@@ -1418,6 +1553,7 @@ def create_app(config=None):
     upload_encomendas = os.path.join(app.root_path, "static", "uploads", "encomendas")
     upload_documentos = os.path.join(app.root_path, "static", "uploads", "documentos")
     upload_faciais = os.path.join(app.root_path, "static", "uploads", "faciais")
+    upload_financeiro = os.path.join(app.root_path, "static", "uploads", "financeiro")
 
     secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
     if not secret_key:
@@ -1443,6 +1579,7 @@ def create_app(config=None):
         UPLOAD_ENCOMENDAS_FOLDER=upload_encomendas,
         UPLOAD_DOCUMENTOS_FOLDER=upload_documentos,
         UPLOAD_FACIAIS_FOLDER=upload_faciais,
+        UPLOAD_FINANCEIRO_FOLDER=upload_financeiro,
     )
 
     if config:
@@ -1451,6 +1588,7 @@ def create_app(config=None):
     os.makedirs(app.config["UPLOAD_DOCUMENTOS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_LOGOS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_FACIAIS_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["UPLOAD_FINANCEIRO_FOLDER"], exist_ok=True)
 
     @app.template_global()
     def foto_facial_url(pessoa):
@@ -1595,8 +1733,10 @@ def create_app(config=None):
         _garantir_colunas_agente_acesso()
         _garantir_colunas_livro_servico()
         _garantir_colunas_dados_condominio()
+        _garantir_colunas_financeiro()
         _seed_condominio_transicao()
         _seed_dados_condominio_prp()
+        _seed_financeiro_prp()
         _migrar_sindico_agrupamentos()
         _backfill_blocos_escopo_sindico()
         _garantir_colunas_unidades()

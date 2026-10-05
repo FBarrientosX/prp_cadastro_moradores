@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}Prestação de Contas / Bloco{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Prestação de Contas / Bloco</h1>
+        <p class="text-muted mb-0">Somente os blocos do seu mandato{% if blocos %}: {{ blocos|join(', ') }}{% endif %}.</p>
+    </div>
+    <div class="btn-group" role="group" aria-label="Competência">
+        <a class="btn btn-outline-secondary" href="{{ url_for('sindico_financeiro', competencia=competencia_anterior) }}">&lt;</a>
+        <span class="btn btn-outline-secondary disabled">{{ competencia_rotulo }}</span>
+        <a class="btn btn-outline-secondary" href="{{ url_for('sindico_financeiro', competencia=competencia_proxima) }}">&gt;</a>
+    </div>
+</div>
+
+{% if condominio_fin and not condominio_fin.fin_repasses_ativos %}
+<div class="alert alert-light border">O condomínio está em caixa único. Os repasses por bloco estão desligados. A lista abaixo mostra só os boletos e as despesas do seu bloco.</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Taxa do bloco arrecadada</div>
+                <div class="fs-5 fw-semibold">{{ apuracao.destinado_blocos|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Adimplência</div>
+                <div class="fs-5 fw-semibold">{{ em_dia }} em dia</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Inadimplência</div>
+                <div class="fs-5 fw-semibold">{{ "%.1f"|format(inadimplencia)|replace(".", ",") }}%</div>
+                <div class="small text-muted">{{ em_aberto }} em aberto</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white">Unidades</div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Bloco</th>
+                    <th>Apto</th>
+                    <th>Boleto do mês</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas_unidades %}
+                <tr>
+                    <td>{{ linha.unidade.bloco }}</td>
+                    <td>{{ linha.unidade.apartamento }}</td>
+                    <td>
+                        {% if linha.situacao == 'Em dia' %}
+                        <span class="badge text-bg-success">Em dia</span>
+                        {% elif linha.situacao == 'Em aberto' %}
+                        <span class="badge text-bg-danger">Em aberto</span>
+                        {% else %}
+                        <span class="badge text-bg-secondary">Sem boleto</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="3" class="text-muted">Nenhuma unidade no seu escopo.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white">Despesas do bloco</div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Título</th>
+                    <th>Bloco</th>
+                    <th>Status</th>
+                    <th class="text-end">Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in despesas %}
+                <tr>
+                    <td>{{ linha.despesa.titulo }}</td>
+                    <td>{{ linha.despesa.bloco_alocado }}</td>
+                    <td>{{ linha.despesa.status }}</td>
+                    <td class="text-end">{{ linha.a_pagar|reais }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-muted">Nenhuma despesa nesta competência.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">Repasses recebidos</div>
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Bloco</th>
+                    <th>Competência</th>
+                    <th>Data</th>
+                    <th class="text-end">Valor</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in repasses %}
+                <tr>
+                    <td>{{ item.bloco }}</td>
+                    <td>{{ item.competencia }}</td>
+                    <td>{{ item.data_repasse.strftime('%d/%m/%Y') if item.data_repasse else '—' }}</td>
+                    <td class="text-end">{{ item.valor_repassado|reais }}</td>
+                    <td class="text-end">
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('financeiro_repasse_demonstrativo', repasse_id=item.id) }}" target="_blank" rel="noopener">Demonstrativo</a>
+                        {% if item.comprovante_anexo %}
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('financeiro_repasse_comprovante', repasse_id=item.id) }}">Comprovante</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted">Nenhum repasse recebido.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -147,6 +147,12 @@ class Condominio(db.Model):
     logo_filename = db.Column(db.String(255), nullable=True)
     regimento_filename = db.Column(db.String(255), nullable=True)
     convencao_filename = db.Column(db.String(255), nullable=True)
+    # True: receitas de ADM e de bloco ficam separadas para repasse.
+    # False: o condomínio opera em caixa único.
+    fin_repasses_ativos = db.Column(db.Boolean, nullable=False, default=True)
+    fin_multa_percentual = db.Column(db.Float, nullable=False, default=2.0)
+    fin_juros_mensal = db.Column(db.Float, nullable=False, default=1.0)
+    fin_indice_correcao = db.Column(db.String(20), nullable=False, default="UFIR-RJ")
 
     configuracao = db.relationship(
         "ConfiguracaoCondominio",
@@ -788,6 +794,456 @@ class EquipamentoAcesso(db.Model):
 
     def __repr__(self):
         return f"<EquipamentoAcesso {self.nome}>"
+
+
+class StatusRateio:
+    RASCUNHO = "Rascunho"
+    RATEADO = "Rateado"
+
+
+class StatusCobranca:
+    A_VENCER = "A Vencer"
+    VENCIDA = "Vencida"
+    PAGA = "Paga"
+    CANCELADA = "Cancelada"
+    ACORDO = "Acordo"
+    ABERTAS = (A_VENCER, VENCIDA)
+    CONSIDERADAS = (A_VENCER, VENCIDA, PAGA)
+
+
+class StatusBanco:
+    NAO_ENVIADO = "Nao Enviado"
+    REMESSA_GERADA = "Remessa Gerada"
+    REGISTRADO = "Registrado no Banco"
+    LIQUIDADO = "Liquidado Retorno"
+    REJEITADO = "Rejeitado"
+
+
+class TipoPlanoConta:
+    RECEITA = "RECEITA"
+    DESPESA = "DESPESA"
+    CHOICES = (RECEITA, DESPESA)
+
+
+class EscopoRepasse:
+    ADM_GERAL = "ADM_GERAL"
+    BLOCO = "BLOCO"
+    CHOICES = (ADM_GERAL, BLOCO)
+
+
+class ContaBancaria(db.Model):
+    """Conta de caixa ou banco usada na cobrança do condomínio."""
+
+    __tablename__ = "conta_bancaria"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome_banco = db.Column(db.String(80), nullable=False)
+    codigo_banco = db.Column(db.String(10), nullable=False)
+    agencia = db.Column(db.String(10), nullable=False)
+    agencia_dv = db.Column(db.String(2), nullable=True)
+    conta = db.Column(db.String(20), nullable=False)
+    conta_dv = db.Column(db.String(2), nullable=True)
+    carteira = db.Column(db.String(10), nullable=True)
+    convenio = db.Column(db.String(20), nullable=True)
+    saldo_inicial = db.Column(db.Float, nullable=False, default=0.0)
+    saldo_atual = db.Column(db.Float, nullable=False, default=0.0)
+    principal = db.Column(db.Boolean, nullable=False, default=True)
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("contas_bancarias", lazy="dynamic"),
+    )
+
+    @property
+    def rotulo_agencia(self):
+        if self.agencia_dv:
+            return f"{self.agencia}-{self.agencia_dv}"
+        return self.agencia or ""
+
+    @property
+    def rotulo_conta(self):
+        if self.conta_dv:
+            return f"{self.conta}-{self.conta_dv}"
+        return self.conta or ""
+
+    def __repr__(self):
+        return f"<ContaBancaria {self.nome_banco} {self.conta}>"
+
+
+class FundoFinanceiro(db.Model):
+    """Caixa, fundo de reserva, fundo de obras e demais bolsos do condomínio."""
+
+    __tablename__ = "fundo_financeiro"
+    __table_args__ = (
+        db.UniqueConstraint("condominio_id", "codigo", name="uq_fundo_codigo_tenant"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    codigo = db.Column(db.String(10), nullable=False)
+    nome = db.Column(db.String(120), nullable=False)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("fundos_financeiros", lazy="dynamic"),
+    )
+    planos = db.relationship("PlanoConta", back_populates="fundo", lazy="dynamic")
+
+    def __repr__(self):
+        return f"<FundoFinanceiro {self.nome}>"
+
+
+class PlanoConta(db.Model):
+    """Plano de contas. O escopo diz se o valor fica na ADM ou vai para o bloco."""
+
+    __tablename__ = "plano_conta"
+    __table_args__ = (
+        db.UniqueConstraint("condominio_id", "codigo", name="uq_plano_codigo_tenant"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    codigo = db.Column(db.String(20), nullable=False)
+    nome = db.Column(db.String(120), nullable=False)
+    tipo = db.Column(db.String(10), nullable=False)
+    fundo_id = db.Column(
+        db.Integer, db.ForeignKey("fundo_financeiro.id"), nullable=False, index=True
+    )
+    escopo_repasse = db.Column(db.String(20), nullable=False, default=EscopoRepasse.ADM_GERAL)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("planos_conta", lazy="dynamic"),
+    )
+    fundo = db.relationship("FundoFinanceiro", back_populates="planos")
+
+    def __repr__(self):
+        return f"<PlanoConta {self.codigo} {self.nome}>"
+
+
+class IndiceEconomico(db.Model):
+    """Fator mensal de correção (UFIR-RJ, IGP-M, IPCA) por competência."""
+
+    __tablename__ = "indice_economico"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "condominio_id", "sigla", "ano_mes", name="uq_indice_mes_tenant"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    sigla = db.Column(db.String(20), nullable=False)
+    ano_mes = db.Column(db.String(7), nullable=False)
+    fator_mensal = db.Column(db.Float, nullable=False, default=0.0)
+    valor_referencia = db.Column(db.Float, nullable=True)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("indices_economicos", lazy="dynamic"),
+    )
+
+    def __repr__(self):
+        return f"<IndiceEconomico {self.sigla} {self.ano_mes}>"
+
+
+class RateioCondominio(db.Model):
+    """Lote de taxa mensal: uma composição por bloco ou pelo condomínio geral."""
+
+    __tablename__ = "rateio_condominio"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    titulo = db.Column(db.String(200), nullable=False)
+    competencia = db.Column(db.String(7), nullable=False)
+    vencimento_padrao = db.Column(db.Date, nullable=False)
+    criterio_bloco = db.Column(db.String(20), nullable=False, default="GERAL")
+    itens_json = db.Column(db.JSON, nullable=False)
+    valor_unitario = db.Column(db.Float, nullable=False, default=0.0)
+    total_gerado = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), nullable=False, default=StatusRateio.RASCUNHO)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("rateios", lazy="dynamic"),
+    )
+    cobrancas = db.relationship("CobrancaUnidade", back_populates="rateio", lazy="dynamic")
+
+    def __repr__(self):
+        return f"<RateioCondominio {self.titulo}>"
+
+
+class StatusAcordo:
+    ATIVO = "Ativo"
+    QUITADO = "Quitado"
+    CANCELADO = "Cancelado"
+
+
+class AcordoFinanceiro(db.Model):
+    """Parcelamento de cobranças em aberto. As parcelas nascem como novos títulos."""
+
+    __tablename__ = "acordo_financeiro"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    cobrancas_originais_ids = db.Column(db.JSON, nullable=False)
+    indice_correcao = db.Column(db.String(40), nullable=False, default="UFIR-RJ")
+    valor_principal = db.Column(db.Float, nullable=False, default=0.0)
+    valor_correcao = db.Column(db.Float, nullable=False, default=0.0)
+    valor_juros = db.Column(db.Float, nullable=False, default=0.0)
+    valor_multa = db.Column(db.Float, nullable=False, default=0.0)
+    valor_judiciais = db.Column(db.Float, nullable=False, default=0.0)
+    valor_desconto = db.Column(db.Float, nullable=False, default=0.0)
+    valor_total_acordo = db.Column(db.Float, nullable=False, default=0.0)
+    qtd_parcelas = db.Column(db.Integer, nullable=False, default=1)
+    primeiro_vencimento = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default=StatusAcordo.ATIVO)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("acordos_financeiros", lazy="dynamic"),
+    )
+    unidade = db.relationship(
+        "Unidade",
+        backref=db.backref("acordos_financeiros", lazy="dynamic"),
+    )
+
+    def __repr__(self):
+        return f"<AcordoFinanceiro {self.id}>"
+
+
+class CobrancaUnidade(db.Model):
+    """Título / boleto de uma unidade. acordo_id aponta para AcordoFinanceiro."""
+
+    __tablename__ = "cobranca_unidade"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "condominio_id", "nosso_numero", name="uq_cobranca_nosso_numero_tenant"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    conta_bancaria_id = db.Column(
+        db.Integer, db.ForeignKey("conta_bancaria.id"), nullable=False, index=True
+    )
+    rateio_id = db.Column(
+        db.Integer, db.ForeignKey("rateio_condominio.id"), nullable=True, index=True
+    )
+    acordo_id = db.Column(db.Integer, nullable=True)
+    competencia = db.Column(db.String(7), nullable=False)
+    titulo = db.Column(db.String(200), nullable=False)
+    nosso_numero = db.Column(db.String(20), nullable=False)
+    vencimento = db.Column(db.Date, nullable=False, index=True)
+    pagador_nome = db.Column(db.String(200), nullable=True)
+    pagador_documento = db.Column(db.String(20), nullable=True)
+    pagador_email = db.Column(db.String(120), nullable=True)
+    pagador_telefone = db.Column(db.String(20), nullable=True)
+    composicao_json = db.Column(db.JSON, nullable=False)
+    valor_original = db.Column(db.Float, nullable=False, default=0.0)
+    valor_multa = db.Column(db.Float, nullable=False, default=0.0)
+    valor_juros = db.Column(db.Float, nullable=False, default=0.0)
+    valor_correcao = db.Column(db.Float, nullable=False, default=0.0)
+    valor_outros_acrescimos = db.Column(db.Float, nullable=False, default=0.0)
+    valor_desconto = db.Column(db.Float, nullable=False, default=0.0)
+    valor_pago = db.Column(db.Float, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default=StatusCobranca.A_VENCER, index=True)
+    data_pagamento = db.Column(db.Date, nullable=True)
+    data_extrato = db.Column(db.Date, nullable=True)
+    forma_pagamento = db.Column(db.String(40), nullable=True)
+    remessa_gerada = db.Column(db.Boolean, nullable=False, default=False)
+    remessa_lote_id = db.Column(db.Integer, nullable=True, index=True)
+    status_banco = db.Column(
+        db.String(30), nullable=False, default=StatusBanco.NAO_ENVIADO
+    )
+    codigo_ocorrencia_banco = db.Column(db.String(10), nullable=True)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship(
+        "Condominio",
+        backref=db.backref("cobrancas_unidade", lazy="dynamic"),
+    )
+    unidade = db.relationship("Unidade", backref=db.backref("cobrancas", lazy="dynamic"))
+    conta_bancaria = db.relationship("ContaBancaria")
+    rateio = db.relationship("RateioCondominio", back_populates="cobrancas")
+
+    def __repr__(self):
+        return f"<CobrancaUnidade {self.nosso_numero}>"
+
+
+class ArquivoCnabLog(db.Model):
+    """Remessa ou retorno CNAB de uma conta do condomínio."""
+
+    __tablename__ = "arquivo_cnab_log"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    conta_bancaria_id = db.Column(
+        db.Integer, db.ForeignKey("conta_bancaria.id"), nullable=False, index=True
+    )
+    tipo = db.Column(db.String(10), nullable=False)
+    layout = db.Column(db.String(30), nullable=False, default="CNAB400_ITAU")
+    nome_arquivo = db.Column(db.String(80), nullable=False)
+    sequencial = db.Column(db.Integer, nullable=False, default=1)
+    qtd_titulos = db.Column(db.Integer, nullable=False, default=0)
+    valor_total = db.Column(db.Float, nullable=False, default=0.0)
+    qtd_liquidados = db.Column(db.Integer, nullable=False, default=0)
+    qtd_confirmados = db.Column(db.Integer, nullable=False, default=0)
+    qtd_nao_encontrados = db.Column(db.Integer, nullable=False, default=0)
+    conteudo_texto = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    usuario_nome = db.Column(db.String(80), nullable=False, default="")
+
+    condominio = db.relationship("Condominio")
+    conta_bancaria = db.relationship("ContaBancaria")
+
+    def __repr__(self):
+        return f"<ArquivoCnabLog {self.tipo} {self.nome_arquivo}>"
+
+
+class StatusDespesa:
+    A_VENCER = "A Vencer"
+    VENCIDO = "Vencido"
+    PAGO = "Pago"
+    CANCELADO = "Cancelado"
+    ABERTAS = (A_VENCER, VENCIDO)
+
+
+class StatusRepasse:
+    REALIZADO = "Realizado"
+    CANCELADO = "Cancelado"
+
+
+class Fornecedor(db.Model):
+    """Credor do condomínio. O nome também fica copiado na despesa."""
+
+    __tablename__ = "fornecedor"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(200), nullable=False)
+    documento = db.Column(db.String(20), nullable=True)
+    chave_pix = db.Column(db.String(120), nullable=True)
+    telefone = db.Column(db.String(20), nullable=True)
+    email = db.Column(db.String(120), nullable=True)
+    categoria_padrao = db.Column(db.String(80), nullable=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship("Condominio")
+
+    def __repr__(self):
+        return f"<Fornecedor {self.id}>"
+
+
+class DespesaPagamento(db.Model):
+    """Conta a pagar. bloco_alocado GERAL é da administração; senão é do bloco."""
+
+    __tablename__ = "despesa_pagamento"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    fornecedor_id = db.Column(
+        db.Integer, db.ForeignKey("fornecedor.id"), nullable=True, index=True
+    )
+    fornecedor_nome = db.Column(db.String(200), nullable=True)
+    conta_bancaria_id = db.Column(
+        db.Integer, db.ForeignKey("conta_bancaria.id"), nullable=False, index=True
+    )
+    plano_conta_id = db.Column(
+        db.Integer, db.ForeignKey("plano_conta.id"), nullable=False, index=True
+    )
+    fundo_id = db.Column(
+        db.Integer, db.ForeignKey("fundo_financeiro.id"), nullable=False, index=True
+    )
+    titulo = db.Column(db.String(200), nullable=False)
+    competencia = db.Column(db.String(7), nullable=False, index=True)
+    vencimento = db.Column(db.Date, nullable=False, index=True)
+    data_pagamento = db.Column(db.Date, nullable=True)
+    data_extrato = db.Column(db.Date, nullable=True)
+    operacao = db.Column(db.String(40), nullable=False, default="PIX")
+    bloco_alocado = db.Column(db.String(20), nullable=False, default="GERAL")
+    valor_original = db.Column(db.Float, nullable=False, default=0.0)
+    valor_impostos = db.Column(db.Float, nullable=False, default=0.0)
+    valor_descontos = db.Column(db.Float, nullable=False, default=0.0)
+    valor_acrescimos = db.Column(db.Float, nullable=False, default=0.0)
+    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), nullable=False, default=StatusDespesa.A_VENCER, index=True)
+    arquivo_anexo = db.Column(db.String(120), nullable=True)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    fornecedor = db.relationship("Fornecedor")
+    conta_bancaria = db.relationship("ContaBancaria")
+    plano_conta = db.relationship("PlanoConta")
+    fundo = db.relationship("FundoFinanceiro")
+
+    def __repr__(self):
+        return f"<DespesaPagamento {self.id}>"
+
+
+class RepasseBloco(db.Model):
+    """Transferência da administração para o caixa de um bloco."""
+
+    __tablename__ = "repasse_bloco"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    conta_bancaria_id = db.Column(
+        db.Integer, db.ForeignKey("conta_bancaria.id"), nullable=False, index=True
+    )
+    bloco = db.Column(db.String(20), nullable=False, index=True)
+    competencia = db.Column(db.String(7), nullable=False, index=True)
+    valor_arrecadado_epoca = db.Column(db.Float, nullable=False, default=0.0)
+    valor_descontos_despesas = db.Column(db.Float, nullable=False, default=0.0)
+    valor_repassado = db.Column(db.Float, nullable=False, default=0.0)
+    data_repasse = db.Column(db.Date, nullable=False)
+    forma_transferencia = db.Column(db.String(40), nullable=False, default="PIX")
+    favorecido_descricao = db.Column(db.String(200), nullable=True)
+    comprovante_anexo = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default=StatusRepasse.REALIZADO)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    condominio = db.relationship("Condominio")
+    conta_bancaria = db.relationship("ContaBancaria")
+
+    def __repr__(self):
+        return f"<RepasseBloco {self.bloco} {self.competencia}>"
 
 
 class Veiculo(db.Model):

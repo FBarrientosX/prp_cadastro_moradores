@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Conciliação e CNAB — Administração{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <h1 class="h4 mb-1">Conciliação e CNAB</h1>
+    <p class="text-muted mb-0">Remessa Itaú 341 no layout CNAB 400 e baixa automática pelo arquivo de retorno.</p>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning">
+            <div class="card-body">
+                <div class="text-muted small">Boletos aguardando remessa (.REM)</div>
+                <div class="fs-4 fw-semibold">{{ aguardando_total }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
+            <div class="card-body">
+                <div class="text-muted small">Registrados aguardando pagamento</div>
+                <div class="fs-4 fw-semibold">{{ registrados }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+            <div class="card-body">
+                <div class="text-muted small">Títulos conciliados no mês</div>
+                <div class="fs-4 fw-semibold">{{ conciliados_mes }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-info">
+            <div class="card-body">
+                <div class="text-muted small">Taxa de conciliação automática (%)</div>
+                <div class="fs-4 fw-semibold">{{ "%.1f"|format(taxa)|replace(".", ",") }}%</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if detalhes %}
+<div class="alert alert-info">
+    <div class="fw-semibold mb-1">Retorno {{ lote.nome_arquivo }}</div>
+    <div>{{ detalhes.liquidados|length }} liquidados (ocorrência 06, 07, 08 ou 10).</div>
+    <div>{{ detalhes.confirmados|length }} confirmados (ocorrência 02).</div>
+    <div>Valor creditado na conta: {{ detalhes.valor_creditado|reais }}.</div>
+    <div>{{ detalhes.ja_pagos|length }} já estavam pagos e não foram somados de novo.</div>
+    <div>{{ detalhes.nao_encontrados|length }} não encontrados.</div>
+    {% if detalhes.rejeitados %}
+    <div>{{ detalhes.rejeitados|length }} rejeitados pelo banco.</div>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">📤 Exportar remessa (.REM)</h2>
+            </div>
+            <div class="card-body">
+                {% if not conta %}
+                <div class="alert alert-warning">Cadastre uma conta Itaú 341 ativa para gerar a remessa.</div>
+                {% else %}
+                <p class="small text-muted">Conta {{ conta.agencia }} / {{ conta.conta }}-{{ conta.conta_dv or "" }}, carteira {{ conta.carteira or "109" }}.</p>
+                {% endif %}
+                <form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_conciliacao') }}">
+                    <div class="col-md-6">
+                        <label class="form-label">Competência</label>
+                        <div class="input-group">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_conciliacao', competencia=competencia_anterior, bloco=filtro_bloco) }}">&lt;</a>
+                            <span class="input-group-text flex-grow-1 justify-content-center">{{ competencia_rotulo }}</span>
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_conciliacao', competencia=competencia_proxima, bloco=filtro_bloco) }}">&gt;</a>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="filtroBlocoRemessa">Bloco</label>
+                        <select class="form-select" id="filtroBlocoRemessa" name="bloco">
+                            <option value="">Todos</option>
+                            {% for bloco in blocos %}
+                            <option value="{{ bloco }}" {% if filtro_bloco == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
+                        <button class="btn btn-outline-primary" type="submit">Filtrar</button>
+                        {% if filtro_competencia %}
+                        <a class="btn btn-link" href="{{ url_for('admin_financeiro_conciliacao', competencia='todas', bloco=filtro_bloco) }}">Ver todas</a>
+                        {% endif %}
+                    </div>
+                </form>
+                <form method="post" action="{{ url_for('admin_financeiro_conciliacao_remessa') }}">
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead>
+                                <tr>
+                                    <th><input class="form-check-input" id="marcarTodos" type="checkbox" aria-label="Selecionar todos"></th>
+                                    <th>Unidade</th>
+                                    <th>Título</th>
+                                    <th>Vencimento</th>
+                                    <th class="text-end">Valor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for cobranca in cobrancas %}
+                                <tr>
+                                    <td><input class="form-check-input marca-remessa" type="checkbox" name="cobranca_id" value="{{ cobranca.id }}"></td>
+                                    <td>{% if cobranca.unidade %}Bloco {{ cobranca.unidade.bloco }} · {{ cobranca.unidade.apartamento }}{% endif %}</td>
+                                    <td>#{{ cobranca.id }} {{ cobranca.titulo }}</td>
+                                    <td>{{ cobranca.vencimento.strftime('%d/%m/%Y') }}</td>
+                                    <td class="text-end">{{ cobranca.valor_original|reais }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="5" class="text-muted">Nenhuma cobrança aguardando remessa neste filtro.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-primary" type="submit" {% if not conta or not cobrancas %}disabled{% endif %}>⬇️ Gerar e Baixar Arquivo .REM</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">📥 Importar retorno do banco (.RET)</h2>
+            </div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('admin_financeiro_conciliacao_retorno') }}" enctype="multipart/form-data">
+                    <label class="form-label" for="arquivoRetorno">Arquivo .RET, .CRT ou CSV</label>
+                    <input class="form-control mb-3" id="arquivoRetorno" name="arquivo" type="file" accept=".ret,.crt,.csv,.txt" required>
+                    <button class="btn btn-success" type="submit">Processar retorno</button>
+                </form>
+                <hr>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_financeiro_conciliacao_retorno_teste') }}">🧪 Baixar .RET de Teste</a>
+                <p class="small text-muted mt-2 mb-0">O arquivo de teste simula a liquidação das cobranças que já estão em remessa, ou das que ainda estão em aberto. A baixa só acontece depois do envio.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h2 class="h6">🗂️ Histórico de arquivos .REM e .RET</h2>
+<div class="table-responsive">
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>Data</th>
+                <th>Usuário</th>
+                <th>Tipo</th>
+                <th>Arquivo</th>
+                <th class="text-end">Títulos</th>
+                <th class="text-end">Valor</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in historico %}
+            <tr>
+                <td>{{ item.criado_em.strftime('%d/%m/%Y %H:%M') }}</td>
+                <td>{{ item.usuario_nome or "—" }}</td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.nome_arquivo }}</td>
+                <td class="text-end">{{ item.qtd_titulos }}</td>
+                <td class="text-end">{{ item.valor_total|reais }}</td>
+                <td class="text-end">
+                    {% if item.tipo == 'REMESSA' %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin_financeiro_conciliacao_arquivo', log_id=item.id) }}">Baixar .REM</a>
+                    {% else %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_financeiro_conciliacao', lote=item.id) }}">Ver lote</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" class="text-muted">Nenhum arquivo gerado ou importado.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var marcar = document.getElementById("marcarTodos");
+if (marcar) {
+    marcar.addEventListener("change", function () {
+        document.querySelectorAll(".marca-remessa").forEach(function (campo) {
+            campo.checked = marcar.checked;
+        });
+    });
+}
+</script>
+{% endblock %}

@@ -27,7 +27,7 @@ Registro de rotas (OBRIGATORIO — nao confundir com Flask Blueprint):
   preservando os nomes de endpoint originais (`url_for("admin_index")`, nao `admin.admin_index`).
 - Motivo: `Blueprint.route()` prefixaria o endpoint e quebraria templates existentes.
 - `routes.init_app(app)` importa e chama `register(app)` de:
-  `parceiro`, `superadmin`, `sindico`, `admin`, `portaria`.
+  `parceiro`, `superadmin`, `sindico`, `admin`, `financeiro`, `portaria`.
 - Nucleo compartilhado permanece em `app/routes.py` (login tenant, cadastro da unidade,
   reservas, clube do morador, mudancas do morador, autorizacoes, ocorrencias do morador,
   notificacoes e helpers `_algo`).
@@ -45,7 +45,7 @@ app/
   email_service.py     # SMTP Gmail sincrono
   drive_api.py         # OAuth Google Drive (installed app)
   blueprints/
-    parceiro.py, superadmin.py, sindico.py, admin.py, portaria.py
+    parceiro.py, superadmin.py, sindico.py, admin.py, financeiro.py, portaria.py
   static/uploads/      # logos, parceiros, ocorrencias, encomendas
   templates/           # bases por contexto + pastas admin/, morador/, portaria/, includes/
 ```
@@ -273,7 +273,7 @@ Admin e Assistente (tenant):
 - `GET|POST /admin/mudancas` (aprovacao final + mudanca avulsa ja aprovada)
 - `GET /reservas`: ve e gere todas as reservas; cria espaco geral ou de um bloco
 - Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, clube, portaria
-  no menu; validacao documental e CRUD de usuarios sao `@admin_required`.
+  nem Financeiro no menu; validacao documental e CRUD de usuarios sao `@admin_required`.
 
 Somente Admin local:
 - `GET /admin/dashboard`
@@ -285,14 +285,21 @@ Somente Admin local:
 - exclusao de unidade: rota `@admin_or_assistente_required`, botao na UI so para admin;
   bloqueia se houver encomenda pendente
 - atalho para `/portaria/dashboard` com botao "Voltar ao Painel Admin"
+- Financeiro (`@admin_required`): `/admin/financeiro`, `/bancos`, `/rateios`,
+  `/cobrancas`, `/acordos`, `/conciliacao`, `/pagamentos`, `/repasses`.
+  Repasse por bloco quando `fin_repasses_ativos`; caixa unico quando desligado.
+  Boleto e recibo em `/financeiro/boleto/<id>` e `/financeiro/recibo/<id>`
+  (admin do tenant ou a unidade dona). Morador vê a 2ª via em `/boletos`.
+  Síndico vê só os próprios blocos em `GET /sindico/financeiro`.
 
 Somente Sindico:
 - Escopo em `Usuario.blocos_escopo`: `"1"`, `"1,2"` ou `"*"` (sindico geral).
   `get_blocos_permitidos()` devolve a lista ou `None` (todos). Consultas usam
   `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
   mapa, mudancas e ocorrencias.
-- Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias
-  e Reservas dos espacos do proprio bloco. Flags default False:
+- Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias,
+  Reservas dos espacos do proprio bloco e a prestação de contas só desses
+  blocos (`/sindico/financeiro`). Flags default False:
   `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
 - Sem `perm_portaria`: sidebar sem Portaria e rotas `/portaria` e
   `/api/portaria` redirecionam ao painel do sindico.
@@ -424,6 +431,42 @@ Parceiro logado:
   status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional;
   `resposta`/`respondida_em`/`respondida_por_id`; `competencia` `bloco` ou `geral`
 
+Financeiro (`app/blueprints/financeiro.py`, calculo em `app/financeiro_boleto.py`):
+- `Condominio`: `fin_repasses_ativos` (default True), `fin_multa_percentual`
+  (2.0), `fin_juros_mensal` (1.0), `fin_indice_correcao` (`UFIR-RJ`).
+  `_garantir_colunas_financeiro()` altera essas colunas antes de qualquer
+  `Condominio.query`.
+- Tabelas com `condominio_id`: `ContaBancaria`, `FundoFinanceiro`,
+  `PlanoConta` (`escopo_repasse` `ADM_GERAL` ou `BLOCO`), `IndiceEconomico`,
+  `RateioCondominio` (`Rascunho`/`Rateado`), `CobrancaUnidade`
+  (`A Vencer`/`Vencida`/`Paga`/`Cancelada`/`Acordo`) e `AcordoFinanceiro`
+  (`Ativo`/`Quitado`/`Cancelado`). A tabela nova nasce no `db.create_all()`
+  do boot, antes das consultas.
+- Seed do slug `prp` so se ainda nao houver conta nem plano: Itau 341,
+  agencia 0358, conta 43029-6, carteira 109; fundos CAIXA, RESERVA e OBRAS;
+  planos TAXA ADM, TAXA EXTRA, TAXA BLOCO, Acordos (`1.2.2`) e as duas despesas.
+- Rateio gera uma cobranca por unidade `Aprovada`/`Registrada` que nao seja
+  setor interno. Pagador: proprietario externo, senao pessoa proprietaria,
+  senao responsavel. `nosso_numero` sequencial do condominio.
+- Atraso: correcao pelo indice do condominio (zero no mes do vencimento),
+  multa sobre (original + correcao) e juros pro-rata de 30 dias. Paga e
+  cancelada nao recalculam.
+- Acordo cancela os titulos escolhidos e gera parcelas no plano `1.2.2`,
+  fundo do plano, composicao proporcional (a ultima parcela absorve o
+  centavo). Boleto Itaú 341 usa modulo 10/11, linha de 47 e barras ITF.
+- Remessa CNAB 400 Itaú e retorno (400, 240 ou CSV) em
+  `/admin/financeiro/conciliacao`. `CobrancaUnidade.status_banco` nasce
+  `Nao Enviado`. O boot faz o ALTER dessas colunas antes das consultas.
+  Liquidação `06`/`07`/`08`/`10` baixa o título, soma o saldo da conta e
+  quita o acordo quando todas as parcelas ficam pagas. Ocorrência `02`
+  só registra. Arquivo repetido não soma o saldo de novo.
+- Contas a pagar: `Fornecedor`, `DespesaPagamento` e `RepasseBloco` nascem
+  no `create_all`. Baixa de despesa e repasse debitam `saldo_atual` uma vez.
+  Anexo fica em `static/uploads/financeiro` e só sai por rota autenticada.
+  `apurar_repasses_blocos` lê boletos pagos: plano `ADM_GERAL` fica retido;
+  plano `BLOCO` segue o bloco da unidade; despesa paga do bloco e repasse
+  já feito abatem o saldo. O síndico só vê o próprio `blocos_escopo`.
+
 ==================================================
 6) ROTAS E FLUXOS PRINCIPAIS
 ==================================================
@@ -455,6 +498,15 @@ Administracao local (`app/blueprints/admin.py`):
   `SindicoAgrupamento` no create)
 - `/admin/ocorrencias` + atualizar status (admin ou sindico)
 - `/admin/mudancas`
+- Financeiro (`app/blueprints/financeiro.py`, so admin local):
+  `GET /admin/financeiro`, `GET /admin/financeiro/bancos`,
+  `GET|POST /admin/financeiro/rateios`, `GET /admin/financeiro/cobrancas`,
+  `GET|POST /admin/financeiro/acordos`,
+  `GET /admin/financeiro/conciliacao`,
+  `GET /admin/financeiro/pagamentos`, `GET /admin/financeiro/repasses`.
+  Boleto e recibo: `GET /financeiro/boleto/<id>`, `GET /financeiro/recibo/<id>`.
+  Demonstrativo: `GET /financeiro/repasse/<id>` (admin do tenant ou síndico
+  do bloco). Morador: `GET /boletos`. Síndico: `GET /sindico/financeiro`.
 
 Super Admin (`app/blueprints/superadmin.py`):
 - `/superadmin/login`, `/superadmin`, `/superadmin/condominios*`
@@ -574,7 +626,11 @@ Separacao de contextos (obrigatorio):
 - Sidebars: `nav-pills`, um unico `active` por rota, offcanvas no mobile.
   O corpo do menu rola sozinho; a marca e o botao Sair ficam fixos.
   Admin e sindico usam secoes colapsaveis; a secao do item ativo abre sozinha.
-  Admin agrupa Visao geral, Condominio, Portaria & acesso e Configuracoes.
+  Admin agrupa Visao geral, Condominio, Portaria & acesso, Financeiro e Configuracoes.
+  Financeiro (so admin) fica abaixo de Portaria & Acesso: dashboard, bancos,
+  rateios, cobrancas, acordos, conciliacao CNAB, pagamentos e repasses.
+  O síndico tem `Prestação de Contas / Bloco` na seção Condomínio.
+  O morador tem `Boletos / 2ª Via` abaixo de Encomendas.
   `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre
   `/admin?tab=equipe`.   Admin e sindico entram na guarita por um item
   `Portaria & Interfone`, que abre `/portaria/acesso`. Dentro da portaria
@@ -703,7 +759,8 @@ Migracoes leves no boot (`app/__init__.py`):
 - Funcoes atuais (ordem aproximada do boot):
   `_garantir_colunas_multi_tenant`, `_garantir_colunas_usuarios`,
   `_garantir_coluna_slug_condominio`, `_garantir_colunas_whitelabel`,
-  `_garantir_coluna_ativo_condominio`, `_seed_condominio_transicao`,
+  `_garantir_coluna_ativo_condominio`, `_garantir_colunas_financeiro`,
+  `_seed_condominio_transicao`, `_seed_financeiro_prp`,
   `_migrar_sindico_agrupamentos`, `_garantir_colunas_unidades`,
   `_garantir_colunas_pessoas`, `_garantir_colunas_reservas`,
   `_garantir_coluna_condominio_espacos_comuns`, `_garantir_coluna_ativo_espacos_comuns`,

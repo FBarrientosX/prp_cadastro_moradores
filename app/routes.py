@@ -3793,6 +3793,7 @@ def condominio_documento(tipo):
 def init_app(app):
     from app.blueprints import admin as admin_routes
     from app.blueprints import api as api_routes
+    from app.blueprints import financeiro as financeiro_routes
     from app.blueprints import parceiro as parceiro_routes
     from app.blueprints import portaria as portaria_routes
     from app.blueprints import sindico as sindico_routes
@@ -3802,6 +3803,7 @@ def init_app(app):
     superadmin_routes.register(app)
     sindico_routes.register(app)
     admin_routes.register(app)
+    financeiro_routes.register(app)
     portaria_routes.register(app)
     api_routes.register(app)
 
