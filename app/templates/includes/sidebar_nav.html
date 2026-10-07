@@ -4,7 +4,8 @@
 {% set equipe_ativo = (ep == 'admin_index' and aba == 'equipe') or ep in ['admin_criar_usuario', 'admin_excluir_usuario', 'admin_alterar_senha_usuario'] %}
 {% set cadastros_ativo = (ep == 'admin_index' and not equipe_ativo) or ep.startswith('admin_cadastros') %}
 {% set portaria_ativo = ep.startswith('portaria_') %}
-{% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'admin_ocorrencias_atualizar_status', 'admin_ocorrencias_responder', 'admin_ocorrencias_encaminhar'] %}
+{% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'sindico_ocorrencias', 'admin_ocorrencias_atualizar_status', 'admin_ocorrencias_responder', 'admin_ocorrencias_encaminhar', 'admin_ocorrencias_visualizar'] %}
+{% set selo_ocorrencias = qtd_ocorrencias_abertas if qtd_ocorrencias_abertas else qtd_ocorrencias_nao_lidas %}
 {% set clube_ativo = ep in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics', 'admin_clube_sugerir_parceiro'] %}
 {% set acesso_ativo = ep in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar', 'admin_controle_acesso_sincronizar_faciais'] %}
 {% set financeiro_ativo = ep.startswith('admin_financeiro') %}
@@ -16,13 +17,18 @@
 {% set encomendas_portaria_ativo = ep.startswith('portaria_encomendas') %}
 {% set autorizacoes_portaria_ativo = ep in ['portaria_acesso', 'portaria_acesso_autorizada', 'portaria_acesso_entrada', 'portaria_acesso_saida'] %}
 
-{% macro grupo(id, titulo, icone, aberto, prefix) %}
+{% macro grupo(id, titulo, icone, aberto, prefix, badge=0) %}
 <button class="sidebar-grupo-toggle" type="button"
         data-bs-toggle="collapse"
         data-bs-target="#{{ prefix }}-{{ id }}"
         aria-expanded="{{ 'true' if aberto else 'false' }}"
         aria-controls="{{ prefix }}-{{ id }}">
-    <span class="d-flex align-items-center"><i class="bi {{ icone }} me-2"></i>{{ titulo }}</span>
+    <span class="d-flex align-items-center">
+        <i class="bi {{ icone }} me-2"></i>{{ titulo }}
+        {% if badge %}
+        <span class="badge bg-danger rounded-pill ms-2">{{ badge }}</span>
+        {% endif %}
+    </span>
     <i class="bi bi-chevron-right sidebar-chevron" aria-hidden="true"></i>
 </button>
 <div class="collapse{% if aberto %} show{% endif %}" id="{{ prefix }}-{{ id }}">
@@ -75,15 +81,18 @@
     {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or ep == 'sindico_mudancas' or ep == 'reservas' or ep == 'sindico_financeiro' or ep == 'sindico_financeiro_balancete' or ep.startswith('financeiro_repasse') or ep.startswith('admin_cadastros') or ep == 'sindico_medidores' %}
     {% set portaria_aberto = portaria_ativo %}
     {% set config_aberto = setores_ativo or dados_condominio_ativo %}
-    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix) %}
+    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix, qtd_pendencias_condominio) %}
         <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
             <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_cadastros') %}active{% endif %}" href="{{ url_for('admin_cadastros') }}">
             🏠 Planta de Unidades &amp; Pagadores
         </a>
-        <a class="nav-link text-white d-flex align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('admin_ocorrencias') }}">
-            <i class="bi bi-kanban me-2"></i>Ocorrências
+        <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('sindico_ocorrencias') }}">
+            <span class="d-flex align-items-center"><i class="bi bi-kanban me-2"></i>Ocorrências</span>
+            {% if selo_ocorrencias %}
+            <span class="badge bg-danger rounded-pill">{{ selo_ocorrencias }}</span>
+            {% endif %}
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_mudancas' %}active{% endif %}" href="{{ url_for('sindico_mudancas') }}">
             <i class="bi bi-box-seam me-2"></i>Mudanças
@@ -146,7 +155,7 @@
         <i class="bi bi-speedometer2 me-2"></i>Dashboard
     </a>
     {% endif %}
-    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix) %}
+    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix, qtd_pendencias_condominio if sidebar_user.role == 'admin' else 0) %}
         <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_index' and not equipe_ativo %}active{% endif %}" href="{{ url_for('admin_index') }}">
             <i class="bi bi-people me-2"></i>Gestão de Cadastros
         </a>
@@ -156,8 +165,11 @@
         </a>
         {% endif %}
         {% if sidebar_user.role == 'admin' %}
-        <a class="nav-link text-white d-flex align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('admin_ocorrencias') }}">
-            <i class="bi bi-kanban me-2"></i>Ocorrências
+        <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('admin_ocorrencias') }}">
+            <span class="d-flex align-items-center"><i class="bi bi-kanban me-2"></i>Ocorrências</span>
+            {% if selo_ocorrencias %}
+            <span class="badge bg-danger rounded-pill">{{ selo_ocorrencias }}</span>
+            {% endif %}
         </a>
         {% endif %}
         <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_mudancas' %}active{% endif %}" href="{{ url_for('admin_mudancas') }}">

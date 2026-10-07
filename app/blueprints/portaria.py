@@ -18,7 +18,16 @@ import unicodedata
 from urllib.parse import quote
 from datetime import datetime
 
-from flask import current_app, flash, jsonify, redirect, render_template, request, url_for
+from flask import (
+    current_app,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -641,6 +650,73 @@ def _href_whatsapp_morador(unidade, texto):
     return None
 
 
+def _url_whatsapp(telefone, texto):
+    """Link nativo api.whatsapp.com. Não dispara gateway externo."""
+    digitos = "".join(ch for ch in str(telefone or "") if ch.isdigit())
+    if digitos.startswith("00"):
+        digitos = digitos[2:]
+    if digitos.startswith("0"):
+        digitos = digitos.lstrip("0")
+    if not digitos.startswith("55"):
+        digitos = "55" + digitos
+    if len(digitos) not in (12, 13) or not texto:
+        return ""
+    return f"https://api.whatsapp.com/send?phone={digitos}&text={quote(texto)}"
+
+
+def _texto_aviso_encomendas(nome, descricoes, condominio_nome):
+    contagem = {}
+    for descricao in descricoes:
+        rotulo = (descricao or "pacote").strip() or "pacote"
+        contagem[rotulo] = contagem.get(rotulo, 0) + 1
+    partes = [f"{qtd}x {rotulo}" for rotulo, qtd in contagem.items()]
+    total = sum(contagem.values()) or len(descricoes)
+    verbo = "Chegou" if total == 1 else "Chegaram"
+    substantivo = "encomenda" if total == 1 else "encomendas"
+    lugar = condominio_nome or "condomínio"
+    return (
+        f"Olá {nome}! {verbo} {total} {substantivo} para você "
+        f"na portaria do {lugar}: {', '.join(partes)}."
+    )
+
+
+def _marcar_whatsapp_encomenda(encomenda):
+    encomenda.whatsapp_notificado = True
+    encomenda.whatsapp_notificado_em = _agora_sao_paulo()
+
+
+def _telefone_destinatario_encomenda(unidade, nome, telefone_informado):
+    """Telefone do destinatário, ou o WhatsApp principal da unidade se ele não tiver."""
+    pessoas = (
+        Pessoa.query.filter(
+            Pessoa.unidade_id == unidade.id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
+        .all()
+    )
+    autorizados = []
+    for pessoa in pessoas:
+        if not pessoa.autoriza_interfone:
+            continue
+        numero = _telefone_whatsapp_valido(pessoa.telefone)
+        if numero:
+            autorizados.append((pessoa, numero))
+    principal = autorizados[0][1] if autorizados else ""
+    informado = _telefone_whatsapp_valido(telefone_informado)
+    if informado and any(numero == informado for _, numero in autorizados):
+        return informado
+    escolhido = (nome or "").casefold()
+    if escolhido:
+        for pessoa, numero in autorizados:
+            if (pessoa.nome_completo or "").casefold() == escolhido:
+                return numero
+        for pessoa in pessoas:
+            if (pessoa.nome_completo or "").casefold() == escolhido:
+                return principal
+    return principal
+
+
 PILULAS_LIVRO = (
     "Passagem de Plantão",
     "Portões / Controle de Acesso",
@@ -735,6 +811,8 @@ def portaria_encomendas():
         )
         for unidade in unidades
     }
+    condominio = db.session.get(Condominio, condominio_id)
+    qtd_sem_aviso = sum(1 for item in pendentes if not item.whatsapp_notificado)
     nova_id = request.args.get("nova", type=int)
     encomenda_nova = None
     if nova_id:
@@ -753,6 +831,8 @@ def portaria_encomendas():
             ]
         else:
             contatos_aviso = list(todos)
+    session.pop("encomenda_wa", None)
+    session.pop("encomendas_wa_lote", None)
     return render_template(
         "portaria/encomendas.html",
         current_user=usuario,
@@ -765,6 +845,9 @@ def portaria_encomendas():
         encomenda_nova=encomenda_nova,
         contatos_aviso=contatos_aviso,
         agora_entrega=_agora_sao_paulo(),
+        nome_condominio=condominio.nome if condominio else "condomínio",
+        qtd_sem_aviso=qtd_sem_aviso,
+        whatsapp_toast=session.pop("encomenda_toast", None),
     )
 
 
@@ -800,12 +883,17 @@ def portaria_encomendas_receber():
 
     usuario = get_current_user()
     condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
+
+    def _erro(mensagem):
+        if request.form.get("via_fetch") == "1":
+            resposta = jsonify({"ok": False, "erro": mensagem})
+            resposta.status_code = 400
+            return resposta
+        flash(mensagem, "danger")
         return redirect(url_for("portaria_encomendas"))
+
+    if not condominio_id:
+        return _erro("Conta de portaria sem condomínio vinculado. Contate a administração.")
 
     destinatario = (request.form.get("destinatario", "") or "").strip() or None
     transportadora = (request.form.get("transportadora", "") or "").strip() or None
@@ -815,29 +903,30 @@ def portaria_encomendas_receber():
     try:
         unidade_id = int(unidade_id_raw)
     except (TypeError, ValueError):
-        flash("Selecione a unidade destinatária da encomenda.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro("Selecione a unidade destinatária da encomenda.")
 
     unidade = Unidade.query.filter_by(
         id=unidade_id, condominio_id=condominio_id
     ).first()
     if unidade is None:
-        flash("Unidade inválida para este condomínio.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro("Unidade inválida para este condomínio.")
 
     foto_pacote, erro_foto = _salvar_foto_encomenda(
         request.files.get("foto_pacote"),
         prefixo=f"enc{unidade.id}",
     )
     if erro_foto:
-        flash(erro_foto, "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro(erro_foto)
 
     agora = _agora_sao_paulo()
+    telefone = _telefone_destinatario_encomenda(
+        unidade, destinatario, request.form.get("destinatario_telefone")
+    )
     encomenda = Encomenda(
         condominio_id=condominio_id,
         unidade_id=unidade.id,
         destinatario=destinatario,
+        destinatario_telefone=telefone or None,
         transportadora=transportadora,
         codigo_rastreio=codigo_rastreio[:100] if codigo_rastreio else None,
         foto_pacote=foto_pacote,
@@ -847,6 +936,7 @@ def portaria_encomendas_receber():
         tentativas_contato=1,
         porteiro_recebimento_id=usuario.id,
         porteiro_entrega_id=None,
+        whatsapp_notificado=False,
     )
     db.session.add(encomenda)
     _registrar_auditoria(
@@ -872,7 +962,32 @@ def portaria_encomendas_receber():
                 "todos os e-mails do setor.",
                 "warning",
             )
-    return redirect(url_for("portaria_encomendas", nova=encomenda.id))
+
+    condominio = db.session.get(Condominio, condominio_id)
+    descricao = transportadora or "pacote"
+    texto = ""
+    if telefone:
+        texto = _texto_aviso_encomendas(
+            destinatario or "morador",
+            [descricao],
+            condominio.nome if condominio else "condomínio",
+        )
+    if request.form.get("via_fetch") == "1":
+        return jsonify(
+            {
+                "ok": True,
+                "id": encomenda.id,
+                "telefone": telefone or "",
+                "texto": texto,
+                "nome": destinatario or "",
+                "descricao": descricao,
+                "unidade": unidade.identificador,
+                "unidade_id": unidade.id,
+                "quando": agora.strftime("%d/%m/%Y %H:%M"),
+            }
+        )
+    flash("Encomenda registrada.", "success")
+    return redirect(url_for("portaria_encomendas"))
 
 
 @portaria_required
@@ -1069,6 +1184,129 @@ def portaria_encomendas_notificar(id):
         "success",
     )
     return redirect(url_for("portaria_encomendas"))
+
+
+def _grupos_aviso_encomendas(condominio_id):
+    """Pendentes de aviso, agrupadas pelo telefone ou, sem ele, pela unidade."""
+    pendentes = (
+        Encomenda.query.options(joinedload(Encomenda.unidade))
+        .filter(
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+            Encomenda.whatsapp_notificado.is_(False),
+        )
+        .order_by(Encomenda.data_recebimento.asc())
+        .all()
+    )
+    grupos = {}
+    for item in pendentes:
+        if item.destinatario_telefone:
+            chave = f"tel:{item.destinatario_telefone}"
+        else:
+            chave = f"unidade:{item.unidade_id}"
+        grupos.setdefault(chave, []).append(item)
+    condominio = db.session.get(Condominio, condominio_id)
+    nome_condo = condominio.nome if condominio else "condomínio"
+    saida = []
+    for itens in grupos.values():
+        nome = next((item.destinatario for item in itens if item.destinatario), None)
+        if not nome and itens[0].unidade is not None:
+            nome = itens[0].unidade.identificador
+        nome = nome or "Morador"
+        telefone = next((item.destinatario_telefone for item in itens if item.destinatario_telefone), "")
+        texto = _texto_aviso_encomendas(
+            nome,
+            [item.transportadora or "pacote" for item in itens],
+            nome_condo,
+        )
+        saida.append(
+            {
+                "nome": nome,
+                "quantidade": len(itens),
+                "ids": [item.id for item in itens],
+                "url": _url_whatsapp(telefone, texto) if telefone else "",
+            }
+        )
+    saida.sort(key=lambda grupo: grupo["nome"].casefold())
+    return saida
+
+
+@portaria_required
+def portaria_encomendas_avisos_pendentes():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "grupos": [], "total": 0})
+        resposta.status_code = 403
+        return resposta
+    grupos = _grupos_aviso_encomendas(condominio_id)
+    total = sum(grupo["quantidade"] for grupo in grupos)
+    return jsonify({"ok": True, "total": total, "moradores": len(grupos), "grupos": grupos})
+
+
+def _encomendas_para_marcar(ids, condominio_id):
+    if not ids:
+        return []
+    return (
+        Encomenda.query.filter(
+            Encomenda.id.in_(ids),
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+        )
+        .all()
+    )
+
+
+@portaria_required
+def portaria_encomendas_marcar_avisado(id):
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 403
+        return resposta
+    encomendas = _encomendas_para_marcar([id], condominio_id)
+    if not encomendas:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 404
+        return resposta
+    for encomenda in encomendas:
+        _marcar_whatsapp_encomenda(encomenda)
+    db.session.commit()
+    return jsonify({"ok": True, "ids": [encomenda.id for encomenda in encomendas]})
+
+
+@portaria_required
+def portaria_encomendas_marcar_avisados():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 403
+        return resposta
+    brutos = []
+    if request.is_json:
+        brutos = (request.get_json(silent=True) or {}).get("ids") or []
+    if not brutos:
+        brutos = request.form.getlist("ids")
+    ids = []
+    for bruto in brutos:
+        try:
+            ids.append(int(bruto))
+        except (TypeError, ValueError):
+            continue
+    encomendas = _encomendas_para_marcar(ids, condominio_id)
+    for encomenda in encomendas:
+        _marcar_whatsapp_encomenda(encomenda)
+    if encomendas:
+        db.session.commit()
+    return jsonify({"ok": True, "ids": [encomenda.id for encomenda in encomendas]})
 
 
 @portaria_required
@@ -2254,6 +2492,24 @@ def register(app):
         "/portaria/encomendas/notificar/<int:id>",
         "portaria_encomendas_notificar",
         portaria_encomendas_notificar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/avisos-pendentes",
+        "portaria_encomendas_avisos_pendentes",
+        portaria_encomendas_avisos_pendentes,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/<int:id>/marcar_avisado",
+        "portaria_encomendas_marcar_avisado",
+        portaria_encomendas_marcar_avisado,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/marcar_avisados",
+        "portaria_encomendas_marcar_avisados",
+        portaria_encomendas_marcar_avisados,
         methods=["POST"],
     )
     app.add_url_rule(

@@ -3,6 +3,7 @@
 {% block title %}Dashboard do Síndico{% endblock %}
 
 {% block content %}
+{% include "includes/alerta_ocorrencias.html" %}
 <div class="mb-4">
     <h1 class="h3 mb-1">Mapa do Bloco</h1>
     <p class="text-muted mb-0">{{ agrupamentos_label }} — {{ mapa_bloco|length }} unidades</p>

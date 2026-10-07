@@ -83,8 +83,10 @@ class StatusAutorizacaoAcesso:
 class PerfilDestinoNotificacao:
     MORADOR = "MORADOR"
     PORTARIA = "PORTARIA"
+    ADMIN = "ADMIN"
+    SINDICO = "SINDICO"
 
-    CHOICES = (MORADOR, PORTARIA)
+    CHOICES = (MORADOR, PORTARIA, ADMIN, SINDICO)
 
 
 class StatusOcorrencia:
@@ -132,6 +134,9 @@ class Condominio(db.Model):
     criado_em = db.Column(db.DateTime, nullable=True, default=datetime.utcnow)
     telefone_fixo = db.Column(db.String(30), nullable=True)
     telefone_whatsapp = db.Column(db.String(30), nullable=True)
+    whatsapp_api_url = db.Column(db.String(255), nullable=True)
+    whatsapp_api_token = db.Column(db.String(255), nullable=True)
+    whatsapp_auto_encomendas = db.Column(db.Boolean, nullable=False, default=True)
     email_contato = db.Column(db.String(120), nullable=True)
     cep = db.Column(db.String(9), nullable=True)
     logradouro = db.Column(db.String(200), nullable=True)
@@ -1852,6 +1857,10 @@ class Encomenda(db.Model):
     porteiro_entrega_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
     )
+    destinatario_telefone = db.Column(db.String(20), nullable=True)
+    whatsapp_notificado = db.Column(db.Boolean, nullable=False, default=False)
+    whatsapp_notificado_em = db.Column(db.DateTime, nullable=True)
+    whatsapp_modo_envio = db.Column(db.String(20), nullable=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("encomendas", lazy=True)
@@ -1924,6 +1933,8 @@ class Notificacao(db.Model):
     titulo = db.Column(db.String(120), nullable=False)
     mensagem = db.Column(db.Text, nullable=False)
     lida = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    link_destino = db.Column(db.String(255), nullable=True)
+    tipo = db.Column(db.String(30), nullable=False, default="GERAL")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     condominio = db.relationship(
@@ -1967,6 +1978,9 @@ class Ocorrencia(db.Model):
     )
     # bloco = síndico do agrupamento; geral = administração do condomínio.
     competencia = db.Column(db.String(20), nullable=False, default="bloco")
+    lida_pela_gestao = db.Column(db.Boolean, nullable=False, default=False)
+    ultima_interacao_em = db.Column(db.DateTime, nullable=True)
+    ultima_interacao_por = db.Column(db.String(20), nullable=True)
 
     condominio = db.relationship(
         "Condominio", backref=db.backref("ocorrencias", lazy=True)

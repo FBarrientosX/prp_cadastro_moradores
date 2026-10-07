@@ -730,23 +730,100 @@ def _registrar_auditoria(usuario, mensagem):
 
 
 def _criar_notificacao(
-    condominio_id, perfil_destino, titulo, mensagem, unidade_id=None
+    condominio_id,
+    perfil_destino,
+    titulo,
+    mensagem,
+    unidade_id=None,
+    link_destino=None,
+    tipo="GERAL",
 ):
     """Enfileira notificação na sessão atual (commit fica a cargo do chamador)."""
     if not condominio_id or perfil_destino not in PerfilDestinoNotificacao.CHOICES:
         return
     if perfil_destino == PerfilDestinoNotificacao.MORADOR and not unidade_id:
         return
+    destino = (link_destino or "").strip() or None
+    if destino and (not destino.startswith("/") or destino.startswith("//")):
+        destino = None
     db.session.add(
         Notificacao(
             condominio_id=condominio_id,
             unidade_id=unidade_id,
             perfil_destino=perfil_destino,
-            titulo=titulo,
-            mensagem=mensagem,
+            titulo=(titulo or "")[:120],
+            mensagem=mensagem or "",
             lida=False,
+            link_destino=destino,
+            tipo=(tipo or "GERAL")[:30],
         )
     )
+
+
+def _rotulo_unidade_ocorrencia(unidade):
+    if unidade is None:
+        return "Unidade"
+    return f"{unidade.bloco} - {unidade.apartamento}"
+
+
+def _sinalizar_ocorrencia_para_gestao(ocorrencia, nova=True):
+    """Avisa admin e os síndicos do bloco. O commit fica com quem chamou."""
+    unidade = ocorrencia.unidade
+    rotulo = _rotulo_unidade_ocorrencia(unidade)
+    if nova:
+        titulo = f"🆕 Nova Ocorrência [Unid. {rotulo}]: {ocorrencia.titulo}"
+        mensagem = (ocorrencia.descricao or "")[:300]
+    else:
+        titulo = f"💬 Nova mensagem da Unid. {rotulo} na Ocorrência: {ocorrencia.titulo}"
+        mensagem = "O morador enviou uma nova mensagem neste chamado."
+    _criar_notificacao(
+        ocorrencia.condominio_id,
+        PerfilDestinoNotificacao.ADMIN,
+        titulo,
+        mensagem,
+        link_destino=f"/admin/ocorrencias?foco={ocorrencia.id}",
+        tipo="OCORRENCIA",
+    )
+    if unidade is None:
+        return
+    from app.models import Role, Usuario
+
+    sindicos = Usuario.query.filter_by(
+        condominio_id=ocorrencia.condominio_id,
+        role=Role.SINDICO,
+    ).all()
+    bloco_tem_sindico = any(
+        _sindico_gerencia_bloco(sindico, unidade.bloco) for sindico in sindicos
+    )
+    if ocorrencia.competencia == "geral" and not bloco_tem_sindico:
+        return
+    _criar_notificacao(
+        ocorrencia.condominio_id,
+        PerfilDestinoNotificacao.SINDICO,
+        titulo,
+        mensagem,
+        unidade_id=unidade.id,
+        link_destino=f"/sindico/ocorrencias?foco={ocorrencia.id}",
+        tipo="OCORRENCIA",
+    )
+
+
+def _sinalizar_ocorrencia_para_morador(ocorrencia, mensagem):
+    _criar_notificacao(
+        ocorrencia.condominio_id,
+        PerfilDestinoNotificacao.MORADOR,
+        "Atualização da sua ocorrência",
+        mensagem,
+        unidade_id=ocorrencia.unidade_id,
+        link_destino="/morador/ocorrencias",
+        tipo="OCORRENCIA",
+    )
+
+
+def _marcar_ocorrencia_gestao(ocorrencia):
+    ocorrencia.lida_pela_gestao = True
+    ocorrencia.ultima_interacao_por = "GESTAO"
+    ocorrencia.ultima_interacao_em = datetime.utcnow()
 
 
 def _destinatario_notificacoes():
@@ -759,22 +836,43 @@ def _destinatario_notificacoes():
             unidade.condominio_id,
             unidade.id,
         )
-    if usuario and usuario.role in (Role.PORTEIRO, Role.ADMIN, Role.SUPERADMIN):
+    if usuario and usuario.role == Role.SINDICO and usuario.condominio_id:
+        return (PerfilDestinoNotificacao.SINDICO, usuario.condominio_id, None)
+    if usuario and usuario.role == Role.ADMIN and usuario.condominio_id:
+        return (PerfilDestinoNotificacao.ADMIN, usuario.condominio_id, None)
+    if usuario and usuario.role in (Role.PORTEIRO, Role.SUPERADMIN):
         condominio_id = _condominio_id_portaria(usuario)
         if condominio_id:
             return (PerfilDestinoNotificacao.PORTARIA, condominio_id, None)
     return None, None, None
 
 
-def _query_notificacoes(perfil, condominio_id, unidade_id):
-    query = Notificacao.query.filter_by(
-        condominio_id=condominio_id,
-        perfil_destino=perfil,
-    )
-    if perfil == PerfilDestinoNotificacao.MORADOR:
-        query = query.filter_by(unidade_id=unidade_id)
+def _query_notificacoes(perfil, condominio_id, unidade_id, usuario=None):
+    if perfil == PerfilDestinoNotificacao.ADMIN:
+        query = Notificacao.query.filter(
+            Notificacao.condominio_id == condominio_id,
+            Notificacao.unidade_id.is_(None),
+            Notificacao.perfil_destino.in_(
+                (PerfilDestinoNotificacao.ADMIN, PerfilDestinoNotificacao.PORTARIA)
+            ),
+        )
+    elif perfil == PerfilDestinoNotificacao.SINDICO:
+        blocos = _blocos_codigo_sindico(usuario) if usuario is not None else []
+        query = Notificacao.query.join(Unidade, Notificacao.unidade_id == Unidade.id).filter(
+            Notificacao.condominio_id == condominio_id,
+            Notificacao.perfil_destino == PerfilDestinoNotificacao.SINDICO,
+            Unidade.condominio_id == condominio_id,
+            Unidade.bloco.in_(blocos or [""]),
+        )
     else:
-        query = query.filter(Notificacao.unidade_id.is_(None))
+        query = Notificacao.query.filter_by(
+            condominio_id=condominio_id,
+            perfil_destino=perfil,
+        )
+        if perfil == PerfilDestinoNotificacao.MORADOR:
+            query = query.filter_by(unidade_id=unidade_id)
+        else:
+            query = query.filter(Notificacao.unidade_id.is_(None))
     return query.order_by(Notificacao.lida.asc(), Notificacao.created_at.desc())
 
 
@@ -3685,10 +3783,47 @@ def morador_ocorrencias_nova(unidade):
         categoria=categoria,
         status=StatusOcorrencia.ABERTO,
         foto_arquivo=foto_arquivo,
+        lida_pela_gestao=False,
+        ultima_interacao_por="MORADOR",
+        ultima_interacao_em=datetime.utcnow(),
     )
     db.session.add(ocorrencia)
+    db.session.flush()
+    _sinalizar_ocorrencia_para_gestao(ocorrencia, nova=True)
     db.session.commit()
     flash("Ocorrência registrada com sucesso.", "success")
+    return redirect(url_for("morador_ocorrencias"))
+
+
+@unidade_required
+def morador_ocorrencias_mensagem(unidade, ocorrencia_id):
+    """Nova mensagem do morador num chamado ainda em aberto ou em atendimento."""
+    if not _unidade_pode_abrir_ocorrencia(unidade):
+        return redirect(url_for("atualizar_dados"))
+    ocorrencia = Ocorrencia.query.filter_by(
+        id=ocorrencia_id,
+        unidade_id=unidade.id,
+        condominio_id=unidade.condominio_id,
+    ).first()
+    if ocorrencia is None:
+        flash("Ocorrência não encontrada.", "danger")
+        return redirect(url_for("morador_ocorrencias"))
+    if ocorrencia.status not in (StatusOcorrencia.ABERTO, StatusOcorrencia.EM_ANDAMENTO):
+        flash("Este chamado já foi encerrado e não aceita nova mensagem.", "warning")
+        return redirect(url_for("morador_ocorrencias"))
+    texto = " ".join((request.form.get("mensagem") or "").split())
+    if not texto:
+        flash("Escreva a mensagem antes de enviar.", "danger")
+        return redirect(url_for("morador_ocorrencias"))
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    trecho = f"\n\n[Morador em {agora.strftime('%d/%m/%Y %H:%M')}]\n{texto}"
+    ocorrencia.descricao = f"{ocorrencia.descricao}{trecho}"[:8000]
+    ocorrencia.lida_pela_gestao = False
+    ocorrencia.ultima_interacao_por = "MORADOR"
+    ocorrencia.ultima_interacao_em = datetime.utcnow()
+    _sinalizar_ocorrencia_para_gestao(ocorrencia, nova=False)
+    db.session.commit()
+    flash("Mensagem enviada para a gestão.", "success")
     return redirect(url_for("morador_ocorrencias"))
 
 
@@ -3745,7 +3880,9 @@ def listar_notificacoes():
         flash("Faça login para ver as notificações.", "warning")
         return _redirect_login_tenant()
 
-    notificacoes = _query_notificacoes(perfil, condominio_id, unidade_id).all()
+    notificacoes = _query_notificacoes(
+        perfil, condominio_id, unidade_id, get_current_user()
+    ).all()
     return render_template(
         "notificacoes.html",
         layout=_layout_notificacoes(perfil),
@@ -3754,29 +3891,53 @@ def listar_notificacoes():
     )
 
 
-def notificacoes_ler(notificacao_id):
+def _notificacao_do_ator(notificacao_id):
     perfil, condominio_id, unidade_id = _destinatario_notificacoes()
     if not perfil or not condominio_id:
+        return None
+    return (
+        _query_notificacoes(perfil, condominio_id, unidade_id, get_current_user())
+        .filter(Notificacao.id == notificacao_id)
+        .first()
+    )
+
+
+def _destino_notificacao_seguro(link):
+    destino = (link or "").strip()
+    prefixos = ("/admin/ocorrencias", "/sindico/ocorrencias", "/morador/ocorrencias")
+    if destino.startswith(prefixos) and not destino.startswith("//"):
+        return destino
+    return None
+
+
+def notificacoes_ler(notificacao_id):
+    if _destinatario_notificacoes()[0] is None:
         flash("Faça login para gerenciar notificações.", "warning")
         return _redirect_login_tenant()
 
-    query = Notificacao.query.filter_by(
-        id=notificacao_id,
-        condominio_id=condominio_id,
-        perfil_destino=perfil,
-    )
-    if perfil == PerfilDestinoNotificacao.MORADOR:
-        query = query.filter_by(unidade_id=unidade_id)
-    else:
-        query = query.filter(Notificacao.unidade_id.is_(None))
-
-    notificacao = query.first()
+    notificacao = _notificacao_do_ator(notificacao_id)
     if not notificacao:
         flash("Notificação não encontrada.", "danger")
         return redirect(url_for("listar_notificacoes"))
 
     notificacao.lida = True
     db.session.commit()
+    return redirect(url_for("listar_notificacoes"))
+
+
+def notificacoes_abrir(notificacao_id):
+    if _destinatario_notificacoes()[0] is None:
+        flash("Faça login para gerenciar notificações.", "warning")
+        return _redirect_login_tenant()
+    notificacao = _notificacao_do_ator(notificacao_id)
+    if notificacao is None:
+        flash("Notificação não encontrada.", "danger")
+        return redirect(url_for("listar_notificacoes"))
+    notificacao.lida = True
+    destino = _destino_notificacao_seguro(notificacao.link_destino)
+    db.session.commit()
+    if destino:
+        return redirect(destino)
     return redirect(url_for("listar_notificacoes"))
 
 
@@ -4054,6 +4215,12 @@ def init_app(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/morador/ocorrencias/<int:ocorrencia_id>/mensagem",
+        "morador_ocorrencias_mensagem",
+        morador_ocorrencias_mensagem,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/morador/encomendas",
         "morador_encomendas",
         morador_encomendas,
@@ -4069,5 +4236,11 @@ def init_app(app):
         "/notificacoes/ler/<int:notificacao_id>",
         "notificacoes_ler",
         notificacoes_ler,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/notificacoes/abrir/<int:notificacao_id>",
+        "notificacoes_abrir",
+        notificacoes_abrir,
         methods=["POST"],
     )
