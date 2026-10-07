@@ -434,11 +434,18 @@ Parceiro logado:
 
 `AutorizacaoAcesso`: pre-autorizacao do morador; status Pendente/Concluída/Cancelada
 
-`Notificacao`: `perfil_destino` MORADOR|PORTARIA; `unidade_id` so para morador
+`Notificacao`: `perfil_destino` MORADOR|PORTARIA|ADMIN|SINDICO;
+  `unidade_id` no morador e no alerta do sindico (filtrado pelo bloco da unidade);
+  `tipo` (default GERAL) e `link_destino` relativo. Admin ve ADMIN e PORTARIA.
+  Sininho do sindico so os chamados dos blocos do mandato.
 
 `Ocorrencia`: helpdesk; categorias Manutenção/Reclamação/Sugestão/Outros;
   status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional;
-  `resposta`/`respondida_em`/`respondida_por_id`; `competencia` `bloco` ou `geral`
+  `resposta`/`respondida_em`/`respondida_por_id`; `competencia` `bloco` ou `geral`.
+  `lida_pela_gestao` (False quando o morador abre ou responde; True quando a
+  gestao visualiza, responde ou muda o status), `ultima_interacao_em` e
+  `ultima_interacao_por` (MORADOR|GESTAO). Boot em `_garantir_colunas_ocorrencias`
+  antes de qualquer query, com backfill de notificacao para status Aberto.
 
 Financeiro (`app/blueprints/financeiro.py`, calculo em `app/financeiro_boleto.py`):
 - `Condominio`: `fin_repasses_ativos` (default True), `fin_multa_percentual`
@@ -614,10 +621,21 @@ Portaria (`app/blueprints/portaria.py`):
 - controle de acesso: entrada avulsa, baixa de autorizacao, saida
 - encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador.
   A tela `/portaria/encomendas` coloca o recebimento ao lado da fila pendente.
-  Atalhos preenchem a descricao (`transportadora`). Chips usam moradores
-  `eh_morador`. WhatsApp (`wa.me`) so para quem tem `autoriza_interfone` e
-  telefone valido; pacote com 3 dias ou mais usa texto de lembrete. O
-  historico de entregues fica recolhido.
+  Atalhos preenchem a descricao (`transportadora`). Chips abaixo do
+  destinatario listam so moradores `eh_morador` com telefone e
+  `autoriza_interfone`. O clique grava o nome e o numero formatado em
+  `destinatario_telefone` (o servidor normaliza para 55 + DDD). Um unico
+  chip ja vem selecionado. O checkbox
+  "Abrir WhatsApp para avisar o morador logo apos salvar" fica no
+  localStorage (`portaria_encomenda_whatsapp_auto`, padrao ligado).
+  Ligado, o JS abre `api.whatsapp.com/send` e so entao
+  `POST /portaria/encomendas/<id>/marcar_avisado`. Desligado, salva sem
+  aba e sem marcar aviso. O selo da fila e `Avisado` ou `Pendente de Aviso`.
+  "Avisar Pendentes em Lote" agrupa quem ainda nao foi avisado pelo telefone
+  (ou pela unidade, se nao houver numero) e abre uma mensagem por morador
+  (`1x Mercado Livre, 2x Shopee`). `Enviar Mensagem` marca so aquele grupo.
+  Nao ha gateway externo. Pacote com 3 dias ou mais usa texto de lembrete
+  no aviso manual. O historico de entregues fica recolhido.
   Se a unidade for setor interno, apos o commit avisa por e-mail os contatos
   do setor que tiverem e-mail (`enviar_email_encomenda_setor`). Falha de SMTP
   nao desfaz a encomenda. Pendencias desses setores aparecem no dashboard
@@ -738,8 +756,12 @@ CRUD de parceiros: `superadmin_parceiros.html` (modals criar/editar + Quill).
 
 Portal Parceiro: paginas por funcao; pendente isolado.
 
-Ocorrencias: kanban `admin/ocorrencias_kanban.html` com filtro, parecer e
-  encaminhamento bloco/geral; morador ve a resposta em `morador/ocorrencias.html`.
+Ocorrencias: kanban `admin/ocorrencias_kanban.html` (alias `/sindico/ocorrencias`)
+  com filtro, parecer, encaminhamento bloco/geral, selo de nao lida, SLA e
+  `?foco=` (borda pulsante e modal). Morador responde em
+  `morador/ocorrencias.html` enquanto Aberto ou Em Andamento. Sidebar do
+  admin e do sindico mostra badge de chamados em Aberto no grupo Condominio.
+  Banner no `/admin`, `/admin/dashboard` e `/sindico` quando ha chamado Aberto.
   Controle de acesso: resumo, filtro e sincronizacao facial a partir de
   `foto_perfil`/`foto_facial`. Aba Equipamentos: `EquipamentoAcesso`
   (Control iD / Intelbras, escopo geral ou bloco) e token

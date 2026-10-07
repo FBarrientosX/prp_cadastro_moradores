@@ -3,11 +3,11 @@
 {% block title %}Encomendas{% endblock %}
 
 {% block content %}
-{% macro msg_encomenda(nome, descricao, unidade, data, lembrete) -%}
+{% macro msg_encomenda(nome, descricao, unidade, data, lembrete, protocolo) -%}
 {%- if lembrete -%}
-Olá, {{ nome }}! Aqui é da Portaria do condomínio. Lembramos que há uma encomenda (*{{ descricao }}*, chegada em {{ data }}) aguardando retirada para a unidade *{{ unidade }}*.
+Olá, {{ nome }}! Aqui é da Portaria do condomínio. Lembramos que há uma encomenda (*{{ descricao }}*, chegada em {{ data }}) aguardando retirada para a unidade *{{ unidade }}*. Protocolo #{{ protocolo }}.
 {%- else -%}
-Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ descricao }}*) para a sua unidade (*{{ unidade }}*). Já está disponível para retirada na portaria!
+Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ descricao }}*) para a sua unidade (*{{ unidade }}*). Já está disponível para retirada na portaria! Protocolo #{{ protocolo }}.
 {%- endif -%}
 {%- endmacro %}
 <style>
@@ -32,19 +32,9 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
 </div>
 
 {% if encomenda_nova and encomenda_nova.unidade %}
-{% set dias_nova = (agora_entrega.date() - encomenda_nova.data_recebimento.date()).days %}
-{% set desc_nova = encomenda_nova.transportadora or 'pacote' %}
-<div class="alert alert-success d-flex flex-wrap align-items-center gap-2" role="alert">
-    <span>
-        Encomenda recebida para <strong>{{ encomenda_nova.unidade.identificador }}</strong>
-        às {{ encomenda_nova.data_recebimento.strftime('%H:%M') }}.
-    </span>
-    {% for contato in contatos_aviso %}
-    <a class="btn btn-sm btn-success" target="_blank" rel="noopener noreferrer"
-       href="https://wa.me/{{ contato.telefone }}?text={{ msg_encomenda(contato.nome, desc_nova, encomenda_nova.unidade.identificador, encomenda_nova.data_recebimento.strftime('%d/%m/%Y'), dias_nova >= 3)|urlencode }}">
-        📲 Avisar {{ contato.nome }} no WhatsApp agora
-    </a>
-    {% endfor %}
+<div class="alert alert-success" role="alert">
+    Encomenda recebida para <strong>{{ encomenda_nova.unidade.identificador }}</strong>
+    às {{ encomenda_nova.data_recebimento.strftime('%H:%M') }}.
 </div>
 {% endif %}
 
@@ -57,7 +47,9 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                 </h2>
                 <form method="post" action="{{ url_for('portaria_encomendas_receber') }}"
                       class="row g-2" enctype="multipart/form-data" id="form-receber"
-                      data-interfone-url="{{ url_for('api_portaria_buscar_unidade') }}">
+                      data-interfone-url="{{ url_for('api_portaria_buscar_unidade') }}"
+                      data-marcar-url="{{ url_for('portaria_encomendas_marcar_avisados') }}"
+                      data-marcar-um="{{ url_for('portaria_encomendas_marcar_avisado', id=0) }}">
                     <div class="col-12">
                         <label class="form-label mb-1" for="filtro-unidade">Unidade / setor</label>
                         <input type="search" class="form-control form-control-sm mb-1" id="filtro-unidade"
@@ -88,12 +80,13 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                             </optgroup>
                             {% endif %}
                         </select>
-                        <div id="chips-moradores" class="d-none mt-2"></div>
                     </div>
                     <div class="col-12">
-                        <label class="form-label mb-1" for="destinatario">Destinatário</label>
+                        <label class="form-label mb-1" for="destinatario">Destinatário (Quem está na etiqueta)</label>
                         <input type="text" class="form-control form-control-sm" id="destinatario" name="destinatario"
                                maxlength="200" placeholder="Quem está na etiqueta" autocomplete="off">
+                        <input type="hidden" name="destinatario_telefone" id="destinatario_telefone" value="">
+                        <div id="chips-moradores" class="d-none mt-2"></div>
                     </div>
                     <div class="col-12">
                         <label class="form-label mb-1" for="transportadora">Descrição</label>
@@ -128,7 +121,16 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp">
                     </div>
                     <div class="col-12">
-                        <button type="submit" class="btn btn-primary">
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input" type="checkbox" id="abrir-whatsapp" checked>
+                            <label class="form-check-label" for="abrir-whatsapp">
+                                📲 Abrir WhatsApp para avisar o morador logo após salvar
+                            </label>
+                        </div>
+                        <p class="form-text mt-0 mb-2">
+                            Desmarque se estiver recebendo vários pacotes de uma vez para avisar todos juntos depois.
+                        </p>
+                        <button type="submit" class="btn btn-primary" id="btn-registrar">
                             <i class="bi bi-check2-circle me-1"></i>Registrar recebimento
                         </button>
                     </div>
@@ -145,6 +147,12 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                         <i class="bi bi-hourglass-split me-1"></i>Aguardando Retirada na Portaria
                         <span class="badge text-bg-warning">{{ pendentes|length }}</span>
                     </h2>
+                    <button type="button" class="btn btn-sm btn-success" id="btn-avisar-lote"
+                            data-url="{{ url_for('portaria_encomendas_avisos_pendentes') }}"
+                            {% if not qtd_sem_aviso %}disabled{% endif %}>
+                        📲 Avisar Pendentes em Lote (Agrupar por Morador)
+                        <span class="badge text-bg-light text-dark ms-1" id="badge-avisos">{{ qtd_sem_aviso }}</span>
+                    </button>
                     {% if pendentes %}
                     <button type="button" id="btnEntregarLote" class="btn btn-sm btn-secondary" disabled>
                         Entregar selecionadas
@@ -167,6 +175,8 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                     {% set contatos = contatos_por_unidade.get(item.unidade_id, []) %}
                     {% set nomes = nomes_por_unidade.get(item.unidade_id, []) %}
                     <div class="encomenda-item d-flex gap-2 py-2 {% if not loop.last %}border-bottom{% endif %}"
+                         data-id="{{ item.id }}"
+                         data-avisado="{{ '1' if item.whatsapp_notificado else '0' }}"
                          data-busca="{{ item.unidade.identificador }} {{ item.unidade.bloco }} {{ item.unidade.apartamento }} {{ item.destinatario or '' }} {{ item.transportadora or '' }} {{ item.codigo_rastreio or '' }} {{ nomes|join(' ') }}">
                         <div class="pt-1">
                             <input type="checkbox" class="form-check-input chk-selecao chk-encomenda"
@@ -184,12 +194,24 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                                 {% if dias >= 3 %}
                                 <span class="badge text-bg-warning ms-1">⚠️ Parada há {{ dias }} dias</span>
                                 {% endif %}
+                                {% if item.whatsapp_notificado %}
+                                <span class="badge text-bg-success ms-1 selo-aviso">✅ Avisado</span>
+                                {% else %}
+                                <span class="badge text-bg-warning ms-1 selo-aviso">⏳ Pendente de Aviso</span>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="d-flex flex-column align-items-stretch gap-1 flex-shrink-0">
-                            {% if contatos|length == 1 %}
-                            <a class="btn btn-sm btn-success" target="_blank" rel="noopener noreferrer"
-                               href="https://wa.me/{{ contatos[0].telefone }}?text={{ msg_encomenda(contatos[0].nome, descricao, item.unidade.identificador, item.data_recebimento.strftime('%d/%m/%Y'), dias >= 3)|urlencode }}">
+                            {% if item.destinatario_telefone %}
+                            <a class="btn btn-sm btn-success js-avisar-item" target="_blank" rel="noopener noreferrer"
+                               data-id="{{ item.id }}"
+                               href="https://api.whatsapp.com/send?phone={{ item.destinatario_telefone }}&text={{ msg_encomenda(item.destinatario or 'morador', descricao, item.unidade.identificador, item.data_recebimento.strftime('%d/%m/%Y'), dias >= 3, item.id)|urlencode }}">
+                                📲 Avisar no WhatsApp
+                            </a>
+                            {% elif contatos|length == 1 %}
+                            <a class="btn btn-sm btn-success js-avisar-item" target="_blank" rel="noopener noreferrer"
+                               data-id="{{ item.id }}"
+                               href="https://api.whatsapp.com/send?phone={{ contatos[0].telefone }}&text={{ msg_encomenda(contatos[0].nome, descricao, item.unidade.identificador, item.data_recebimento.strftime('%d/%m/%Y'), dias >= 3, item.id)|urlencode }}">
                                 📲 Avisar no WhatsApp
                             </a>
                             {% elif contatos %}
@@ -201,8 +223,9 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                                 <ul class="dropdown-menu dropdown-menu-end">
                                     {% for contato in contatos %}
                                     <li>
-                                        <a class="dropdown-item" target="_blank" rel="noopener noreferrer"
-                                           href="https://wa.me/{{ contato.telefone }}?text={{ msg_encomenda(contato.nome, descricao, item.unidade.identificador, item.data_recebimento.strftime('%d/%m/%Y'), dias >= 3)|urlencode }}">
+                                        <a class="dropdown-item js-avisar-item" target="_blank" rel="noopener noreferrer"
+                                           data-id="{{ item.id }}"
+                                           href="https://api.whatsapp.com/send?phone={{ contato.telefone }}&text={{ msg_encomenda(contato.nome, descricao, item.unidade.identificador, item.data_recebimento.strftime('%d/%m/%Y'), dias >= 3, item.id)|urlencode }}">
                                             {{ contato.nome }}
                                         </a>
                                     </li>
@@ -224,7 +247,8 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                 </div>
                 <p class="text-muted small mb-0 d-none" id="fila-vazia-filtro">Nenhuma encomenda encontrada nesse filtro.</p>
                 {% else %}
-                <p class="text-muted mb-0">Nenhuma encomenda aguardando retirada.</p>
+                <div class="fila-pendentes d-none" id="listaPendentes"></div>
+                <p class="text-muted mb-0" id="fila-vazia">Nenhuma encomenda aguardando retirada.</p>
                 {% endif %}
             </div>
         </div>
@@ -439,7 +463,30 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
 </div>
 {% endif %}
 
+<div class="modal fade" id="modalAvisosLote" tabindex="-1" aria-labelledby="modalAvisosLoteTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalAvisosLoteTitulo">Avisos pendentes</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3" id="avisos-resumo"></p>
+                <div class="d-flex flex-column gap-2" id="avisos-lista"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="toastEncomenda" class="toast align-items-center text-bg-success border-0" role="alert"
+         aria-live="polite" aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body" id="toastEncomendaTexto">Encomenda registrada.</div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"
+                    aria-label="Fechar"></button>
+        </div>
+    </div>
     <div id="toastRastreioLido" class="toast align-items-center text-bg-success border-0" role="alert"
          aria-live="polite" aria-atomic="true">
         <div class="d-flex">
@@ -619,6 +666,8 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
         }
     }
 
+    var campoTelefone = document.getElementById("destinatario_telefone");
+
     function marcarChip(botao) {
         chips.querySelectorAll(".chip-morador").forEach(function (outro) {
             outro.classList.toggle("btn-primary", outro === botao);
@@ -626,36 +675,46 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
         });
     }
 
+    function selecionarMorador(botao) {
+        destinatario.value = botao.getAttribute("data-nome") || "";
+        if (campoTelefone) {
+            campoTelefone.value = botao.getAttribute("data-telefone") || "";
+        }
+        marcarChip(botao);
+    }
+
     function desenharChips(moradores) {
         chips.replaceChildren();
+        if (campoTelefone) campoTelefone.value = "";
         if (!unidade.value) {
             chips.classList.add("d-none");
             return;
         }
+        var comTelefone = (moradores || []).filter(function (morador) {
+            return morador.telefone;
+        });
         chips.classList.remove("d-none");
-        if (!moradores.length) {
+        if (!comTelefone.length) {
             var vazio = document.createElement("p");
             vazio.className = "small text-muted mb-0";
-            vazio.textContent = "Nenhum morador residente nesta unidade.";
+            vazio.textContent = "Nenhum morador com telefone cadastrado nesta unidade.";
             chips.appendChild(vazio);
             return;
         }
-        var titulo = document.createElement("div");
-        titulo.className = "small text-muted mb-1";
-        titulo.textContent = "Toque no nome para associar o pacote";
-        chips.appendChild(titulo);
         var faixa = document.createElement("div");
         faixa.className = "d-flex flex-wrap gap-1";
-        moradores.forEach(function (morador) {
+        comTelefone.forEach(function (morador) {
             var botao = document.createElement("button");
             botao.type = "button";
             botao.className = "btn btn-sm btn-outline-primary chip-morador";
-            botao.textContent = morador.nome || "Morador";
+            botao.setAttribute("data-nome", morador.nome || "Morador");
+            botao.setAttribute("data-telefone", morador.telefone_formatado || morador.telefone || "");
+            botao.textContent = "📱 " + (morador.nome || "Morador");
             botao.addEventListener("click", function () {
-                destinatario.value = botao.textContent.trim();
-                marcarChip(botao);
+                selecionarMorador(botao);
             });
             faixa.appendChild(botao);
+            if (comTelefone.length === 1) selecionarMorador(botao);
         });
         chips.appendChild(faixa);
     }
@@ -691,6 +750,256 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
 
     if (filtro) filtro.addEventListener("input", filtrarUnidades);
     if (unidade) unidade.addEventListener("change", carregarChips);
+
+    var abrirWhatsapp = document.getElementById("abrir-whatsapp");
+    var chaveAuto = "portaria_encomenda_whatsapp_auto";
+    try { localStorage.removeItem("portaria_encomenda_lote_rapido"); } catch (erro) {}
+    if (abrirWhatsapp) {
+        var salvoAuto = null;
+        try { salvoAuto = localStorage.getItem(chaveAuto); } catch (erro) {}
+        abrirWhatsapp.checked = salvoAuto === null ? true : salvoAuto === "1";
+        abrirWhatsapp.addEventListener("change", function () {
+            try { localStorage.setItem(chaveAuto, abrirWhatsapp.checked ? "1" : "0"); } catch (erro) {}
+        });
+    }
+
+    function urlWhatsapp(telefone, texto) {
+        var digitos = String(telefone || "").replace(/\D/g, "");
+        if (digitos.indexOf("00") === 0) digitos = digitos.slice(2);
+        if (digitos.charAt(0) === "0") digitos = digitos.replace(/^0+/, "");
+        if (digitos.indexOf("55") !== 0) digitos = "55" + digitos;
+        if ((digitos.length !== 12 && digitos.length !== 13) || !texto) return "";
+        return "https://api.whatsapp.com/send?phone=" + digitos + "&text=" + encodeURIComponent(texto);
+    }
+
+    function mostrarToast(texto) {
+        var toast = document.getElementById("toastEncomenda");
+        var corpo = document.getElementById("toastEncomendaTexto");
+        if (!toast || !window.bootstrap) return;
+        if (corpo) corpo.textContent = texto;
+        bootstrap.Toast.getOrCreateInstance(toast, { delay: 4000 }).show();
+    }
+
+    function ajustarAvisos(delta) {
+        var badge = document.getElementById("badge-avisos");
+        var botao = document.getElementById("btn-avisar-lote");
+        if (!badge) return;
+        var atual = parseInt(badge.textContent, 10) || 0;
+        var proximo = Math.max(0, atual + delta);
+        badge.textContent = String(proximo);
+        if (botao) botao.disabled = proximo === 0;
+    }
+
+    function pintarAvisado(ids) {
+        (ids || []).forEach(function (id) {
+            var linha = document.querySelector('.encomenda-item[data-id="' + id + '"]');
+            if (!linha || linha.getAttribute("data-avisado") === "1") return;
+            linha.setAttribute("data-avisado", "1");
+            var selo = linha.querySelector(".selo-aviso");
+            if (selo) {
+                selo.className = "badge text-bg-success ms-1 selo-aviso";
+                selo.textContent = "✅ Avisado";
+            }
+            ajustarAvisos(-1);
+        });
+    }
+
+    function marcarAvisados(ids) {
+        if (!form || !ids || !ids.length) return Promise.resolve();
+        if (ids.length === 1 && form.dataset.marcarUm) {
+            return fetch(form.dataset.marcarUm.replace("/0/", "/" + ids[0] + "/"), {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            }).then(function (resposta) {
+                return resposta.json();
+            }).then(function (corpo) {
+                if (corpo && corpo.ok) pintarAvisado(corpo.ids || ids);
+            });
+        }
+        return fetch(form.dataset.marcarUrl, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ ids: ids })
+        }).then(function (resposta) {
+            return resposta.json();
+        }).then(function (corpo) {
+            if (corpo && corpo.ok) pintarAvisado(corpo.ids || ids);
+        });
+    }
+
+    function limparPacote() {
+        if (destinatario) destinatario.value = "";
+        if (campoTelefone) campoTelefone.value = "";
+        if (descricao) descricao.value = "";
+        var rastreio = document.getElementById("codigo_rastreio");
+        if (rastreio) rastreio.value = "";
+        var foto = document.getElementById("foto_pacote");
+        if (foto) foto.value = "";
+        if (chips) {
+            chips.querySelectorAll(".chip-morador").forEach(function (botao) {
+                botao.classList.remove("btn-primary");
+                botao.classList.add("btn-outline-primary");
+            });
+            var unicos = chips.querySelectorAll(".chip-morador");
+            if (unicos.length === 1) selecionarMorador(unicos[0]);
+        }
+        var botao = document.getElementById("btn-registrar");
+        if (botao) botao.disabled = false;
+    }
+
+    function acrescentarLinha(corpo) {
+        var lista = document.getElementById("listaPendentes");
+        if (!lista || !corpo) return;
+        lista.classList.remove("d-none");
+        var vazia = document.getElementById("fila-vazia");
+        if (vazia) vazia.classList.add("d-none");
+        var linha = document.createElement("div");
+        linha.className = "encomenda-item d-flex gap-2 py-2 border-bottom";
+        linha.setAttribute("data-id", String(corpo.id));
+        linha.setAttribute("data-avisado", "0");
+        linha.setAttribute("data-busca", [corpo.unidade, corpo.nome, corpo.descricao].join(" "));
+        var bloco = document.createElement("div");
+        bloco.className = "flex-grow-1 min-w-0";
+        var titulo = document.createElement("div");
+        titulo.className = "fw-semibold text-truncate";
+        titulo.textContent = corpo.unidade || "";
+        var detalhe = document.createElement("div");
+        detalhe.className = "small text-truncate";
+        detalhe.textContent = (corpo.descricao || "Sem descrição") + (corpo.nome ? " · " + corpo.nome : "");
+        var meta = document.createElement("div");
+        meta.className = "small text-muted";
+        meta.textContent = corpo.quando || "";
+        var selo = document.createElement("span");
+        selo.className = "badge text-bg-warning ms-1 selo-aviso";
+        selo.textContent = "⏳ Pendente de Aviso";
+        meta.appendChild(selo);
+        bloco.appendChild(titulo);
+        bloco.appendChild(detalhe);
+        bloco.appendChild(meta);
+        linha.appendChild(bloco);
+        lista.appendChild(linha);
+        document.querySelectorAll(".badge.text-bg-warning").forEach(function (badge) {
+            if (badge.id === "badge-avisos" || badge.classList.contains("selo-aviso")) return;
+            var numero = parseInt(badge.textContent, 10);
+            if (!isNaN(numero)) badge.textContent = String(numero + 1);
+        });
+        ajustarAvisos(1);
+    }
+
+    if (form) {
+        form.addEventListener("submit", function (event) {
+            event.preventDefault();
+            var botao = document.getElementById("btn-registrar");
+            if (botao) botao.disabled = true;
+            var querAbrir = abrirWhatsapp && abrirWhatsapp.checked && campoTelefone && campoTelefone.value;
+            var janela = querAbrir ? window.open("about:blank", "_blank") : null;
+            var dados = new FormData(form);
+            dados.set("via_fetch", "1");
+            fetch(form.action, {
+                method: "POST",
+                body: dados,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            }).then(function (resposta) {
+                return resposta.json().then(function (corpo) {
+                    return { ok: resposta.ok, corpo: corpo };
+                });
+            }).then(function (resultado) {
+                var corpo = resultado.corpo || {};
+                if (!resultado.ok || !corpo.ok) {
+                    if (janela) janela.close();
+                    if (botao) botao.disabled = false;
+                    mostrarToast(corpo.erro || "Não foi possível registrar a encomenda.");
+                    return;
+                }
+                if (janela) {
+                    var destino = urlWhatsapp(corpo.telefone, corpo.texto);
+                    if (destino) {
+                        janela.location = destino;
+                        marcarAvisados([corpo.id]);
+                    } else {
+                        janela.close();
+                    }
+                }
+                limparPacote();
+                acrescentarLinha(corpo);
+                mostrarToast("Encomenda registrada.");
+            }).catch(function () {
+                if (janela) janela.close();
+                if (botao) botao.disabled = false;
+                mostrarToast("Não foi possível registrar a encomenda.");
+            });
+        });
+    }
+
+    document.addEventListener("click", function (event) {
+        var link = event.target.closest(".js-avisar-item");
+        if (!link) return;
+        var id = parseInt(link.getAttribute("data-id"), 10);
+        if (id) marcarAvisados([id]);
+    });
+
+    var botaoLote = document.getElementById("btn-avisar-lote");
+    var modalLote = document.getElementById("modalAvisosLote");
+    var resumoLote = document.getElementById("avisos-resumo");
+    var listaLote = document.getElementById("avisos-lista");
+    if (botaoLote && modalLote && listaLote) {
+        botaoLote.addEventListener("click", function () {
+            fetch(botaoLote.dataset.url, {
+                headers: { "Accept": "application/json" },
+                credentials: "same-origin"
+            }).then(function (resposta) {
+                return resposta.json();
+            }).then(function (corpo) {
+                var grupos = (corpo && corpo.grupos) || [];
+                var pacotes = corpo && corpo.total ? corpo.total : 0;
+                var moradores = corpo && corpo.moradores ? corpo.moradores : grupos.length;
+                if (resumoLote) {
+                    var textoPacotes = pacotes === 1
+                        ? "Existe 1 pacote pendente de aviso"
+                        : "Existem " + pacotes + " pacotes pendentes de aviso";
+                    var textoMoradores = moradores === 1
+                        ? "1 morador"
+                        : moradores + " moradores";
+                    resumoLote.textContent = textoPacotes + " para " + textoMoradores + ".";
+                }
+                listaLote.replaceChildren();
+                grupos.forEach(function (grupo) {
+                    var linha = document.createElement("div");
+                    linha.className = "d-flex justify-content-between align-items-center gap-2";
+                    var texto = document.createElement("span");
+                    texto.textContent = grupo.nome + " - " + grupo.quantidade + (grupo.quantidade === 1 ? " pacote" : " pacotes");
+                    var acao = document.createElement("button");
+                    acao.type = "button";
+                    acao.className = "btn btn-sm btn-success";
+                    acao.textContent = "Enviar Mensagem";
+                    if (!grupo.url) {
+                        acao.disabled = true;
+                        acao.textContent = "Sem WhatsApp cadastrado";
+                        acao.className = "btn btn-sm btn-outline-secondary";
+                    } else {
+                        acao.addEventListener("click", function () {
+                            window.open(grupo.url, "_blank", "noopener");
+                            marcarAvisados(grupo.ids || []);
+                            acao.disabled = true;
+                            acao.textContent = "Mensagem aberta";
+                        });
+                    }
+                    linha.appendChild(texto);
+                    linha.appendChild(acao);
+                    listaLote.appendChild(linha);
+                });
+                if (window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalLote).show();
+            }).catch(function () {
+                mostrarToast("Não foi possível carregar os avisos pendentes.");
+            });
+        });
+    }
 
     var inputRastreio = document.getElementById("codigo_rastreio");
     var btnEscanear = document.getElementById("btnEscanearCodigo");

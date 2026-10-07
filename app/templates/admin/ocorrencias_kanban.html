@@ -38,7 +38,17 @@
         height: 64px;
         object-fit: cover;
         border-radius: 0.5rem;
-        flex-shrink: 0;
+    }
+    .kanban-card.kanban-foco {
+        border: 2px solid #dc3545;
+        animation: kanban-pulso 1.2s ease-in-out infinite;
+    }
+    @keyframes kanban-pulso {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.55); }
+        50% { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
+    }
+    .kanban-card .min-w-0 {
+        min-width: 0;
     }
     .kanban-card .kanban-desc {
         display: -webkit-box;
@@ -109,7 +119,8 @@
         <div class="kanban-column-body">
             {% if itens %}
                 {% for item in itens %}
-                <article class="card shadow-sm kanban-card">
+                {% set sla = sla_ocorrencia.get(item.id) %}
+                <article class="card shadow-sm kanban-card{% if foco_id == item.id %} kanban-foco{% endif %}" id="ocorrencia-{{ item.id }}">
                     <div class="card-body">
                         <div class="d-flex gap-2">
                             {% if item.foto_arquivo %}
@@ -131,6 +142,16 @@
                         </div>
                         <p class="small mt-2 mb-0 text-secondary kanban-desc">{{ item.descricao }}</p>
                         <span class="badge text-bg-light border mt-2">{{ item.categoria }}</span>
+                        {% if not item.lida_pela_gestao %}
+                        {% if item.resposta %}
+                        <span class="badge text-bg-danger mt-2">💬 Nova Resposta do Morador</span>
+                        {% else %}
+                        <span class="badge text-bg-danger mt-2">🆕 Não Lida</span>
+                        {% endif %}
+                        {% endif %}
+                        {% if sla %}
+                        <span class="badge mt-2 {% if sla.alerta %}text-bg-danger{% else %}text-bg-secondary{% endif %}">{{ sla.texto }}</span>
+                        {% endif %}
                         {% if item.competencia == 'geral' %}
                         <span class="badge text-bg-primary mt-2">Administração Geral</span>
                         {% else %}
@@ -245,4 +266,31 @@
     </section>
     {% endfor %}
 </div>
+{% if foco_id %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    var alvo = document.getElementById("modalAtendimento{{ foco_id }}");
+    if (alvo && window.bootstrap) {
+        window.bootstrap.Modal.getOrCreateInstance(alvo).show();
+    }
+    var card = document.getElementById("ocorrencia-{{ foco_id }}");
+    if (card) {
+        card.scrollIntoView({block: "center"});
+    }
+});
+</script>
+{% endif %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[id^='modalAtendimento']").forEach(function (el) {
+        el.addEventListener("show.bs.modal", function () {
+            var id = el.id.replace("modalAtendimento", "");
+            fetch("/admin/ocorrencias/" + id + "/visualizar", {
+                method: "POST",
+                credentials: "same-origin"
+            });
+        });
+    });
+});
+</script>
 {% endblock %}

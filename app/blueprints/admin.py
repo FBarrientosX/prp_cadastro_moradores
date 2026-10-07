@@ -1339,7 +1339,8 @@ def admin_excluir_usuario(usuario_id):
 
 def _redirect_ocorrencias():
     destino = (request.form.get("retorno") or "").strip()
-    if destino.startswith("/admin/ocorrencias") and not destino.startswith("//"):
+    prefixos = ("/admin/ocorrencias", "/sindico/ocorrencias")
+    if destino.startswith(prefixos) and not destino.startswith("//"):
         return redirect(destino)
     return redirect(url_for("admin_ocorrencias"))
 
@@ -1422,6 +1423,37 @@ def admin_ocorrencias():
         )
 
     ocorrencias = query.order_by(Ocorrencia.created_at.desc()).all()
+    agora_utc = datetime.utcnow()
+    sla_ocorrencia = {}
+    for item in ocorrencias:
+        if item.status == StatusOcorrencia.RESOLVIDO or not item.created_at:
+            continue
+        horas = max(0, int((agora_utc - item.created_at).total_seconds() // 3600))
+        if horas >= 48:
+            dias = max(horas // 24, 1)
+            sla_ocorrencia[item.id] = {
+                "texto": f"⚠️ Aguardando há {dias} dia{'s' if dias != 1 else ''}",
+                "alerta": True,
+            }
+        elif horas < 1:
+            sla_ocorrencia[item.id] = {
+                "texto": "⏱️ Aberta há menos de 1h",
+                "alerta": False,
+            }
+        else:
+            sla_ocorrencia[item.id] = {
+                "texto": f"⏱️ Aberta há {horas}h",
+                "alerta": False,
+            }
+    foco_id = request.args.get("foco", type=int)
+    if foco_id:
+        from app.routes import _marcar_ocorrencia_gestao
+
+        for item in ocorrencias:
+            if item.id == foco_id and not item.lida_pela_gestao:
+                _marcar_ocorrencia_gestao(item)
+                db.session.commit()
+                break
     colunas = {
         StatusOcorrencia.ABERTO: [],
         StatusOcorrencia.EM_ANDAMENTO: [],
@@ -1444,6 +1476,8 @@ def admin_ocorrencias():
         categoria_filtro=categoria_filtro,
         busca=busca,
         retorno=request.full_path,
+        foco_id=foco_id,
+        sla_ocorrencia=sla_ocorrencia,
     )
 
 
@@ -1472,7 +1506,14 @@ def admin_ocorrencias_atualizar_status(id):
     if status_anterior == novo_status:
         return _redirect_ocorrencias()
 
+    from app.routes import _marcar_ocorrencia_gestao, _sinalizar_ocorrencia_para_morador
+
     ocorrencia.status = novo_status
+    _marcar_ocorrencia_gestao(ocorrencia)
+    _sinalizar_ocorrencia_para_morador(
+        ocorrencia,
+        f"O chamado \"{ocorrencia.titulo}\" agora está {novo_status}.",
+    )
     _registrar_auditoria(
         usuario,
         (
@@ -1488,8 +1529,12 @@ def admin_ocorrencias_atualizar_status(id):
 @admin_or_sindico_required
 def admin_ocorrencias_responder(id):
     from app.blueprints.portaria import _agora_sao_paulo
-    from app.models import PerfilDestinoNotificacao
-    from app.routes import _criar_notificacao, _registrar_auditoria, _redirect_login_tenant
+    from app.routes import (
+        _marcar_ocorrencia_gestao,
+        _registrar_auditoria,
+        _redirect_login_tenant,
+        _sinalizar_ocorrencia_para_morador,
+    )
 
     usuario = get_current_user()
     if not condominio_id_obrigatorio(usuario):
@@ -1508,12 +1553,10 @@ def admin_ocorrencias_responder(id):
     ocorrencia.resposta = resposta[:4000]
     ocorrencia.respondida_em = _agora_sao_paulo()
     ocorrencia.respondida_por_id = usuario.id
-    _criar_notificacao(
-        ocorrencia.condominio_id,
-        PerfilDestinoNotificacao.MORADOR,
-        "Resposta da sua ocorrência",
+    _marcar_ocorrencia_gestao(ocorrencia)
+    _sinalizar_ocorrencia_para_morador(
+        ocorrencia,
         f"{ocorrencia.titulo}: {ocorrencia.resposta[:180]}",
-        unidade_id=ocorrencia.unidade_id,
     )
     _registrar_auditoria(
         usuario,
@@ -1545,7 +1588,10 @@ def admin_ocorrencias_encaminhar(id):
         flash("Este chamado já está nessa competência.", "info")
         return _redirect_ocorrencias()
 
+    from app.routes import _marcar_ocorrencia_gestao
+
     ocorrencia.competencia = competencia
+    _marcar_ocorrencia_gestao(ocorrencia)
     destino = "Administração Geral" if competencia == "geral" else "Bloco"
     _registrar_auditoria(
         usuario,
@@ -1554,6 +1600,19 @@ def admin_ocorrencias_encaminhar(id):
     db.session.commit()
     flash(f"Chamado encaminhado para {destino}.", "success")
     return _redirect_ocorrencias()
+
+
+@admin_or_sindico_required
+def admin_ocorrencias_visualizar(id):
+    """Marca o chamado como lido pela gestão ao abrir o atendimento."""
+    usuario = get_current_user()
+    ocorrencia = _ocorrencia_do_gestor(id, usuario)
+    if ocorrencia is not None and not ocorrencia.lida_pela_gestao:
+        from app.routes import _marcar_ocorrencia_gestao
+
+        _marcar_ocorrencia_gestao(ocorrencia)
+        db.session.commit()
+    return ("", 204)
 
 
 @admin_or_assistente_required
@@ -3067,6 +3126,12 @@ def register(app):
         methods=["GET"],
     )
     app.add_url_rule(
+        "/sindico/ocorrencias",
+        "sindico_ocorrencias",
+        admin_ocorrencias,
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/admin/ocorrencias/atualizar_status/<int:id>",
         "admin_ocorrencias_atualizar_status",
         admin_ocorrencias_atualizar_status,
@@ -3082,6 +3147,12 @@ def register(app):
         "/admin/ocorrencias/<int:id>/encaminhar",
         "admin_ocorrencias_encaminhar",
         admin_ocorrencias_encaminhar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/ocorrencias/<int:id>/visualizar",
+        "admin_ocorrencias_visualizar",
+        admin_ocorrencias_visualizar,
         methods=["POST"],
     )
     app.add_url_rule(

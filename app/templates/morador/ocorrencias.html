@@ -35,6 +35,13 @@
                     <span class="badge text-bg-light border">{{ item.categoria }}</span>
                 </p>
                 <p class="small mb-0" style="white-space: pre-wrap;">{{ item.descricao }}</p>
+                {% if item.status != status_ocorrencia.RESOLVIDO %}
+                <form method="post" action="{{ url_for('morador_ocorrencias_mensagem', ocorrencia_id=item.id) }}" class="mt-3">
+                    <label class="form-label small" for="mensagem-{{ item.id }}">Nova mensagem</label>
+                    <textarea class="form-control form-control-sm mb-2" id="mensagem-{{ item.id }}" name="mensagem" rows="2" required placeholder="Escreva um complemento para a gestão"></textarea>
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Enviar mensagem</button>
+                </form>
+                {% endif %}
                 {% if item.resposta %}
                 <div class="alert alert-success mt-3 mb-0">
                     <div class="fw-semibold">Resposta da gestão</div>

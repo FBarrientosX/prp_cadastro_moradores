@@ -267,6 +267,32 @@ def _garantir_setores_internos():
     db.session.commit()
 
 
+def _backfill_notificacoes_ocorrencias_abertas():
+    """Avisa a gestão sobre chamados já abertos que ainda não têm alerta."""
+    from app.models import Notificacao, Ocorrencia, StatusOcorrencia
+    from app.routes import _sinalizar_ocorrencia_para_gestao
+
+    if "ocorrencias" not in inspect(db.engine).get_table_names():
+        return
+    if "notificacoes" not in inspect(db.engine).get_table_names():
+        return
+    abertas = Ocorrencia.query.filter_by(status=StatusOcorrencia.ABERTO).all()
+    criou = False
+    for ocorrencia in abertas:
+        link = f"/admin/ocorrencias?foco={ocorrencia.id}"
+        ja_existe = Notificacao.query.filter_by(
+            condominio_id=ocorrencia.condominio_id,
+            tipo="OCORRENCIA",
+            link_destino=link,
+        ).first()
+        if ja_existe is not None:
+            continue
+        _sinalizar_ocorrencia_para_gestao(ocorrencia, nova=True)
+        criou = True
+    if criou:
+        db.session.commit()
+
+
 def _garantir_colunas_ocorrencias():
     """Parecer e competência em bancos já criados (create_all não altera tabela)."""
     inspetor = inspect(db.engine)
@@ -287,10 +313,59 @@ def _garantir_colunas_ocorrencias():
             "ALTER TABLE ocorrencias ADD COLUMN competencia "
             "VARCHAR(20) NOT NULL DEFAULT 'bloco'"
         )
+    adicionou_leitura = "lida_pela_gestao" not in colunas
+    if adicionou_leitura:
+        alteracoes.append(
+            "ALTER TABLE ocorrencias ADD COLUMN lida_pela_gestao "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "ultima_interacao_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE ocorrencias ADD COLUMN ultima_interacao_em DATETIME"
+        )
+    if "ultima_interacao_por" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE ocorrencias ADD COLUMN ultima_interacao_por VARCHAR(20)"
+        )
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
     if alteracoes:
         db.session.commit()
+    if adicionou_leitura:
+        db.session.execute(
+            text(
+                "UPDATE ocorrencias SET lida_pela_gestao = 0, "
+                "ultima_interacao_por = 'MORADOR' "
+                "WHERE status = 'Aberto'"
+            )
+        )
+        db.session.execute(
+            text(
+                "UPDATE ocorrencias SET lida_pela_gestao = 1, "
+                "ultima_interacao_por = 'GESTAO' "
+                "WHERE status != 'Aberto'"
+            )
+        )
+        db.session.commit()
+    if "notificacoes" in inspetor.get_table_names():
+        colunas_notif = {coluna["name"] for coluna in inspetor.get_columns("notificacoes")}
+        alteracoes_notif = []
+        if "link_destino" not in colunas_notif:
+            alteracoes_notif.append(
+                "ALTER TABLE notificacoes ADD COLUMN link_destino VARCHAR(255)"
+            )
+        if "tipo" not in colunas_notif:
+            alteracoes_notif.append(
+                "ALTER TABLE notificacoes ADD COLUMN tipo "
+                "VARCHAR(30) NOT NULL DEFAULT 'GERAL'"
+            )
+        for alteracao in alteracoes_notif:
+            db.session.execute(text(alteracao))
+        if alteracoes_notif:
+            db.session.commit()
+    if hasattr(inspetor, "clear_cache"):
+        inspetor.clear_cache()
+    _backfill_notificacoes_ocorrencias_abertas()
 
 
 def _garantir_colunas_pessoas():
@@ -802,6 +877,23 @@ def _garantir_colunas_encomendas():
             "ALTER TABLE encomendas ADD COLUMN tentativas_contato "
             "INTEGER NOT NULL DEFAULT 1"
         )
+    if "destinatario_telefone" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN destinatario_telefone VARCHAR(20)"
+        )
+    if "whatsapp_notificado" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN whatsapp_notificado "
+            "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "whatsapp_notificado_em" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN whatsapp_notificado_em DATETIME"
+        )
+    if "whatsapp_modo_envio" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE encomendas ADD COLUMN whatsapp_modo_envio VARCHAR(20)"
+        )
 
     for alteracao in alteracoes:
         db.session.execute(text(alteracao))
@@ -1092,6 +1184,9 @@ def _garantir_colunas_dados_condominio():
         ("criado_em", "DATETIME"),
         ("telefone_fixo", "VARCHAR(30)"),
         ("telefone_whatsapp", "VARCHAR(30)"),
+        ("whatsapp_api_url", "VARCHAR(255)"),
+        ("whatsapp_api_token", "VARCHAR(255)"),
+        ("whatsapp_auto_encomendas", "BOOLEAN NOT NULL DEFAULT 1"),
         ("email_contato", "VARCHAR(120)"),
         ("cep", "VARCHAR(9)"),
         ("logradouro", "VARCHAR(200)"),
@@ -1918,7 +2013,35 @@ def create_app(config=None):
             if usuario.condominio_id:
                 condominio_ctx = usuario.condominio
 
-            if usuario.role in (Role.PORTEIRO, Role.ADMIN, Role.SUPERADMIN):
+            if usuario.role == Role.ADMIN and usuario.condominio_id:
+                from app.routes import _query_notificacoes
+
+                notificacoes_habilitadas = True
+                notificacoes_nao_lidas = (
+                    _query_notificacoes(
+                        PerfilDestinoNotificacao.ADMIN,
+                        usuario.condominio_id,
+                        None,
+                        usuario,
+                    )
+                    .filter(Notificacao.lida.is_(False))
+                    .count()
+                )
+            elif usuario.role == Role.SINDICO and usuario.condominio_id:
+                from app.routes import _query_notificacoes
+
+                notificacoes_habilitadas = True
+                notificacoes_nao_lidas = (
+                    _query_notificacoes(
+                        PerfilDestinoNotificacao.SINDICO,
+                        usuario.condominio_id,
+                        None,
+                        usuario,
+                    )
+                    .filter(Notificacao.lida.is_(False))
+                    .count()
+                )
+            elif usuario.role in (Role.PORTEIRO, Role.SUPERADMIN):
                 cid_notif = usuario.condominio_id
                 if cid_notif:
                     notificacoes_habilitadas = True
@@ -1964,6 +2087,68 @@ def create_app(config=None):
 
             leituras_medidor_abertas = medidores_abertos_unidade(unidade)
 
+        qtd_ocorrencias_abertas = 0
+        qtd_ocorrencias_nao_lidas = 0
+        qtd_cadastros_pendentes = 0
+        qtd_pendencias_condominio = 0
+        ocorrencias_alerta = []
+        if (
+            usuario
+            and usuario.condominio_id
+            and usuario.role in (Role.ADMIN, Role.SINDICO)
+        ):
+            from sqlalchemy import or_
+
+            from app.models import Ocorrencia, StatusOcorrencia, StatusUnidade, Unidade
+            from app.routes import _blocos_codigo_sindico
+
+            base_ocorrencias = Ocorrencia.query.join(
+                Unidade, Ocorrencia.unidade_id == Unidade.id
+            ).filter(
+                Ocorrencia.condominio_id == usuario.condominio_id,
+                Unidade.condominio_id == usuario.condominio_id,
+                Unidade.eh_setor_interno.is_(False),
+            )
+            pendentes = Unidade.query.filter(
+                Unidade.condominio_id == usuario.condominio_id,
+                Unidade.status == StatusUnidade.PENDENTE,
+                Unidade.eh_setor_interno.is_(False),
+            )
+            if usuario.role == Role.SINDICO:
+                blocos = _blocos_codigo_sindico(usuario) or [""]
+                base_ocorrencias = base_ocorrencias.filter(Unidade.bloco.in_(blocos))
+                pendentes = pendentes.filter(Unidade.bloco.in_(blocos))
+            qtd_ocorrencias_abertas = base_ocorrencias.filter(
+                Ocorrencia.status == StatusOcorrencia.ABERTO
+            ).count()
+            qtd_ocorrencias_nao_lidas = base_ocorrencias.filter(
+                or_(
+                    Ocorrencia.status == StatusOcorrencia.ABERTO,
+                    Ocorrencia.lida_pela_gestao.is_(False),
+                )
+            ).count()
+            qtd_cadastros_pendentes = pendentes.count()
+            qtd_pendencias_condominio = (
+                qtd_ocorrencias_nao_lidas
+                + qtd_cadastros_pendentes
+                + reservas_pendentes_count
+            )
+            resumo = (
+                base_ocorrencias.filter(Ocorrencia.status == StatusOcorrencia.ABERTO)
+                .order_by(Ocorrencia.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            ocorrencias_alerta = [
+                {
+                    "unidade": item.unidade.identificador,
+                    "titulo": item.titulo,
+                    "categoria": item.categoria,
+                    "quando": item.created_at,
+                }
+                for item in resumo
+            ]
+
         return {
             "sidebar_user": usuario,
             "sidebar_unidade": unidade,
@@ -1974,6 +2159,11 @@ def create_app(config=None):
             "notificacoes_nao_lidas": notificacoes_nao_lidas,
             "notificacoes_habilitadas": notificacoes_habilitadas,
             "leituras_medidor_abertas": leituras_medidor_abertas,
+            "qtd_ocorrencias_abertas": qtd_ocorrencias_abertas,
+            "qtd_ocorrencias_nao_lidas": qtd_ocorrencias_nao_lidas,
+            "qtd_cadastros_pendentes": qtd_cadastros_pendentes,
+            "qtd_pendencias_condominio": qtd_pendencias_condominio,
+            "ocorrencias_alerta": ocorrencias_alerta,
         }
 
     from app import routes
