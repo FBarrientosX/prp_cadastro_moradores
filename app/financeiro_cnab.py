@@ -507,6 +507,9 @@ def aplicar_retorno(condominio_id, texto):
                 _sincronizar_acordo(acordo)
         relatorio["liquidados"].append({"id": cobranca.id, "valor": valor})
         relatorio["valor_creditado"] = round(relatorio["valor_creditado"] + valor, 2)
+        from app.blueprints.areas import liberar_reservas_pagas
+
+        liberar_reservas_pagas(condominio_id, [cobranca.id])
     relatorio["qtd_titulos"] = len(itens)
     return relatorio
 

@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Áreas Comuns{% endblock %}
+
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quill-rich.css') }}">
+{% endblock %}
+
+{% block content %}
+{% set acao_salvar = 'sindico_areas_salvar' if eh_sindico else 'admin_areas_salvar' %}
+{% set acao_excluir = 'sindico_areas_excluir' if eh_sindico else 'admin_areas_excluir' %}
+{% set acao_aprovar = 'sindico_areas_aprovar' if eh_sindico else 'admin_areas_aprovar' %}
+{% set acao_rejeitar = 'sindico_areas_rejeitar' if eh_sindico else 'admin_areas_rejeitar' %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Áreas comuns</h1>
+        <p class="text-muted mb-0">Cadastro dos espaços e aprovação das reservas.</p>
+    </div>
+    {% if aba != 'solicitacoes' %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaArea">
+        + Nova Área
+    </button>
+    {% endif %}
+</div>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if aba != 'solicitacoes' %}active{% endif %}" href="{{ url_for('sindico_areas' if eh_sindico else 'admin_areas', aba='areas') }}">Áreas Comuns</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if aba == 'solicitacoes' %}active{% endif %}" href="{{ url_for('sindico_areas' if eh_sindico else 'admin_areas', aba='solicitacoes') }}">
+            Solicitações de Reserva
+            {% if pendentes %}<span class="badge text-bg-warning">{{ pendentes|length }}</span>{% endif %}
+        </a>
+    </li>
+</ul>
+
+{% if aba != 'solicitacoes' %}
+{% if areas %}
+<div class="row g-3">
+    {% for area in areas %}
+    <div class="col-md-6 col-xl-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between gap-2 mb-2">
+                    <div class="fw-semibold">{{ area.nome }}</div>
+                    {% if area.ativa %}
+                    <span class="badge text-bg-success">Ativa</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Inativa</span>
+                    {% endif %}
+                </div>
+                <p class="small text-muted mb-2">
+                    {{ 'Geral' if area.bloco_vinculado == geral else 'Bloco ' ~ area.bloco_vinculado }}
+                    · até {{ area.capacidade }} pessoas
+                    · {% if area.taxa_uso_valor > 0 %}R$ {{ '%.2f'|format(area.taxa_uso_valor)|replace('.', ',') }}{% else %}gratuita{% endif %}
+                </p>
+                {% if area.pagamento_antecipado_obrigatorio and area.taxa_uso_valor > 0 %}
+                <p class="small mb-2">Pagamento antecipado para confirmar.</p>
+                {% endif %}
+                <div class="mt-auto d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalArea{{ area.id }}">Editar</button>
+                    <form method="post" action="{{ url_for(acao_excluir, area_id=area.id) }}" onsubmit="return confirm('Excluir esta área?');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-muted mb-0">Nenhuma área neste mandato.</p>
+{% endif %}
+{% else %}
+<div id="calendario-reservas" class="mb-4"></div>
+{% if reservas %}
+<div class="row g-3">
+    {% for item in reservas %}
+    <div class="col-md-6 col-xl-4" id="reserva-{{ item.id }}">
+        <div class="card shadow-sm h-100 {% if foco == item.id %}border-primary border-2{% endif %}">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between gap-2 mb-2">
+                    <div>
+                        <div class="fw-semibold">{{ item.area.nome }}</div>
+                        <div class="small text-muted">{{ item.unidade.identificador }}</div>
+                    </div>
+                    <span class="badge text-bg-light border">{{ item.status }}</span>
+                </div>
+                <p class="small mb-2">
+                    {{ item.data_evento.strftime('%d/%m/%Y') }}
+                    · {{ item.horario_inicio.strftime('%H:%M') }}–{{ item.horario_fim.strftime('%H:%M') }}
+                </p>
+                {% if item.motivo_rejeicao %}
+                <p class="small text-muted mb-2">{{ item.motivo_rejeicao }}</p>
+                {% endif %}
+                <div class="mt-auto d-flex flex-wrap gap-2">
+                    {% if item.status == status_pendente %}
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalReserva{{ item.id }}">Abrir</button>
+                    {% endif %}
+                    {% if item.cobranca_id %}
+                    <a class="btn btn-sm btn-outline-success" href="{{ url_for('financeiro_boleto', cobranca_id=item.cobranca_id) }}">Ver boleto</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-muted mb-0">Nenhuma solicitação neste mandato.</p>
+{% endif %}
+{% endif %}
+
+<div class="modal fade" id="modalNovaArea" tabindex="-1" aria-labelledby="modalNovaAreaTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for(acao_salvar) }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalNovaAreaTitulo">Nova área</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% with area=none %}
+                {% include "admin/_area_form.html" %}
+                {% endwith %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar área</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% for area in areas %}
+<div class="modal fade" id="modalArea{{ area.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for(acao_salvar) }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Editar {{ area.nome }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% include "admin/_area_form.html" %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar área</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
+
+{% for item in reservas if item.status == status_pendente %}
+<div class="modal fade" id="modalReserva{{ item.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5">{{ item.area.nome }} · {{ item.unidade.identificador }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-1">{{ item.data_evento.strftime('%d/%m/%Y') }} · {{ item.horario_inicio.strftime('%H:%M') }}–{{ item.horario_fim.strftime('%H:%M') }}</p>
+                <p class="small text-muted mb-0">
+                    {% if item.area.taxa_uso_valor > 0 %}
+                    Taxa R$ {{ '%.2f'|format(item.area.taxa_uso_valor)|replace('.', ',') }}
+                    {% if item.area.pagamento_antecipado_obrigatorio %}· boleto em 3 dias{% else %}· lançada para o dia 10{% endif %}
+                    {% else %}
+                    Área gratuita
+                    {% endif %}
+                </p>
+            </div>
+            <div class="modal-footer flex-column align-items-stretch gap-2">
+                <form method="post" action="{{ url_for(acao_aprovar, reserva_id=item.id) }}">
+                    <button type="submit" class="btn btn-success w-100">✅ Aprovar</button>
+                </form>
+                <form method="post" action="{{ url_for(acao_rejeitar, reserva_id=item.id) }}">
+                    <label class="form-label" for="motivo-{{ item.id }}">Motivo da rejeição</label>
+                    <textarea class="form-control mb-2" id="motivo-{{ item.id }}" name="motivo_rejeicao" rows="2" maxlength="255" required></textarea>
+                    <button type="submit" class="btn btn-danger w-100">❌ Rejeitar</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<script src="{{ url_for('static', filename='js/quill-rich.js') }}"></script>
+<script>
+(function () {
+    var foco = {{ foco if foco else 'null' }};
+    var card = foco ? document.getElementById("reserva-" + foco) : null;
+    if (card) card.scrollIntoView({ block: "center" });
+    if (foco && window.bootstrap) {
+        var modal = document.getElementById("modalReserva" + foco);
+        if (modal) bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+    var calendario = document.getElementById("calendario-reservas");
+    if (calendario && window.FullCalendar) {
+        var agenda = new FullCalendar.Calendar(calendario, {
+            locale: "pt-br",
+            initialView: "dayGridMonth",
+            height: "auto",
+            headerToolbar: { left: "prev,next", center: "title", right: "" },
+            events: {{ eventos|tojson }},
+            eventClick: function (info) {
+                var alvo = document.getElementById("reserva-" + info.event.id);
+                if (alvo) alvo.scrollIntoView({ block: "center" });
+            }
+        });
+        agenda.render();
+    }
+})();
+</script>
+{% endblock %}

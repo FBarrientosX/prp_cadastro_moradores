@@ -72,6 +72,40 @@ class StatusEncomenda:
     CHOICES = (PENDENTE, ENTREGUE)
 
 
+class StatusReservaArea:
+    """Status da reserva do módulo novo. Não altera a Reserva operacional."""
+
+    PENDENTE = "Pendente"
+    AGUARDANDO_PAGAMENTO = "Aguardando Pagamento"
+    APROVADA = "Aprovada"
+    REJEITADA = "Rejeitada"
+    CANCELADA = "Cancelada"
+
+    CHOICES = (
+        PENDENTE,
+        AGUARDANDO_PAGAMENTO,
+        APROVADA,
+        REJEITADA,
+        CANCELADA,
+    )
+
+
+class TipoInfracao:
+    ADVERTENCIA = "Advertência"
+    MULTA = "Multa"
+
+    CHOICES = (ADVERTENCIA, MULTA)
+
+
+class StatusInfracao:
+    NOTIFICADA = "Notificada/Aguardando Defesa"
+    EM_ANALISE = "Em Análise"
+    CONFIRMADA = "Penalidade Confirmada"
+    CANCELADA = "Cancelada/Absolvida"
+
+    CHOICES = (NOTIFICADA, EM_ANALISE, CONFIRMADA, CANCELADA)
+
+
 class StatusAutorizacaoAcesso:
     PENDENTE = "Pendente"
     CONCLUIDA = "Concluída"
@@ -159,6 +193,14 @@ class Condominio(db.Model):
     fin_multa_percentual = db.Column(db.Float, nullable=False, default=2.0)
     fin_juros_mensal = db.Column(db.Float, nullable=False, default=1.0)
     fin_indice_correcao = db.Column(db.String(20), nullable=False, default="UFIR-RJ")
+    # Lista de convidados da reserva exige CPF quando ligado.
+    exigir_cpf_convidados = db.Column(db.Boolean, nullable=False, default=False)
+    # Prazo do contraditório da multa, em dias.
+    dias_padrao_defesa_multa = db.Column(db.Integer, nullable=False, default=15)
+    # Área gratuita nasce aprovada, sem passar pelo síndico.
+    aprovacao_automatica_reservas = db.Column(
+        db.Boolean, nullable=False, default=False
+    )
 
     configuracao = db.relationship(
         "ConfiguracaoCondominio",
@@ -510,6 +552,136 @@ class Reserva(db.Model):
 
     def __repr__(self):
         return f"<Reserva {self.id} ({self.status})>"
+
+
+class AreaComum(db.Model):
+    """Área reservável do módulo novo. A operação atual segue em EspacoComum."""
+
+    __tablename__ = "areas_comuns"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(150), nullable=False)
+    bloco_vinculado = db.Column(db.String(50), nullable=False, default="GERAL")
+    capacidade = db.Column(db.Integer, nullable=False, default=0)
+    taxa_uso_valor = db.Column(db.Float, nullable=False, default=0.0)
+    pagamento_antecipado_obrigatorio = db.Column(
+        db.Boolean, nullable=False, default=False
+    )
+    regras_uso = db.Column(db.Text, nullable=True)
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("areas_comuns", lazy="dynamic")
+    )
+    reservas = db.relationship(
+        "ReservaArea",
+        back_populates="area",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<AreaComum {self.nome}>"
+
+
+class ReservaArea(db.Model):
+    """Reserva do módulo novo. A tabela operacional continua sendo `reservas`."""
+
+    __tablename__ = "reservas_area"
+
+    id = db.Column(db.Integer, primary_key=True)
+    area_id = db.Column(
+        db.Integer, db.ForeignKey("areas_comuns.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    data_evento = db.Column(db.Date, nullable=False, index=True)
+    horario_inicio = db.Column(db.Time, nullable=False)
+    horario_fim = db.Column(db.Time, nullable=False)
+    status = db.Column(
+        db.String(40), nullable=False, default=StatusReservaArea.PENDENTE
+    )
+    cobranca_id = db.Column(
+        db.Integer, db.ForeignKey("cobranca_unidade.id"), nullable=True, index=True
+    )
+    criada_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    motivo_rejeicao = db.Column(db.String(255), nullable=True)
+
+    area = db.relationship("AreaComum", back_populates="reservas")
+    unidade = db.relationship("Unidade")
+    cobranca = db.relationship("CobrancaUnidade")
+    convidados = db.relationship(
+        "ConvidadoReserva",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<ReservaArea {self.id} ({self.status})>"
+
+
+class ConvidadoReserva(db.Model):
+    """Convidado da reserva nova, para o check-in da portaria."""
+
+    __tablename__ = "convidados_reserva"
+
+    id = db.Column(db.Integer, primary_key=True)
+    reserva_id = db.Column(
+        db.Integer, db.ForeignKey("reservas_area.id"), nullable=False, index=True
+    )
+    nome = db.Column(db.String(200), nullable=False)
+    documento_cpf = db.Column(db.String(20), nullable=True)
+    status_checkin = db.Column(db.Boolean, nullable=False, default=False)
+    checkin_em = db.Column(db.DateTime, nullable=True)
+    checkin_por_usuario = db.Column(db.String(80), nullable=True)
+
+    reserva = db.relationship("ReservaArea", back_populates="convidados")
+
+    def __repr__(self):
+        return f"<ConvidadoReserva {self.id}>"
+
+
+class Infracao(db.Model):
+    """Advertência ou multa, com prazo de defesa e vínculo opcional ao boleto."""
+
+    __tablename__ = "infracoes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    unidade_id = db.Column(
+        db.Integer, db.ForeignKey("unidades.id"), nullable=False, index=True
+    )
+    tipo = db.Column(db.String(20), nullable=False)
+    valor_multa = db.Column(db.Float, nullable=False, default=0.0)
+    descricao = db.Column(db.Text, nullable=False)
+    data_ocorrencia = db.Column(db.Date, nullable=False)
+    status = db.Column(
+        db.String(40), nullable=False, default=StatusInfracao.NOTIFICADA
+    )
+    prazo_defesa = db.Column(db.Date, nullable=False)
+    texto_defesa = db.Column(db.Text, nullable=True)
+    anexos_json = db.Column(db.Text, nullable=False, default="[]")
+    cobranca_id = db.Column(
+        db.Integer, db.ForeignKey("cobranca_unidade.id"), nullable=True, index=True
+    )
+    criada_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    criada_por = db.Column(db.String(80), nullable=False)
+
+    condominio = db.relationship(
+        "Condominio", backref=db.backref("infracoes", lazy="dynamic")
+    )
+    unidade = db.relationship("Unidade")
+    cobranca = db.relationship("CobrancaUnidade")
+
+    def __repr__(self):
+        return f"<Infracao {self.id} ({self.tipo})>"
 
 
 class CategoriaParceiro(db.Model):

@@ -1171,6 +1171,17 @@ def _garantir_colunas_livro_servico():
         db.session.commit()
 
 
+def _garantir_tabelas_areas_infracoes():
+    """Cria as tabelas do módulo novo antes de qualquer consulta.
+
+    Não mexe em `espacos_comuns` nem em `reservas`, que seguem em operação.
+    """
+    from app.models import AreaComum, ConvidadoReserva, Infracao, ReservaArea
+
+    for modelo in (AreaComum, ReservaArea, ConvidadoReserva, Infracao):
+        modelo.__table__.create(bind=db.engine, checkfirst=True)
+
+
 def _garantir_colunas_dados_condominio():
     """Colunas fiscais, contato, endereço e governança em condomínios já existentes."""
     inspetor = inspect(db.engine)
@@ -1203,6 +1214,9 @@ def _garantir_colunas_dados_condominio():
         ("logo_filename", "VARCHAR(255)"),
         ("regimento_filename", "VARCHAR(255)"),
         ("convencao_filename", "VARCHAR(255)"),
+        ("exigir_cpf_convidados", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("dias_padrao_defesa_multa", "INTEGER NOT NULL DEFAULT 15"),
+        ("aprovacao_automatica_reservas", "BOOLEAN NOT NULL DEFAULT 0"),
     )
     for nome, tipo in definicoes:
         if nome in colunas:
@@ -1901,6 +1915,7 @@ def create_app(config=None):
     upload_faciais = os.path.join(app.root_path, "static", "uploads", "faciais")
     upload_financeiro = os.path.join(app.root_path, "static", "uploads", "financeiro")
     upload_medidores = os.path.join(app.root_path, "static", "uploads", "medidores")
+    upload_infracoes = os.path.join(app.root_path, "static", "uploads", "infracoes")
 
     secret_key = os.environ.get("SECRET_KEY") or (config or {}).get("SECRET_KEY")
     if not secret_key:
@@ -1928,6 +1943,7 @@ def create_app(config=None):
         UPLOAD_FACIAIS_FOLDER=upload_faciais,
         UPLOAD_FINANCEIRO_FOLDER=upload_financeiro,
         UPLOAD_MEDIDORES_FOLDER=upload_medidores,
+        UPLOAD_INFRACOES_FOLDER=upload_infracoes,
     )
 
     if config:
@@ -1938,6 +1954,7 @@ def create_app(config=None):
     os.makedirs(app.config["UPLOAD_FACIAIS_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_FINANCEIRO_FOLDER"], exist_ok=True)
     os.makedirs(app.config["UPLOAD_MEDIDORES_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["UPLOAD_INFRACOES_FOLDER"], exist_ok=True)
 
     @app.template_global()
     def foto_facial_url(pessoa):
@@ -2174,6 +2191,7 @@ def create_app(config=None):
         from app import models  # noqa: F401
 
         db.create_all()
+        _garantir_tabelas_areas_infracoes()
         # Garante condominio_id em bancos SQLite legados antes do backfill.
         _garantir_colunas_multi_tenant()
         _garantir_colunas_usuarios()

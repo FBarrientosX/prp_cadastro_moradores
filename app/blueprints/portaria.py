@@ -19,6 +19,7 @@ from urllib.parse import quote
 from datetime import datetime
 
 from flask import (
+    abort,
     current_app,
     flash,
     jsonify,
@@ -255,17 +256,22 @@ def portaria_dashboard():
     condominio_id = _condominio_id_portaria(usuario)
     visitantes_no_local, prestadores_no_local = _contagens_acesso_aberto(condominio_id)
     encomendas_pendentes = 0
+    eventos_hoje = []
     if condominio_id:
         encomendas_pendentes = Encomenda.query.filter_by(
             condominio_id=condominio_id,
             status=StatusEncomenda.PENDENTE,
         ).count()
+        from app.blueprints.areas import eventos_aprovados_no_dia
+
+        eventos_hoje = eventos_aprovados_no_dia(condominio_id, _hoje_sao_paulo())
     return render_template(
         "portaria/dashboard.html",
         current_user=usuario,
         visitantes_no_local=visitantes_no_local,
         prestadores_no_local=prestadores_no_local,
         encomendas_pendentes=encomendas_pendentes,
+        eventos_hoje=eventos_hoje,
     )
 
 
@@ -2402,6 +2408,143 @@ def api_portaria_buscar_unidade():
     return resposta
 
 
+def _reserva_evento_hoje(reserva_id, condominio_id):
+    from app.models import AreaComum, ReservaArea, StatusReservaArea
+
+    if not condominio_id:
+        return None
+    reserva = (
+        ReservaArea.query.join(AreaComum)
+        .filter(
+            ReservaArea.id == reserva_id,
+            AreaComum.condominio_id == condominio_id,
+            ReservaArea.status == StatusReservaArea.APROVADA,
+            ReservaArea.data_evento == _hoje_sao_paulo(),
+        )
+        .first()
+    )
+    return reserva
+
+
+def _contagem_convidados(reserva):
+    presentes = sum(1 for item in reserva.convidados if item.status_checkin)
+    total = reserva.convidados.count()
+    return presentes, total - presentes
+
+
+def _resposta_checkin(reserva, convidado, entrou):
+    from flask import jsonify
+
+    presentes, faltam = _contagem_convidados(reserva)
+    hora = convidado.checkin_em.strftime("%H:%M") if convidado.checkin_em else ""
+    if request.headers.get("X-Requested-With") == "fetch":
+        resposta = jsonify(
+            ok=True,
+            entrou=entrou,
+            hora=hora,
+            presentes=presentes,
+            faltam=faltam,
+        )
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+    return redirect(url_for("portaria_evento", reserva_id=reserva.id))
+
+
+@portaria_required
+def portaria_evento(reserva_id):
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidados = sorted(reserva.convidados.all(), key=lambda item: (item.nome or "").casefold())
+    presentes, faltam = _contagem_convidados(reserva)
+    return render_template(
+        "portaria/evento.html",
+        current_user=usuario,
+        reserva=reserva,
+        convidados=convidados,
+        presentes=presentes,
+        faltam=faltam,
+    )
+
+
+@portaria_required
+def portaria_evento_checkin(reserva_id, convidado_id):
+    from app.models import ConvidadoReserva
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidado = ConvidadoReserva.query.filter_by(
+        id=convidado_id, reserva_id=reserva.id
+    ).first()
+    if convidado is None:
+        abort(404)
+    if not convidado.status_checkin:
+        agora = _agora_sao_paulo()
+        linhas = ConvidadoReserva.query.filter_by(
+            id=convidado.id,
+            reserva_id=reserva.id,
+            status_checkin=False,
+        ).update(
+            {
+                ConvidadoReserva.status_checkin: True,
+                ConvidadoReserva.checkin_em: agora,
+                ConvidadoReserva.checkin_por_usuario: (usuario.username or "")[:80],
+            },
+            synchronize_session=False,
+        )
+        if linhas:
+            db.session.expire(convidado)
+            _registrar_auditoria(
+                usuario,
+                f"Check-in do convidado #{convidado.id} na reserva de área #{reserva.id}.",
+            )
+            db.session.commit()
+    return _resposta_checkin(reserva, convidado, True)
+
+
+@portaria_required
+def portaria_evento_desfazer(reserva_id, convidado_id):
+    from app.models import ConvidadoReserva
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidado = ConvidadoReserva.query.filter_by(
+        id=convidado_id, reserva_id=reserva.id
+    ).first()
+    if convidado is None:
+        abort(404)
+    if convidado.status_checkin:
+        linhas = ConvidadoReserva.query.filter_by(
+            id=convidado.id,
+            reserva_id=reserva.id,
+            status_checkin=True,
+        ).update(
+            {
+                ConvidadoReserva.status_checkin: False,
+                ConvidadoReserva.checkin_em: None,
+                ConvidadoReserva.checkin_por_usuario: None,
+            },
+            synchronize_session=False,
+        )
+        if linhas:
+            db.session.expire(convidado)
+            _registrar_auditoria(
+                usuario,
+                f"Desfez o check-in do convidado #{convidado.id} na reserva de área #{reserva.id}.",
+            )
+            db.session.commit()
+    return _resposta_checkin(reserva, convidado, False)
+
+
 def register(app):
     """Registra as rotas da portaria preservando os endpoints legados."""
     app.add_url_rule(
@@ -2576,5 +2719,23 @@ def register(app):
         "/portaria/plantao/evento",
         "portaria_plantao_evento",
         portaria_plantao_evento,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>",
+        "portaria_evento",
+        portaria_evento,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>/convidados/<int:convidado_id>/checkin",
+        "portaria_evento_checkin",
+        portaria_evento_checkin,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>/convidados/<int:convidado_id>/desfazer",
+        "portaria_evento_desfazer",
+        portaria_evento_desfazer,
         methods=["POST"],
     )

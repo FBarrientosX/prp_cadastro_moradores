@@ -3904,7 +3904,17 @@ def _notificacao_do_ator(notificacao_id):
 
 def _destino_notificacao_seguro(link):
     destino = (link or "").strip()
-    prefixos = ("/admin/ocorrencias", "/sindico/ocorrencias", "/morador/ocorrencias")
+    prefixos = (
+        "/admin/ocorrencias",
+        "/sindico/ocorrencias",
+        "/morador/ocorrencias",
+        "/admin/infracoes",
+        "/sindico/infracoes",
+        "/morador/infracoes",
+        "/admin/reservas",
+        "/sindico/reservas",
+        "/morador/reservas",
+    )
     if destino.startswith(prefixos) and not destino.startswith("//"):
         return destino
     return None
@@ -4004,6 +4014,8 @@ def condominio_documento(tipo):
 
 def init_app(app):
     from app.blueprints import admin as admin_routes
+    from app.blueprints import areas as areas_routes
+    from app.blueprints import infracoes as infracoes_routes
     from app.blueprints import api as api_routes
     from app.blueprints import financeiro as financeiro_routes
     from app.blueprints import planta as planta_routes
@@ -4016,6 +4028,8 @@ def init_app(app):
     superadmin_routes.register(app)
     sindico_routes.register(app)
     admin_routes.register(app)
+    infracoes_routes.register(app)
+    areas_routes.register(app)
     financeiro_routes.register(app)
     planta_routes.register(app)
     portaria_routes.register(app)

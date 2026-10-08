@@ -313,6 +313,46 @@
         </div>
     </div>
 
+    {% if editar_operacao %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3">Reservas e infrações</h2>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label" for="dias_padrao_defesa_multa">Prazo de defesa da multa (dias)</label>
+                    <input type="number" class="form-control" id="dias_padrao_defesa_multa"
+                           name="dias_padrao_defesa_multa" min="1" max="365" required
+                           value="{{ condominio.dias_padrao_defesa_multa if condominio.dias_padrao_defesa_multa is not none else 15 }}">
+                    <div class="form-text">Prazo padrão do contraditório.</div>
+                </div>
+                <div class="col-12">
+                    <input type="hidden" name="exigir_cpf_convidados" value="0">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="exigir_cpf_convidados"
+                               name="exigir_cpf_convidados" value="1"
+                               {% if condominio.exigir_cpf_convidados %}checked{% endif %}>
+                        <label class="form-check-label" for="exigir_cpf_convidados">
+                            Exigir CPF na lista de convidados
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <input type="hidden" name="aprovacao_automatica_reservas" value="0">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="aprovacao_automatica_reservas"
+                               name="aprovacao_automatica_reservas" value="1"
+                               {% if condominio.aprovacao_automatica_reservas %}checked{% endif %}>
+                        <label class="form-check-label" for="aprovacao_automatica_reservas">
+                            Aprovar automaticamente reservas de áreas gratuitas
+                        </label>
+                    </div>
+                    <div class="form-text">Quando ligado, a área sem taxa não passa pela moderação do síndico.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     {% if editar_contatos or editar_operacao or editar_saas %}
     <button type="submit" class="btn btn-primary">
         <i class="bi bi-check2-circle me-1"></i>Salvar dados

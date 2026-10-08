@@ -3,6 +3,18 @@
 {% block title %}Painel da Portaria{% endblock %}
 
 {% block content %}
+{% if eventos_hoje %}
+<div class="alert alert-warning border-0 shadow-sm mb-4" role="status">
+    <div class="fw-bold mb-2">🎉 EVENTOS HOJE:</div>
+    <div class="d-flex flex-wrap gap-2">
+        {% for evento in eventos_hoje %}
+        <a class="btn btn-dark text-start" href="{{ url_for('portaria_evento', reserva_id=evento.id) }}">
+            [{{ evento.area.nome }} - Unid. {{ evento.unidade.bloco }}-{{ evento.unidade.apartamento }} | {{ evento.horario_inicio.strftime('%H:%M') }} às {{ evento.horario_fim.strftime('%H:%M') }}]
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
     <div>
         <h1 class="h3 mb-1">Painel da Portaria</h1>

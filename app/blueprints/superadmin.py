@@ -326,6 +326,14 @@ def superadmin_condominio_editar(condominio_id):
     cfg.tem_subsindicos = tem_subsindicos
     cfg.fluxo_aprovacao_mudanca = fluxo_aprovacao_mudanca
 
+    from app.blueprints.admin import _aplicar_config_reservas_infracoes
+
+    erro_config = _aplicar_config_reservas_infracoes(condominio)
+    if erro_config:
+        db.session.rollback()
+        flash(erro_config, "danger")
+        return redirect(url_for("superadmin_condominios"))
+
     db.session.commit()
     flash(f"Condomínio '{condominio.nome}' atualizado com sucesso.", "success")
     return redirect(url_for("superadmin_condominios"))

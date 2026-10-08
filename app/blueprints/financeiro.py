@@ -1353,6 +1353,16 @@ def _cobranca_autorizada(cobranca_id):
         and usuario.condominio_id == cobranca.condominio_id
     ):
         return cobranca
+    if (
+        usuario is not None
+        and usuario.role == Role.SINDICO
+        and usuario.condominio_id == cobranca.condominio_id
+        and cobranca.unidade is not None
+    ):
+        from app.routes import _sindico_gerencia_bloco
+
+        if _sindico_gerencia_bloco(usuario, cobranca.unidade.bloco):
+            return cobranca
     if unidade is None and usuario is None:
         from app.auth import _redirect_login_tenant
 

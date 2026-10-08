@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}Infrações{% endblock %}
+
+{% block content %}
+{% set acao_nova = 'sindico_infracoes_criar' if eh_sindico else 'admin_infracoes_criar' %}
+{% set acao_absolver = 'sindico_infracoes_absolver' if eh_sindico else 'admin_infracoes_absolver' %}
+{% set acao_confirmar = 'sindico_infracoes_confirmar' if eh_sindico else 'admin_infracoes_confirmar' %}
+{% set acao_anexo = 'sindico_infracoes_anexo' if eh_sindico else 'admin_infracoes_anexo' %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Infrações</h1>
+        <p class="text-muted mb-0">Notificação, defesa e confirmação da penalidade.</p>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalRegistrarInfracao">
+        + Registrar Infração
+    </button>
+</div>
+
+<form method="get" class="row g-2 align-items-end mb-3">
+    <div class="col-6 col-md-3">
+        <label class="form-label mb-1" for="filtro-status">Status</label>
+        <select class="form-select form-select-sm" id="filtro-status" name="status">
+            <option value="">Todos</option>
+            {% for item in status_choices %}
+            <option value="{{ item }}" {% if status_filtro == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-6 col-md-2">
+        <label class="form-label mb-1" for="filtro-tipo">Tipo</label>
+        <select class="form-select form-select-sm" id="filtro-tipo" name="tipo">
+            <option value="">Todos</option>
+            {% for item in tipo_choices %}
+            <option value="{{ item }}" {% if tipo_filtro == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-6 col-md-2">
+        <label class="form-label mb-1" for="filtro-bloco">Bloco</label>
+        <select class="form-select form-select-sm" id="filtro-bloco" name="bloco">
+            <option value="">Todos</option>
+            {% for item in blocos %}
+            <option value="{{ item }}" {% if bloco_filtro == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-6 col-md-3">
+        <label class="form-label mb-1" for="filtro-unidade">Unidade</label>
+        <select class="form-select form-select-sm" id="filtro-unidade" name="unidade">
+            <option value="">Todas</option>
+            {% for unidade in unidades %}
+            <option value="{{ unidade.id }}" {% if unidade_filtro|string == unidade.id|string %}selected{% endif %}>{{ unidade.identificador }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <button type="submit" class="btn btn-sm btn-outline-primary w-100">Filtrar</button>
+    </div>
+</form>
+
+{% if infracoes %}
+<div class="row g-3">
+    {% for item in infracoes %}
+    {% set pode_absolver = item.status == status_analise %}
+    {% set pode_confirmar = item.status == status_analise or (item.status == status_notificada and item.prazo_defesa < hoje) %}
+    <div class="col-md-6 col-xl-4" id="infracao-{{ item.id }}">
+        <div class="card shadow-sm h-100 {% if foco == item.id %}border-primary border-2{% endif %}">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                    <div>
+                        <div class="fw-semibold">{{ item.unidade.identificador }}</div>
+                        <div class="small text-muted">{{ item.tipo }}{% if item.tipo == tipo_multa %} · R$ {{ '%.2f'|format(item.valor_multa)|replace('.', ',') }}{% endif %}</div>
+                    </div>
+                    {% if item.status == status_notificada %}
+                    <span class="badge text-bg-warning text-wrap">{{ item.status }}</span>
+                    {% elif item.status == status_analise %}
+                    <span class="badge text-bg-info">{{ item.status }}</span>
+                    {% elif item.status == status_confirmada %}
+                    <span class="badge text-bg-danger">{{ item.status }}</span>
+                    {% else %}
+                    <span class="badge text-bg-success">{{ item.status }}</span>
+                    {% endif %}
+                </div>
+                <p class="small mb-2" style="white-space: pre-wrap;">{{ item.descricao }}</p>
+                <p class="small text-muted mb-2">
+                    Ocorrência {{ item.data_ocorrencia.strftime('%d/%m/%Y') }}
+                    · defesa até {{ item.prazo_defesa.strftime('%d/%m/%Y') }}
+                </p>
+                <div class="mt-auto d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalInfracao{{ item.id }}">
+                        Abrir
+                    </button>
+                    {% if item.cobranca_id %}
+                    <a class="btn btn-sm btn-outline-success" href="{{ url_for('financeiro_boleto', cobranca_id=item.cobranca_id) }}">
+                        💸 Ver Boleto da Multa
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-muted mb-0">Nenhuma infração neste filtro.</p>
+{% endif %}
+
+<div class="modal fade" id="modalRegistrarInfracao" tabindex="-1" aria-labelledby="modalRegistrarInfracaoTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for(acao_nova) }}" enctype="multipart/form-data" id="form-infracao"
+              data-dias="{{ dias_defesa }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalRegistrarInfracaoTitulo">Registrar infração</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="unidade_id">Unidade</label>
+                        <select class="form-select" id="unidade_id" name="unidade_id" required>
+                            <option value="" selected disabled>Selecione</option>
+                            {% for unidade in unidades %}
+                            <option value="{{ unidade.id }}">{{ unidade.identificador }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="tipo">Tipo</label>
+                        <select class="form-select" id="tipo" name="tipo" required>
+                            <option value="Advertência">Advertência</option>
+                            <option value="Multa">Multa</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3" id="campo-valor">
+                        <label class="form-label" for="valor_multa">Valor</label>
+                        <input type="text" class="form-control" id="valor_multa" name="valor_multa" inputmode="decimal" placeholder="0,00">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="data_ocorrencia">Data da ocorrência</label>
+                        <input type="text" class="form-control datepicker" id="data_ocorrencia" name="data_ocorrencia"
+                               value="{{ hoje.strftime('%Y-%m-%d') }}" required autocomplete="off" placeholder="DD/MM/AAAA">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="prazo_defesa">Prazo de defesa</label>
+                        <input type="text" class="form-control datepicker" id="prazo_defesa" name="prazo_defesa"
+                               value="{{ prazo_sugerido.strftime('%Y-%m-%d') }}" required autocomplete="off" placeholder="DD/MM/AAAA">
+                        <div class="form-text">Sugestão: hoje + {{ dias_defesa }} dias. Pode ajustar.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="descricao">Descrição</label>
+                        <textarea class="form-control" id="descricao" name="descricao" rows="4" maxlength="5000" required></textarea>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="anexos">Anexos</label>
+                        <input type="file" class="form-control" id="anexos" name="anexos" multiple
+                               accept="image/png,image/jpeg,image/webp,application/pdf,video/mp4,video/webm,video/quicktime">
+                        <div class="form-text">Até 4 arquivos, 8 MB cada. Fotos, PDF ou vídeo.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar infração</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% for item in infracoes %}
+{% set pode_absolver = item.status == status_analise %}
+{% set pode_confirmar = item.status == status_analise or (item.status == status_notificada and item.prazo_defesa < hoje) %}
+<div class="modal fade" id="modalInfracao{{ item.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Infração #{{ item.id }} · {{ item.unidade.identificador }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2"><span class="badge text-bg-light border">{{ item.status }}</span> <span class="badge text-bg-light border">{{ item.tipo }}</span></p>
+                <p style="white-space: pre-wrap;">{{ item.descricao }}</p>
+                <p class="small text-muted">Prazo de defesa: {{ item.prazo_defesa.strftime('%d/%m/%Y') }}</p>
+                {% if anexos_por_id[item.id] %}
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    {% for anexo in anexos_por_id[item.id] %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for(acao_anexo, infracao_id=item.id, arquivo=anexo.arquivo) }}">
+                        {{ 'Defesa' if anexo.origem == 'defesa' else 'Registro' }} · {{ anexo.nome }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if item.texto_defesa %}
+                <h3 class="h6">Defesa do morador</h3>
+                <p style="white-space: pre-wrap;">{{ item.texto_defesa }}</p>
+                {% elif item.status == status_notificada and item.prazo_defesa < hoje %}
+                <p class="text-muted">O prazo de defesa encerrou sem manifestação.</p>
+                {% endif %}
+            </div>
+            {% if pode_absolver or pode_confirmar %}
+            <div class="modal-footer flex-column align-items-stretch gap-2">
+                {% if pode_absolver %}
+                <form method="post" action="{{ url_for(acao_absolver, infracao_id=item.id) }}">
+                    <button type="submit" class="btn btn-success w-100">✅ Acatar Defesa (Absolver / Cancelar)</button>
+                </form>
+                {% endif %}
+                {% if pode_confirmar %}
+                <form method="post" action="{{ url_for(acao_confirmar, infracao_id=item.id) }}" class="border rounded p-3">
+                    {% if item.tipo == tipo_multa and item.valor_multa > 0 %}
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="vencimento_modo" id="vence-avulso-{{ item.id }}" value="avulso" checked>
+                        <label class="form-check-label" for="vence-avulso-{{ item.id }}">Boleto avulso, vencimento em 5 dias</label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="radio" name="vencimento_modo" id="vence-proxima-{{ item.id }}" value="proxima">
+                        <label class="form-check-label" for="vence-proxima-{{ item.id }}">Embutir na próxima taxa (vence dia 10 do mês seguinte)</label>
+                    </div>
+                    {% endif %}
+                    <button type="submit" class="btn btn-danger w-100">❌ Rejeitar Defesa &amp; Confirmar Penalidade</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr(".datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+    var tipo = document.getElementById("tipo");
+    var campoValor = document.getElementById("campo-valor");
+    function atualizarValor() {
+        if (!tipo || !campoValor) return;
+        campoValor.classList.toggle("d-none", tipo.value !== "Multa");
+    }
+    if (tipo) tipo.addEventListener("change", atualizarValor);
+    atualizarValor();
+    var foco = {{ foco if foco else 'null' }};
+    if (foco && window.bootstrap) {
+        var modal = document.getElementById("modalInfracao" + foco);
+        var card = document.getElementById("infracao-" + foco);
+        if (card) card.scrollIntoView({ block: "center" });
+        if (modal) bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+})();
+</script>
+{% endblock %}

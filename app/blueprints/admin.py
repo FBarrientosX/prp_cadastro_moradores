@@ -2769,6 +2769,27 @@ def _aplicar_dados_condominio(condominio, usuario):
         condominio.nome_responsavel_gestao = responsavel
         condominio.horario_mudancas = horario
         condominio.fim_mandato = mandato
+        erro = _aplicar_config_reservas_infracoes(condominio)
+        if erro:
+            return erro
+    return None
+
+
+def _aplicar_config_reservas_infracoes(condominio):
+    """Grava as chaves de reservas e infrações só quando o formulário as envia."""
+    if "dias_padrao_defesa_multa" in request.form:
+        bruto = (request.form.get("dias_padrao_defesa_multa") or "").strip()
+        if not bruto.isdigit() or not 1 <= int(bruto) <= 365:
+            return "Informe o prazo de defesa entre 1 e 365 dias."
+        condominio.dias_padrao_defesa_multa = int(bruto)
+    if "exigir_cpf_convidados" in request.form:
+        condominio.exigir_cpf_convidados = (
+            "1" in request.form.getlist("exigir_cpf_convidados")
+        )
+    if "aprovacao_automatica_reservas" in request.form:
+        condominio.aprovacao_automatica_reservas = (
+            "1" in request.form.getlist("aprovacao_automatica_reservas")
+        )
     return None
 
 

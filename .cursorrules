@@ -27,7 +27,7 @@ Registro de rotas (OBRIGATORIO — nao confundir com Flask Blueprint):
   preservando os nomes de endpoint originais (`url_for("admin_index")`, nao `admin.admin_index`).
 - Motivo: `Blueprint.route()` prefixaria o endpoint e quebraria templates existentes.
 - `routes.init_app(app)` importa e chama `register(app)` de:
-  `parceiro`, `superadmin`, `sindico`, `admin`, `financeiro`, `portaria`.
+  `parceiro`, `superadmin`, `sindico`, `admin`, `financeiro`, `portaria`, `infracoes`, `areas`.
 - Nucleo compartilhado permanece em `app/routes.py` (login tenant, cadastro da unidade,
   reservas, clube do morador, mudancas do morador, autorizacoes, ocorrencias do morador,
   notificacoes e helpers `_algo`).
@@ -45,8 +45,8 @@ app/
   email_service.py     # SMTP Gmail sincrono
   drive_api.py         # OAuth Google Drive (installed app)
   blueprints/
-    parceiro.py, superadmin.py, sindico.py, admin.py, financeiro.py, portaria.py
-  static/uploads/      # logos, parceiros, ocorrencias, encomendas
+    parceiro.py, superadmin.py, sindico.py, admin.py, financeiro.py, portaria.py, infracoes.py, areas.py
+  static/uploads/      # logos, parceiros, ocorrencias, encomendas, infracoes
   templates/           # bases por contexto + pastas admin/, morador/, portaria/, includes/
 ```
 
@@ -254,7 +254,8 @@ Decorators (`app/auth.py`, extras em `routes.py` / `parceiro.py`):
 - `@superadmin_required` — so `Role.SUPERADMIN`; login em `/superadmin/login`.
 - `@admin_required` — so `Role.ADMIN` local com `condominio_id`.
 - `@admin_or_assistente_required` — admin ou assistente, com tenant.
-- `@admin_or_sindico_required` — kanban de ocorrencias (admin ou sindico do tenant).
+- `@admin_or_sindico_required` — kanban de ocorrencias e rito de infracoes
+  (admin ou sindico do tenant; assistente fica de fora).
 - `@sindico_required` — so sindico com tenant.
 - `@portaria_required` — porteiro, admin local, sindico do tenant ou Super Admin.
 - `@unidade_required` — sessao de unidade; injeta `unidade` na view.
@@ -278,8 +279,9 @@ Admin e Assistente (tenant):
 - `POST /admin/unidades/<id>/alterar_senha`
 - `GET|POST /admin/mudancas` (aprovacao final + mudanca avulsa ja aprovada)
 - `GET /reservas`: ve e gere todas as reservas; cria espaco geral ou de um bloco
-- Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, clube, portaria
-  nem Financeiro no menu; validacao documental e CRUD de usuarios sao `@admin_required`.
+- Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, infracoes,
+  areas comuns, clube, portaria nem Financeiro no menu; validacao documental
+  e CRUD de usuarios sao `@admin_required`.
 
 Somente Admin local:
 - `GET /admin/dashboard`
@@ -298,7 +300,7 @@ Somente Admin local:
   (admin e síndico do bloco; assistente não entra).
   Repasse por bloco quando `fin_repasses_ativos`; caixa unico quando desligado.
   Boleto e recibo em `/financeiro/boleto/<id>` e `/financeiro/recibo/<id>`
-  (admin do tenant ou a unidade dona). Morador vê a 2ª via em `/boletos`.
+  (admin do tenant, síndico do bloco da unidade ou a unidade dona). Morador vê a 2ª via em `/boletos`.
   Síndico vê só os próprios blocos em `GET /sindico/financeiro`.
 
 Somente Sindico:
@@ -307,7 +309,8 @@ Somente Sindico:
   `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
   mapa, mudancas e ocorrencias.
 - Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias,
-  Reservas dos espacos do proprio bloco e a prestação de contas só desses
+  Infrações só das unidades do mandato, Reservas dos espacos do proprio bloco
+  e a prestação de contas só desses
   blocos (`/sindico/financeiro`). Flags default False:
   `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
 - Sem `perm_portaria`: sidebar sem Portaria e rotas `/portaria` e
@@ -341,7 +344,11 @@ Parceiro logado:
   `total_unidades_previsto`, `nome_responsavel_gestao`, `fim_mandato`,
   `horario_mudancas`). Super Admin edita tambem razao, CNPJ, slug e plano.
   Admin local edita nome, fuso, contato, endereco e governanca. Sindico
-  edita so contato e endereco. Assistente nao acessa. Ao salvar com telefone
+  edita so contato e endereco. Assistente nao acessa. No mesmo formulario,
+  admin e superadmin gravam `exigir_cpf_convidados` (default False),
+  `dias_padrao_defesa_multa` (default 15) e `aprovacao_automatica_reservas`
+  (default False). O modal de edicao do Super Admin grava as mesmas tres.
+  Ao salvar com telefone
   e e-mail, cria ou atualiza o contato "Administração Geral" no setor ADM
   se o setor ainda nao tiver outro contato.
 - Arquivos do tenant: `logo_filename`, `regimento_filename`, `convencao_filename`
@@ -398,6 +405,42 @@ Parceiro logado:
   (`_existe_reserva_ativa`), nao por indice parcial (MySQL nao suporta)
 - hard delete do espaco so se nao houver nenhuma `Reserva` vinculada; caso contrario
   desativar (`ativo=False`). Morador so ve/solicita espacos `ativo=True`.
+- `AreaComum` / `ReservaArea` (`app/blueprints/areas.py`) convivem com
+  `EspacoComum`/`Reserva`. Gestao em `GET /admin/reservas` e
+  `GET /sindico/reservas`: admin ve todas as areas; sindico so as de
+  `bloco_vinculado` no mandato (geral ve tambem `GERAL`). Assistente nao entra.
+  Morador em `GET /morador/reservas` ve areas ativas gerais ou do proprio bloco.
+  O dia fica ocupado em `Pendente`, `Aguardando Pagamento` ou `Aprovada`.
+  Boleto vencido da cota nao impede o pedido. Se
+  `aprovacao_automatica_reservas` e a taxa e zero, nasce `Aprovada`.
+  Aprovar area gratuita: `Aprovada`. Taxa com pagamento antecipado:
+  `Aguardando Pagamento`, boleto em 3 dias no plano "Taxas de Áreas Comuns";
+  a liquidacao CNAB dessa cobranca promove a reserva a `Aprovada`.
+  Taxa sem antecipacao: `Aprovada` e boleto no dia 10 do mes seguinte.
+  Lista em `GET|POST /morador/reservas/<id>/convidados`, so com reserva
+  `Aprovada`. O contador para na `capacidade` da area. CPF do convidado
+  so e obrigatorio quando `exigir_cpf_convidados` esta ligado; senao o
+  campo fica oculto. Remover so antes do horario de inicio e se ainda
+  nao houve check-in. A portaria mostra no dashboard as reservas
+  `Aprovada` de hoje. `GET /portaria/eventos/<id>` lista os convidados
+  em ordem alfabetica, com busca e check-in em um clique
+  (`status_checkin`, `checkin_em`, `checkin_por_usuario`). Desfazer
+  volta o botao. O painel mostra presentes e quem ainda falta.
+- `Infracao` (`infracoes`): rito em `app/blueprints/infracoes.py`.
+  `GET /admin/infracoes` e `GET /sindico/infracoes` listam com filtro de
+  status, tipo, bloco e unidade. Admin ve todos os blocos; sindico so
+  registra e julga unidades do mandato. Assistente nao entra.
+  Nasce `Notificada/Aguardando Defesa`. O prazo sugerido e hoje (America/Sao_Paulo)
+  + `dias_padrao_defesa_multa`, e pode ser editado. O morador em
+  `GET /morador/infracoes` envia defesa enquanto o status e esse e a data
+  e menor ou igual ao prazo; o status passa a `Em Análise` e o sino avisa
+  admin e o sindico do bloco. Acatar defesa: `Cancelada/Absolvida`.
+  Confirmar penalidade (em analise, ou notificada com prazo ja vencido)
+  vai para `Penalidade Confirmada`. Multa com valor gera `CobrancaUnidade`
+  no plano "Multas e Penalidades" (receita; criado se nao existir), com
+  vencimento em 5 dias ou no dia 10 do mes seguinte, e grava `cobranca_id`.
+  Anexos ficam em `static/uploads/infracoes` e so saem por rota autenticada.
+  O boot cria as tabelas antes das consultas.
 
 `LogAuditoria`: `usuario_id`, `condominio_id`, `mensagem`, `data_criacao`
 
@@ -559,6 +602,8 @@ Administracao local (`app/blueprints/admin.py`):
 - `/admin/usuarios/novo`, excluir, alterar senha (admin only; sindico ganha
   `SindicoAgrupamento` no create)
 - `/admin/ocorrencias` + atualizar status (admin ou sindico)
+- `/admin/infracoes` e `/sindico/infracoes` (rito em `infracoes.py`; assistente nao)
+- `/admin/reservas` e `/sindico/reservas` (areas comuns em `areas.py`; o `/reservas` antigo permanece)
 - `/admin/mudancas`
 - Financeiro (`app/blueprints/financeiro.py`, so admin local):
   `GET /admin/financeiro`, `GET /admin/financeiro/bancos`,
@@ -641,6 +686,8 @@ Portaria (`app/blueprints/portaria.py`):
   nao desfaz a encomenda. Pendencias desses setores aparecem no dashboard
   do admin e do sindico.
 - QR html5-qrcode na tela de encomendas
+- Dashboard da portaria mostra o banner dos eventos de área comum aprovados
+  para hoje e abre `/portaria/eventos/<id>` para o check-in da lista.
 - Sidebar unica da guarita (porteiro, admin e sindico): Visitantes & Acesso,
   Interfone / Contatos, Encomendas, Mudancas, Reservas e Livro de Servico.
   Um unico item `active`. `/portaria/acesso` marca so Visitantes & Acesso.
@@ -669,6 +716,8 @@ Portaria (`app/blueprints/portaria.py`):
 Autorizacoes e ocorrencias (morador):
 - `/morador/autorizacoes`, cancelar
 - `/morador/ocorrencias`, POST nova (unidade precisa estar Aprovada/Registrada)
+- `/morador/infracoes`: menu `Minhas Infrações`; defesa no prazo
+- `/morador/reservas`: menu `Reservas` das areas comuns; o `/reservas` antigo permanece
 
 Notificacoes:
 - `/notificacoes`, `/notificacoes/ler/<id>`
@@ -713,7 +762,10 @@ Separacao de contextos (obrigatorio):
   planta de unidades, fracoes, medidores, previsao orcamentaria, rateios, cobrancas, acordos, conciliacao CNAB,
   pagamentos, lancamentos, fechamento do mes, repasses e correcao monetaria.
   O síndico tem `Prestação de Contas / Bloco` na seção Condomínio.
-  O morador tem `Boletos / 2ª Via` abaixo de Encomendas.
+  O morador tem `Boletos / 2ª Via` abaixo de Encomendas, `Minhas Infrações`
+  abaixo de Ocorrências e `Reservas` das áreas comuns ao lado do item
+  antigo de reservas. Admin e síndico têm `Infrações` e `Áreas Comuns`
+  no grupo Condomínio; o assistente não vê esses dois itens.
   `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre
   `/admin?tab=equipe`.   Admin e sindico entram na guarita por um item
   `Portaria & Interfone`, que abre `/portaria/acesso`. Dentro da portaria
@@ -897,7 +949,7 @@ Auditoria:
   - mudanca de status de ocorrencia
 
 Uploads:
-- Pastas em config: logos, parceiros, ocorrencias, encomendas, faciais.
+- Pastas em config: logos, parceiros, ocorrencias, encomendas, faciais, infracoes.
 - Extensoes globais de documento: `ALLOWED_EXTENSIONS = {pdf, png, jpg, jpeg}`.
 - Logo de parceiro: png/jpg/jpeg/webp, max 2MB (`salvar_logo_parceiro`).
 - Fotos de ocorrencia/encomenda: helpers com blindagem de tipo/tamanho.

@@ -23,6 +23,10 @@
                         <div class="fw-semibold">
                             {% if item.tipo == 'OCORRENCIA' %}
                             <span class="badge text-bg-danger me-1">🚨 Ocorrência</span>
+                            {% elif item.tipo == 'INFRACAO' %}
+                            <span class="badge text-bg-danger me-1">🚨 Infração</span>
+                            {% elif item.tipo == 'RESERVA_AREA' %}
+                            <span class="badge text-bg-primary me-1">📅 Reserva</span>
                             {% elif not item.lida %}
                             <span class="badge text-bg-danger me-1">Nova</span>
                             {% endif %}
@@ -37,6 +41,14 @@
                         {% if item.tipo == 'OCORRENCIA' and item.link_destino %}
                         <form method="post" action="{{ url_for('notificacoes_abrir', notificacao_id=item.id) }}">
                             <button type="submit" class="btn btn-sm btn-danger">Abrir Chamado →</button>
+                        </form>
+                        {% elif item.tipo == 'INFRACAO' and item.link_destino %}
+                        <form method="post" action="{{ url_for('notificacoes_abrir', notificacao_id=item.id) }}">
+                            <button type="submit" class="btn btn-sm btn-danger">Abrir infração →</button>
+                        </form>
+                        {% elif item.tipo == 'RESERVA_AREA' and item.link_destino %}
+                        <form method="post" action="{{ url_for('notificacoes_abrir', notificacao_id=item.id) }}">
+                            <button type="submit" class="btn btn-sm btn-primary">Abrir reserva →</button>
                         </form>
                         {% endif %}
                         {% if not item.lida %}
