@@ -409,7 +409,21 @@ Parceiro logado:
   `EspacoComum`/`Reserva`. Gestao em `GET /admin/reservas` e
   `GET /sindico/reservas`: admin ve todas as areas; sindico so as de
   `bloco_vinculado` no mandato (geral ve tambem `GERAL`). Assistente nao entra.
+  A tela tem tres abas sempre visiveis: Solicitacoes & Historico, calendario
+  e gestao de espacos. A entrada abre na primeira. O selo vermelho so aparece
+  quando ha pendencia. O filtro padrao e Pendentes; Aprovadas,
+  Recusadas/Canceladas e Todas mostram o historico sem os botoes de decisao.
+  No calendario, o clique num evento pendente abre o modal de analise
+  na mesma aba. Aprovar e recusar gravam por fetch, atualizam a cor
+  (ou retiram o evento recusado) e o contador, sem recarregar a pagina.
+  A fila mostra so o que aguarda resposta, com o selo da cobranca antecipada
+  ou embutida, e os botoes aprovar e recusar.
   Morador em `GET /morador/reservas` ve areas ativas gerais ou do proprio bloco.
+  Reserva `Aprovada` com data de hoje ou futura vira o card do proximo evento,
+  com atalho da lista de convidados e, se houver, as regras do espaco.
+  Cobranca em aberto da taxa antecipada mostra o atalho do boleto. Taxa
+  embutida (sem antecipacao) avisa que entra no proximo boleto mensal.
+  Cobranca paga mostra a taxa quitada. Linha pendente fica em amarelo.
   O dia fica ocupado em `Pendente`, `Aguardando Pagamento` ou `Aprovada`.
   Boleto vencido da cota nao impede o pedido. Se
   `aprovacao_automatica_reservas` e a taxa e zero, nasce `Aprovada`.

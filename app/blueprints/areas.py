@@ -37,6 +37,11 @@ _OCUPADAS = (
 )
 _CODIGOS_PLANO = ("1.8.9", "1.8.8", "1.8.7", "1.8.6")
 _STATUS_UNIDADE = ("Aprovada", "Registrada")
+_ABA_PENDENTES = "pendentes"
+_ABA_CALENDARIO = "calendario"
+_ABA_ESPACOS = "espacos"
+_ABAS_GESTAO = (_ABA_PENDENTES, _ABA_CALENDARIO, _ABA_ESPACOS)
+_ALIAS_ABA = {"areas": _ABA_ESPACOS, "solicitacoes": _ABA_PENDENTES}
 
 
 def _agora():
@@ -86,6 +91,105 @@ def _endpoint_lista():
 
 def _redirecionar_lista(**extras):
     return redirect(url_for(_endpoint_lista(), **extras))
+
+
+def _resolver_aba(pedida):
+    aba = _ALIAS_ABA.get(pedida or "", pedida)
+    if aba in _ABAS_GESTAO:
+        return aba
+    return _ABA_PENDENTES
+
+
+_FILTROS_HISTORICO = ("pendentes", "aprovadas", "recusadas", "todas")
+
+
+def _resolver_filtro(pedido):
+    if pedido in _FILTROS_HISTORICO:
+        return pedido
+    return "pendentes"
+
+
+def _reservas_do_filtro(reservas, filtro):
+    if filtro == "todas":
+        escolhidas = list(reservas)
+    elif filtro == "aprovadas":
+        escolhidas = [
+            item
+            for item in reservas
+            if item.status
+            in (
+                StatusReservaArea.APROVADA,
+                StatusReservaArea.AGUARDANDO_PAGAMENTO,
+            )
+        ]
+    elif filtro == "recusadas":
+        escolhidas = [
+            item
+            for item in reservas
+            if item.status
+            in (StatusReservaArea.REJEITADA, StatusReservaArea.CANCELADA)
+        ]
+    else:
+        escolhidas = [
+            item for item in reservas if item.status == StatusReservaArea.PENDENTE
+        ]
+    reverso = filtro != "pendentes"
+    return sorted(escolhidas, key=lambda item: (item.data_evento, item.id), reverse=reverso)
+
+
+_COR_EVENTO = {
+    StatusReservaArea.PENDENTE: "#f0ad4e",
+    StatusReservaArea.AGUARDANDO_PAGAMENTO: "#0dcaf0",
+    StatusReservaArea.APROVADA: "#198754",
+    StatusReservaArea.REJEITADA: "#6c757d",
+    StatusReservaArea.CANCELADA: "#6c757d",
+}
+
+
+def _pedido_fetch():
+    return request.headers.get("X-Requested-With") == "fetch"
+
+
+def _contar_pendentes(usuario):
+    ids = [area.id for area in _areas_do_ator(usuario, usuario.condominio_id)]
+    if not ids:
+        return 0
+    return ReservaArea.query.filter(
+        ReservaArea.area_id.in_(ids),
+        ReservaArea.status == StatusReservaArea.PENDENTE,
+    ).count()
+
+
+def _texto_financeiro_area(area):
+    valor = round(float(area.taxa_uso_valor or 0), 2)
+    if valor <= 0:
+        return "Sem taxa de uso"
+    if area.pagamento_antecipado_obrigatorio:
+        return "Cobrança antecipada: o boleto confirma a reserva"
+    return "Cobrança será embutida na próxima taxa"
+
+
+def _valor_area(area):
+    valor = round(float(area.taxa_uso_valor or 0), 2)
+    if valor <= 0:
+        return "Gratuita"
+    return "R$ " + f"{valor:.2f}".replace(".", ",")
+
+
+def _resposta_decisao(usuario, mensagem, categoria, *, ok, status=None, remover=False, reserva_id=None):
+    if _pedido_fetch():
+        corpo = {"ok": ok, "mensagem": mensagem}
+        if ok:
+            corpo["status"] = status
+            corpo["cor"] = _COR_EVENTO.get(status)
+            corpo["remover"] = remover
+            corpo["pendentes"] = _contar_pendentes(usuario)
+        return jsonify(corpo), 200 if ok else 400
+    flash(mensagem, categoria)
+    extras = {"aba": _ABA_PENDENTES}
+    if reserva_id is not None:
+        extras["foco"] = reserva_id
+    return _redirecionar_lista(**extras)
 
 
 def _blocos_escolha(usuario):
@@ -202,7 +306,7 @@ def _notificar_gestao(reserva, titulo, mensagem):
         PerfilDestinoNotificacao.ADMIN,
         titulo,
         mensagem,
-        link_destino=f"/admin/reservas?aba=solicitacoes&foco={reserva.id}",
+        link_destino=f"/admin/reservas?aba=pendentes&foco={reserva.id}",
         tipo="RESERVA_AREA",
     )
     bloco = reserva.area.bloco_vinculado
@@ -220,7 +324,7 @@ def _notificar_gestao(reserva, titulo, mensagem):
         titulo,
         mensagem,
         unidade_id=reserva.unidade_id,
-        link_destino=f"/sindico/reservas?aba=solicitacoes&foco={reserva.id}",
+        link_destino=f"/sindico/reservas?aba=pendentes&foco={reserva.id}",
         tipo="RESERVA_AREA",
     )
 
@@ -283,7 +387,7 @@ def _vencimento_taxa(antecipado, hoje):
     return datetime(ano, mes, 10).date()
 
 
-def _criar_cobranca_taxa(reserva, valor, vencimento, hoje):
+def _criar_cobranca_taxa(reserva, valor, vencimento, hoje, antecipado=False):
     from app.blueprints.financeiro import (
         _conta_ativa,
         _pagador_da_unidade,
@@ -334,7 +438,11 @@ def _criar_cobranca_taxa(reserva, valor, vencimento, hoje):
         status=(
             StatusCobranca.A_VENCER if vencimento >= hoje else StatusCobranca.VENCIDA
         ),
-        observacoes=f"Gerada pela reserva de área #{reserva.id}.",
+        observacoes=(
+            f"Gerada pela reserva de área #{reserva.id}."
+            if antecipado
+            else f"Embutida na próxima taxa. Gerada pela reserva de área #{reserva.id}."
+        ),
     )
     db.session.add(cobranca)
     db.session.flush()
@@ -361,9 +469,6 @@ def liberar_reservas_pagas(condominio_id, cobranca_ids):
 def areas_lista():
     usuario = get_current_user()
     condominio_id = usuario.condominio_id
-    aba = request.args.get("aba") or "areas"
-    if aba not in ("areas", "solicitacoes"):
-        aba = "areas"
     areas = _areas_do_ator(usuario, condominio_id).all()
     ids = [area.id for area in areas]
     reservas = []
@@ -373,19 +478,32 @@ def areas_lista():
             .order_by(ReservaArea.data_evento.asc(), ReservaArea.id.desc())
             .all()
         )
-    cores = {
-        StatusReservaArea.PENDENTE: "#f0ad4e",
-        StatusReservaArea.AGUARDANDO_PAGAMENTO: "#0dcaf0",
-        StatusReservaArea.APROVADA: "#198754",
-        StatusReservaArea.REJEITADA: "#6c757d",
-        StatusReservaArea.CANCELADA: "#6c757d",
-    }
+    pendentes = [item for item in reservas if item.status == StatusReservaArea.PENDENTE]
+    aba = _resolver_aba(request.args.get("aba"))
+    filtro = _resolver_filtro(request.args.get("filtro"))
+    eh_sindico = usuario.role == Role.SINDICO
+    aprovar_endpoint = "sindico_areas_aprovar" if eh_sindico else "admin_areas_aprovar"
+    recusar_endpoint = "sindico_areas_rejeitar" if eh_sindico else "admin_areas_rejeitar"
     eventos = [
         {
             "id": item.id,
             "title": f"{item.area.nome} · {item.unidade.identificador}",
             "start": item.data_evento.isoformat(),
-            "color": cores.get(item.status, "#6c757d"),
+            "color": _COR_EVENTO.get(item.status, "#6c757d"),
+            "extendedProps": {
+                "pendente": item.status == StatusReservaArea.PENDENTE,
+                "espaco": item.area.nome,
+                "unidade": item.unidade.identificador,
+                "data": item.data_evento.strftime("%d/%m/%Y"),
+                "horario": (
+                    f"{item.horario_inicio.strftime('%H:%M')} às "
+                    f"{item.horario_fim.strftime('%H:%M')}"
+                ),
+                "valor": _valor_area(item.area),
+                "financeiro": _texto_financeiro_area(item.area),
+                "aprovar": url_for(aprovar_endpoint, reserva_id=item.id),
+                "recusar": url_for(recusar_endpoint, reserva_id=item.id),
+            },
         }
         for item in reservas
     ]
@@ -394,10 +512,12 @@ def areas_lista():
         areas=areas,
         reservas=reservas,
         eventos=eventos,
-        pendentes=[item for item in reservas if item.status == StatusReservaArea.PENDENTE],
+        pendentes=pendentes,
+        lista=_reservas_do_filtro(reservas, filtro),
+        filtro=filtro,
         aba=aba,
         blocos=_blocos_escolha(usuario),
-        eh_sindico=usuario.role == Role.SINDICO,
+        eh_sindico=eh_sindico,
         foco=request.args.get("foco", type=int),
         status_pendente=StatusReservaArea.PENDENTE,
         status_aguardando=StatusReservaArea.AGUARDANDO_PAGAMENTO,
@@ -422,30 +542,30 @@ def areas_salvar():
     nome = (request.form.get("nome") or "").strip()
     if not nome or len(nome) > 150:
         flash("Informe o nome da área, com até 150 caracteres.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     bloco = _normalizar_bloco_area(request.form.get("bloco_vinculado"), permitidos)
     if bloco is None:
         flash("Escolha um bloco do seu mandato.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     try:
         capacidade = int(request.form.get("capacidade") or 0)
     except (TypeError, ValueError):
         capacidade = -1
     if capacidade < 0 or capacidade > 9999:
         flash("Informe a capacidade máxima.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     try:
         taxa = _parse_valor(request.form.get("taxa_uso_valor") or "0")
     except (TypeError, ValueError):
         flash("Informe a taxa de uso.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     if taxa < 0:
         flash("A taxa de uso não pode ser negativa.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     regras = html_rico_form("regras_uso")
     if len(regras) > 8000:
         flash("As regras de uso ficaram longas demais.", "danger")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     antecipado = _marcado("pagamento_antecipado_obrigatorio")
     if area is None:
         area = AreaComum(
@@ -473,7 +593,7 @@ def areas_salvar():
         _registrar_auditoria(usuario, f"Atualizou a área comum #{area.id}.")
         flash("Área comum atualizada.", "success")
     db.session.commit()
-    return _redirecionar_lista(aba="areas")
+    return _redirecionar_lista(aba="espacos")
 
 
 @admin_or_sindico_required
@@ -486,12 +606,12 @@ def areas_excluir(area_id):
         abort(404)
     if area.reservas.count():
         flash("Esta área já tem reservas. Desative-a na edição.", "warning")
-        return _redirecionar_lista(aba="areas")
+        return _redirecionar_lista(aba="espacos")
     db.session.delete(area)
     _registrar_auditoria(usuario, f"Excluiu a área comum #{area_id}.")
     db.session.commit()
     flash("Área comum excluída.", "success")
-    return _redirecionar_lista(aba="areas")
+    return _redirecionar_lista(aba="espacos")
 
 
 @admin_or_sindico_required
@@ -504,8 +624,13 @@ def areas_aprovar(reserva_id):
     if reserva is None:
         abort(404)
     if reserva.status != StatusReservaArea.PENDENTE:
-        flash("Esta solicitação já foi decidida.", "warning")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Esta solicitação já foi decidida.",
+            "warning",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     if _conflito(
         reserva.area_id,
         reserva.data_evento,
@@ -515,23 +640,36 @@ def areas_aprovar(reserva_id):
             StatusReservaArea.APROVADA,
         ),
     ):
-        flash("Esta data já foi confirmada para outra unidade.", "warning")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Esta data já foi confirmada para outra unidade.",
+            "warning",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     valor = round(float(reserva.area.taxa_uso_valor or 0), 2)
     antecipado = bool(reserva.area.pagamento_antecipado_obrigatorio) and valor > 0
     cobranca = None
     if valor > 0:
         vencimento = _vencimento_taxa(antecipado, hoje)
         try:
-            cobranca, erro = _criar_cobranca_taxa(reserva, valor, vencimento, hoje)
+            cobranca, erro = _criar_cobranca_taxa(
+                reserva, valor, vencimento, hoje, antecipado
+            )
         except IntegrityError:
             db.session.rollback()
-            flash("Não foi possível reservar o nosso número. Tente novamente.", "danger")
-            return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+            return _resposta_decisao(
+                usuario,
+                "Não foi possível reservar o nosso número. Tente novamente.",
+                "danger",
+                ok=False,
+                reserva_id=reserva.id,
+            )
         if erro:
             db.session.rollback()
-            flash(erro, "danger")
-            return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+            return _resposta_decisao(
+                usuario, erro, "danger", ok=False, reserva_id=reserva.id
+            )
     status_novo = (
         StatusReservaArea.AGUARDANDO_PAGAMENTO
         if antecipado
@@ -547,8 +685,13 @@ def areas_aprovar(reserva_id):
     ).update(valores, synchronize_session=False)
     if not linhas:
         db.session.rollback()
-        flash("Esta solicitação já foi decidida.", "warning")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Esta solicitação já foi decidida.",
+            "warning",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     db.session.expire(reserva)
     if status_novo == StatusReservaArea.APROVADA:
         texto = _texto_aprovada(reserva)
@@ -566,8 +709,14 @@ def areas_aprovar(reserva_id):
         _notificar_morador(reserva, texto[:120], texto)
     _registrar_auditoria(usuario, f"Aprovou a reserva de área #{reserva.id}.")
     db.session.commit()
-    flash("Solicitação aprovada.", "success")
-    return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+    return _resposta_decisao(
+        usuario,
+        "Solicitação aprovada.",
+        "success",
+        ok=True,
+        status=status_novo,
+        reserva_id=reserva.id,
+    )
 
 
 @admin_or_sindico_required
@@ -579,12 +728,22 @@ def areas_rejeitar(reserva_id):
     if reserva is None:
         abort(404)
     if reserva.status != StatusReservaArea.PENDENTE:
-        flash("Esta solicitação já foi decidida.", "warning")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Esta solicitação já foi decidida.",
+            "warning",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     motivo = (request.form.get("motivo_rejeicao") or "").strip()
     if not motivo or len(motivo) > 255:
-        flash("Informe o motivo da rejeição.", "danger")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Informe o motivo da rejeição.",
+            "danger",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     linhas = ReservaArea.query.filter(
         ReservaArea.id == reserva.id,
         ReservaArea.status == StatusReservaArea.PENDENTE,
@@ -597,8 +756,13 @@ def areas_rejeitar(reserva_id):
     )
     if not linhas:
         db.session.rollback()
-        flash("Esta solicitação já foi decidida.", "warning")
-        return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+        return _resposta_decisao(
+            usuario,
+            "Esta solicitação já foi decidida.",
+            "warning",
+            ok=False,
+            reserva_id=reserva.id,
+        )
     db.session.expire(reserva)
     texto = (
         f"Sua reserva para o {reserva.area.nome} dia "
@@ -607,8 +771,62 @@ def areas_rejeitar(reserva_id):
     _notificar_morador(reserva, texto[:120], texto)
     _registrar_auditoria(usuario, f"Rejeitou a reserva de área #{reserva.id}.")
     db.session.commit()
-    flash("Solicitação rejeitada.", "success")
-    return _redirecionar_lista(aba="solicitacoes", foco=reserva.id)
+    return _resposta_decisao(
+        usuario,
+        "Solicitação recusada.",
+        "success",
+        ok=True,
+        status=StatusReservaArea.REJEITADA,
+        remover=True,
+        reserva_id=reserva.id,
+    )
+
+
+_SEMANA = (
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+)
+
+
+def _data_evento_formatada(dia):
+    return f"{_SEMANA[dia.weekday()]}, {dia.strftime('%d/%m/%Y')}"
+
+
+def _proximo_evento(reservas, hoje):
+    candidatas = [
+        reserva
+        for reserva in reservas
+        if reserva.status == StatusReservaArea.APROVADA and reserva.data_evento >= hoje
+    ]
+    if not candidatas:
+        return None
+    return min(
+        candidatas,
+        key=lambda reserva: (reserva.data_evento, reserva.horario_inicio, reserva.id),
+    )
+
+
+def _situacao_taxa(reserva):
+    """aberta, agendada, paga ou None. A embutida não vira atalho de boleto avulso."""
+    cobranca = reserva.cobranca
+    if cobranca is None or cobranca.status == StatusCobranca.CANCELADA:
+        return None
+    if cobranca.status == StatusCobranca.PAGA:
+        return "paga"
+    observacoes = (cobranca.observacoes or "").casefold()
+    embutida = "embutida na próxima taxa" in observacoes
+    if not embutida and not reserva.area.pagamento_antecipado_obrigatorio:
+        embutida = True
+    if embutida:
+        return "agendada"
+    if cobranca.status in StatusCobranca.ABERTAS:
+        return "aberta"
+    return None
 
 
 @unidade_required
@@ -638,12 +856,18 @@ def morador_areas(unidade):
         .order_by(ReservaArea.data_evento.desc(), ReservaArea.id.desc())
         .all()
     )
+    hoje = _hoje()
+    for item in minhas:
+        item.situacao_taxa = _situacao_taxa(item)
+    proximo = _proximo_evento(minhas, hoje)
     return render_template(
         "morador/areas.html",
         areas=areas,
         area=escolhida,
         minhas=minhas,
-        hoje=_hoje().isoformat(),
+        proximo=proximo,
+        data_proximo=_data_evento_formatada(proximo.data_evento) if proximo else "",
+        hoje=hoje.isoformat(),
         foco=request.args.get("foco", type=int),
         hora_inicio="08:00",
         hora_fim="22:00",
