@@ -84,7 +84,7 @@ Bibliotecas externas homologadas (frontend via CDN):
 - flatpickr — campos de data (exibicao DD/MM/YYYY via altInput; valor enviado Y-m-d).
   CSS/JS + locale pt em `base.html`. Novos campos: `type="text"` + classe `datepicker`;
   evitar `<input type="date">` nativo.
-- FullCalendar 6 — calendario de reservas em `base.html` / `reservas.html`.
+- FullCalendar 6 — calendario de reservas em `base.html` / `admin/areas.html` / `morador/areas.html`.
 - Chart.js 4 — dashboards (`admin_dashboard.html`, analytics do clube).
 - qrcode.js — QR de cupons resgatados no cliente.
 - html5-qrcode — leitura de QR (validacao do parceiro e encomendas na portaria).
@@ -260,8 +260,6 @@ Decorators (`app/auth.py`, extras em `routes.py` / `parceiro.py`):
 - `@portaria_required` — porteiro, admin local, sindico do tenant ou Super Admin.
 - `@unidade_required` — sessao de unidade; injeta `unidade` na view.
 - `@parceiro_required` — `session['parceiro_id']` (`app/blueprints/parceiro.py`).
-- `@acesso_reservas_required` — unidade ou equipe, bloqueia porteiro.
-- `@gestao_espacos_required` — admin, assistente ou sindico (com tenant).
 
 Usuarios locais sem `condominio_id` sao barrados pelos decorators (exceto Super Admin).
 
@@ -278,7 +276,6 @@ Admin e Assistente (tenant):
 - `POST /admin/registrar/<id>`
 - `POST /admin/unidades/<id>/alterar_senha`
 - `GET|POST /admin/mudancas` (aprovacao final + mudanca avulsa ja aprovada)
-- `GET /reservas`: ve e gere todas as reservas; cria espaco geral ou de um bloco
 - Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, infracoes,
   areas comuns, clube, portaria nem Financeiro no menu; validacao documental
   e CRUD de usuarios sao `@admin_required`.
@@ -309,7 +306,7 @@ Somente Sindico:
   `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
   mapa, mudancas e ocorrencias.
 - Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias,
-  Infrações só das unidades do mandato, Reservas dos espacos do proprio bloco
+  Infrações só das unidades do mandato, Áreas Comuns do proprio bloco
   e a prestação de contas só desses
   blocos (`/sindico/financeiro`). Flags default False:
   `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
@@ -395,18 +392,14 @@ Parceiro logado:
 
 `Veiculo`: placa, marca, cor por unidade
 
-`EspacoComum` + `Reserva`:
-- espaco com `condominio_id`, `gerenciado_por` (`admin` ou sindico),
-  `bloco_vinculado` (vazio/`GERAL` = area geral; `"1"` = exclusivo do bloco),
-  dias, valor, `ativo` (default True; soft disable para reforma)
-- reserva: `espaco_id`, `unidade_id` nullable (gestao pode criar), `data_reserva`,
-  `status`, `valor_pago`, `motivo_reserva`
-- duplo-booking (mesmo espaco+data em Pendente/Aprovada) e bloqueado NA APLICACAO
-  (`_existe_reserva_ativa`), nao por indice parcial (MySQL nao suporta)
-- hard delete do espaco so se nao houver nenhuma `Reserva` vinculada; caso contrario
-  desativar (`ativo=False`). Morador so ve/solicita espacos `ativo=True`.
-- `AreaComum` / `ReservaArea` (`app/blueprints/areas.py`) convivem com
-  `EspacoComum`/`Reserva`. Gestao em `GET /admin/reservas` e
+`EspacoComum` + `Reserva` (tabelas historicas, sem tela de gestao):
+- A interface `/reservas` e os POSTs de solicitar, aprovar, pagar e cadastrar
+  espaco foram removidos. Os models e as tabelas `espacos_comuns` e `reservas`
+  permanecem. Nao dropar essas tabelas.
+- A portaria ainda le essa tabela em `/portaria/reservas` para eventos ja
+  gravados e para entrega/devolucao de chaves.
+- `AreaComum` / `ReservaArea` (`app/blueprints/areas.py`) e o modulo vigente.
+  Gestao em `GET /admin/reservas` e
   `GET /sindico/reservas`: admin ve todas as areas; sindico so as de
   `bloco_vinculado` no mandato (geral ve tambem `GERAL`). Assistente nao entra.
   A tela tem tres abas sempre visiveis: Solicitacoes & Historico, calendario
@@ -617,7 +610,7 @@ Administracao local (`app/blueprints/admin.py`):
   `SindicoAgrupamento` no create)
 - `/admin/ocorrencias` + atualizar status (admin ou sindico)
 - `/admin/infracoes` e `/sindico/infracoes` (rito em `infracoes.py`; assistente nao)
-- `/admin/reservas` e `/sindico/reservas` (areas comuns em `areas.py`; o `/reservas` antigo permanece)
+- `/admin/reservas` e `/sindico/reservas` (areas comuns em `areas.py`; a rota antiga `/reservas` nao existe mais)
 - `/admin/mudancas`
 - Financeiro (`app/blueprints/financeiro.py`, so admin local):
   `GET /admin/financeiro`, `GET /admin/financeiro/bancos`,
@@ -658,18 +651,12 @@ Agendamento de Mudancas:
   Domingo continua rejeitado no servidor.
 
 Reservas:
-- `GET /reservas` — morador solicita (so espacos `ativo=True`); admin/assistente/sindico gerenciam na jurisdicao.
-- POST solicitar / gestao criar / responder / cancelar / pagamento / salvar espaco
-- POST `/reservas/espacos/<id>/alternar_status` e `/reservas/espacos/<id>/excluir`
-  (`@gestao_espacos_required` + `_espaco_do_tenant` + `_usuario_pode_gerenciar_espaco`)
-- Exclusao aborta se houver historico de `Reserva`; usar desativar.
-- `GET /api/reservas/eventos` — FullCalendar
-- Morador edita `lista_convidados` enquanto a reserva está Pendente ou Aprovada
-  (`POST /reservas/<id>/convidados`). Saldo pendente aparece como `Falta: R$`.
-- Portaria `/portaria/reservas`: eventos de hoje e próximas aprovadas,
-  WhatsApp só com consentimento, entrega/devolução de chaves
-  (`chaves_entregue_em`, `chaves_devolvida_em` + porteiro).
-- E-mails: `enviar_email_nova_reserva`, `enviar_email_resposta_reserva`
+- Modulo vigente: `AreaComum` / `ReservaArea` em `app/blueprints/areas.py`
+  (`/admin/reservas`, `/sindico/reservas`, `/morador/reservas`).
+- A rota generica `/reservas`, a API `/api/reservas/eventos` e o template
+  `reservas.html` foram removidos. As tabelas antigas ficam no banco.
+- Portaria `/portaria/reservas`: eventos antigos ja gravados e
+  entrega/devolucao de chaves (`chaves_entregue_em`, `chaves_devolvida_em`).
 
 Portaria (`app/blueprints/portaria.py`):
 - dashboard do dia (mudancas aprovadas + contexto operacional)
@@ -731,7 +718,7 @@ Autorizacoes e ocorrencias (morador):
 - `/morador/autorizacoes`, cancelar
 - `/morador/ocorrencias`, POST nova (unidade precisa estar Aprovada/Registrada)
 - `/morador/infracoes`: menu `Minhas Infrações`; defesa no prazo
-- `/morador/reservas`: menu `Reservas` das areas comuns; o `/reservas` antigo permanece
+- `/morador/reservas`: menu `Reservas` das areas comuns
 
 Notificacoes:
 - `/notificacoes`, `/notificacoes/ler/<id>`
@@ -777,8 +764,7 @@ Separacao de contextos (obrigatorio):
   pagamentos, lancamentos, fechamento do mes, repasses e correcao monetaria.
   O síndico tem `Prestação de Contas / Bloco` na seção Condomínio.
   O morador tem `Boletos / 2ª Via` abaixo de Encomendas, `Minhas Infrações`
-  abaixo de Ocorrências e `Reservas` das áreas comuns ao lado do item
-  antigo de reservas. Admin e síndico têm `Infrações` e `Áreas Comuns`
+  abaixo de Ocorrências e `Reservas` das áreas comuns. Admin e síndico têm `Infrações` e `Áreas Comuns`
   no grupo Condomínio; o assistente não vê esses dois itens.
   `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre
   `/admin?tab=equipe`.   Admin e sindico entram na guarita por um item
@@ -1035,10 +1021,9 @@ Mudancas / portaria:
   no check-in do dia.
 
 Reservas:
-- Manter bloqueio de conflito na aplicacao.
-- Sindico sempre acessa `/reservas`. Ve e gere so espacos do proprio
-  escopo. Com `perm_reservas_geral`, tambem as areas gerais.
-- Um bloco: o espaco nasce nesse bloco. Varios: ele escolhe entre os seus.
-- Admin ve todas as reservas e pode criar espaco geral ou de um bloco.
-- Morador ve areas gerais e os espacos exclusivos do bloco da unidade.
-- Espaco comum tem `ativo`; desativar para reforma. Excluir so sem historico de reservas.
+- O modulo vigente e `AreaComum` / `ReservaArea`. Nao recriar a rota `/reservas`.
+- Conflito de data continua travado na aplicacao, na tabela `reservas_area`.
+- Sindico entra em `/sindico/reservas` e so gere areas do proprio escopo.
+  Com `perm_reservas_geral`, tambem as areas gerais.
+- Admin ve todas as areas em `/admin/reservas`. Assistente nao entra.
+- Morador ve areas ativas gerais e as do proprio bloco em `/morador/reservas`.

@@ -1,6 +1,5 @@
 """Reservas de áreas comuns e cobrança da taxa de uso na aprovação.
 
-Não altera o módulo operacional de `EspacoComum` / `Reserva` (`/reservas`).
 A inadimplência da taxa condominial não impede o pedido (STJ).
 """
 
@@ -14,7 +13,6 @@ from app import db
 from app.auth import admin_or_sindico_required, get_current_user, unidade_required
 from app.models import (
     AreaComum,
-    CobrancaUnidade,
     ConvidadoReserva,
     EscopoRepasse,
     FundoFinanceiro,
@@ -178,7 +176,12 @@ def _valor_area(area):
 
 def _resposta_decisao(usuario, mensagem, categoria, *, ok, status=None, remover=False, reserva_id=None):
     if _pedido_fetch():
-        corpo = {"ok": ok, "mensagem": mensagem}
+        corpo = {
+            "success": ok,
+            "message": mensagem,
+            "ok": ok,
+            "mensagem": mensagem,
+        }
         if ok:
             corpo["status"] = status
             corpo["cor"] = _COR_EVENTO.get(status)
@@ -388,11 +391,7 @@ def _vencimento_taxa(antecipado, hoje):
 
 
 def _criar_cobranca_taxa(reserva, valor, vencimento, hoje, antecipado=False):
-    from app.blueprints.financeiro import (
-        _conta_ativa,
-        _pagador_da_unidade,
-        _reservar_nossos_numeros,
-    )
+    from app.blueprints.financeiro import _conta_ativa, gerar_cobranca_automatica
     from app.financeiro_fechamento import (
         competencia_esta_fechada,
         mensagem_competencia_fechada,
@@ -407,45 +406,23 @@ def _criar_cobranca_taxa(reserva, valor, vencimento, hoje, antecipado=False):
     competencia = vencimento.strftime("%Y-%m")
     if competencia_esta_fechada(reserva.area.condominio_id, competencia):
         return None, mensagem_competencia_fechada(competencia)
-    unidade = reserva.unidade
-    nome, documento, email, telefone = _pagador_da_unidade(unidade)
-    if not (nome or "").strip():
-        nome = unidade.identificador
-    numeros = _reservar_nossos_numeros(reserva.area.condominio_id, 1)
-    cobranca = CobrancaUnidade(
-        condominio_id=reserva.area.condominio_id,
-        unidade_id=unidade.id,
-        conta_bancaria_id=conta.id,
-        competencia=competencia,
-        titulo=f"Taxa de uso — {reserva.area.nome}"[:200],
-        nosso_numero=numeros[0],
-        vencimento=vencimento,
-        pagador_nome=(nome or "")[:200],
-        pagador_documento=(documento or "")[:20] or None,
-        pagador_email=(email or "")[:120] or None,
-        pagador_telefone=(telefone or "")[:20] or None,
-        composicao_json=[
-            {
-                "plano_conta_id": plano.id,
-                "descricao": "Taxas de Áreas Comuns",
-                "fundo_nome": plano.fundo.nome if plano.fundo else "",
-                "valor": valor,
-                "parcela_atual": 1,
-                "total_parcelas": 1,
-            }
-        ],
-        valor_original=valor,
-        status=(
-            StatusCobranca.A_VENCER if vencimento >= hoje else StatusCobranca.VENCIDA
-        ),
-        observacoes=(
-            f"Gerada pela reserva de área #{reserva.id}."
-            if antecipado
-            else f"Embutida na próxima taxa. Gerada pela reserva de área #{reserva.id}."
-        ),
+    observacoes = (
+        f"Gerada pela reserva de área #{reserva.id}."
+        if antecipado
+        else f"Embutida na próxima taxa. Gerada pela reserva de área #{reserva.id}."
     )
-    db.session.add(cobranca)
-    db.session.flush()
+    cobranca = gerar_cobranca_automatica(
+        condominio_id=reserva.area.condominio_id,
+        unidade=reserva.unidade,
+        conta=conta,
+        plano=plano,
+        titulo=f"Taxa de uso — {reserva.area.nome}",
+        valor=valor,
+        vencimento=vencimento,
+        hoje=hoje,
+        observacoes=observacoes,
+        descricao="Taxas de Áreas Comuns",
+    )
     return cobranca, None
 
 

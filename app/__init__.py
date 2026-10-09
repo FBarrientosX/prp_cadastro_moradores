@@ -562,8 +562,9 @@ def _garantir_colunas_reservas():
     # MySQL não suporta índices parciais (CREATE UNIQUE INDEX ... WHERE).
     # ux_reserva_espaco_data_ativa ficava: UNIQUE (espaco_id, data_reserva)
     # WHERE status IN ('Pendente', 'Aprovada') — válido só no SQLite.
-    # A exclusão de duplo-booking é feita na aplicação antes do commit
-    # (solicitar_reserva / criar_reserva_gestao / responder_reserva).
+    # A exclusão de duplo-booking do módulo antigo ficava na aplicação.
+    # A interface web dessa tabela foi removida; as tabelas reservas e
+    # espacos_comuns permanecem no banco.
     colunas_finais = {
         coluna["name"] for coluna in inspect(db.engine).get_columns("reservas")
     }
@@ -1998,35 +1999,20 @@ def create_app(config=None):
         from app.models import (
             Condominio,
             Encomenda,
-            EspacoComum,
             Notificacao,
             PerfilDestinoNotificacao,
-            Reserva,
             Role,
             StatusEncomenda,
         )
 
         usuario = get_current_user()
         unidade = get_unidade_logada()
-        reservas_pendentes_count = 0
         encomendas_pendentes_count = 0
         condominio_ctx = None
         notificacoes_nao_lidas = 0
         notificacoes_habilitadas = False
 
         if usuario:
-            query = Reserva.query.join(Reserva.espaco).filter(Reserva.status == "Pendente")
-            if usuario.condominio_id:
-                query = query.filter(EspacoComum.condominio_id == usuario.condominio_id)
-            if usuario.role == "sindico":
-                from app.routes import _filtro_espacos_sindico
-
-                reservas_pendentes_count = query.filter(
-                    _filtro_espacos_sindico(usuario)
-                ).count()
-            elif usuario.role in ("admin", "assistente"):
-                reservas_pendentes_count = query.count()
-
             if usuario.condominio_id:
                 condominio_ctx = usuario.condominio
 
@@ -2146,9 +2132,7 @@ def create_app(config=None):
             ).count()
             qtd_cadastros_pendentes = pendentes.count()
             qtd_pendencias_condominio = (
-                qtd_ocorrencias_nao_lidas
-                + qtd_cadastros_pendentes
-                + reservas_pendentes_count
+                qtd_ocorrencias_nao_lidas + qtd_cadastros_pendentes
             )
             resumo = (
                 base_ocorrencias.filter(Ocorrencia.status == StatusOcorrencia.ABERTO)
@@ -2169,7 +2153,6 @@ def create_app(config=None):
         return {
             "sidebar_user": usuario,
             "sidebar_unidade": unidade,
-            "reservas_pendentes_count": reservas_pendentes_count,
             "encomendas_pendentes_count": encomendas_pendentes_count,
             "condominio": condominio_ctx,
             "cor_primaria_rgb": _hex_para_rgb(cor_primaria),

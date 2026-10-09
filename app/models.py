@@ -555,7 +555,7 @@ class Reserva(db.Model):
 
 
 class AreaComum(db.Model):
-    """Área reservável do módulo novo. A operação atual segue em EspacoComum."""
+    """Área reservável. EspacoComum permanece só como tabela histórica."""
 
     __tablename__ = "areas_comuns"
 

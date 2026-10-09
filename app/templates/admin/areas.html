@@ -319,13 +319,13 @@
                 body: new URLSearchParams(campos || {})
             }).then(function (resposta) {
                 return resposta.json().then(function (corpo) {
-                    return { ok: resposta.ok && corpo.ok, corpo: corpo };
+                    return { ok: resposta.ok && (corpo.success === true || corpo.ok === true), corpo: corpo };
                 });
             }).then(function (resultado) {
                 if (!resultado.ok) {
                     botaoAprovar.disabled = false;
                     botaoRecusar.disabled = false;
-                    aviso(resultado.corpo.mensagem || "Não foi possível concluir.", false);
+                    aviso(resultado.corpo.message || resultado.corpo.mensagem || "Não foi possível concluir.", false);
                     return;
                 }
                 if (resultado.corpo.remover) {
@@ -337,7 +337,7 @@
                 }
                 if (typeof resultado.corpo.pendentes === "number") contador(resultado.corpo.pendentes);
                 modal.hide();
-                aviso(resultado.corpo.mensagem, true);
+                aviso(resultado.corpo.message || resultado.corpo.mensagem, true);
             }).catch(function () {
                 botaoAprovar.disabled = false;
                 botaoRecusar.disabled = false;

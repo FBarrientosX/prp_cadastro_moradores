@@ -2438,7 +2438,10 @@ def _resposta_checkin(reserva, convidado, entrou):
     presentes, faltam = _contagem_convidados(reserva)
     hora = convidado.checkin_em.strftime("%H:%M") if convidado.checkin_em else ""
     if request.headers.get("X-Requested-With") == "fetch":
+        mensagem = "Entrada registrada." if entrou else "Check-in desfeito."
         resposta = jsonify(
+            success=True,
+            message=mensagem,
             ok=True,
             entrou=entrou,
             hora=hora,

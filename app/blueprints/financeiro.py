@@ -286,6 +286,61 @@ def _reservar_nossos_numeros(condominio_id, quantidade):
     return [f"{base + indice:010d}" for indice in range(1, quantidade + 1)]
 
 
+def gerar_cobranca_automatica(
+    *,
+    condominio_id,
+    unidade,
+    conta,
+    plano,
+    titulo,
+    valor,
+    vencimento,
+    hoje,
+    observacoes,
+    descricao,
+):
+    """Monta um título avulso (multa, taxa de área) já com pagador e nosso número.
+
+    Quem chama continua responsável pela conta ativa, pelo plano e pelo
+    mês fechado. O rateio e o acordo seguem os próprios fluxos.
+    """
+    nome, documento, email, telefone = _pagador_da_unidade(unidade)
+    if not (nome or "").strip():
+        nome = unidade.identificador
+    numeros = _reservar_nossos_numeros(condominio_id, 1)
+    cobranca = CobrancaUnidade(
+        condominio_id=condominio_id,
+        unidade_id=unidade.id,
+        conta_bancaria_id=conta.id,
+        competencia=vencimento.strftime("%Y-%m"),
+        titulo=(titulo or "")[:200],
+        nosso_numero=numeros[0],
+        vencimento=vencimento,
+        pagador_nome=(nome or "")[:200],
+        pagador_documento=(documento or "")[:20] or None,
+        pagador_email=(email or "")[:120] or None,
+        pagador_telefone=(telefone or "")[:20] or None,
+        composicao_json=[
+            {
+                "plano_conta_id": plano.id,
+                "descricao": descricao,
+                "fundo_nome": plano.fundo.nome if plano.fundo else "",
+                "valor": valor,
+                "parcela_atual": 1,
+                "total_parcelas": 1,
+            }
+        ],
+        valor_original=valor,
+        status=(
+            StatusCobranca.A_VENCER if vencimento >= hoje else StatusCobranca.VENCIDA
+        ),
+        observacoes=observacoes,
+    )
+    db.session.add(cobranca)
+    db.session.flush()
+    return cobranca
+
+
 def _titulo_cobranca(rateio, itens):
     if len(itens) == 1:
         item = itens[0]

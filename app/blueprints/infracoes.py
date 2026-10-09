@@ -28,13 +28,11 @@ from app.auth import (
 )
 from app.models import (
     Condominio,
-    CobrancaUnidade,
     EscopoRepasse,
     FundoFinanceiro,
     Infracao,
     PlanoConta,
     Role,
-    StatusCobranca,
     StatusInfracao,
     TipoInfracao,
     TipoPlanoConta,
@@ -318,11 +316,7 @@ def _vencimento_multa(modo, hoje):
 
 
 def _criar_cobranca_multa(infracao, modo, hoje):
-    from app.blueprints.financeiro import (
-        _conta_ativa,
-        _pagador_da_unidade,
-        _reservar_nossos_numeros,
-    )
+    from app.blueprints.financeiro import _conta_ativa, gerar_cobranca_automatica
     from app.financeiro_fechamento import (
         competencia_esta_fechada,
         mensagem_competencia_fechada,
@@ -341,46 +335,21 @@ def _criar_cobranca_multa(infracao, modo, hoje):
     competencia = vencimento.strftime("%Y-%m")
     if competencia_esta_fechada(infracao.condominio_id, competencia):
         return None, mensagem_competencia_fechada(competencia)
-    unidade = infracao.unidade
-    nome, documento, email, telefone = _pagador_da_unidade(unidade)
-    if not (nome or "").strip():
-        nome = unidade.identificador
-    numeros = _reservar_nossos_numeros(infracao.condominio_id, 1)
     observacao = f"Gerada pela confirmação da infração #{infracao.id}."
     if modo == "proxima":
         observacao += " Embutida na próxima taxa."
-    cobranca = CobrancaUnidade(
+    cobranca = gerar_cobranca_automatica(
         condominio_id=infracao.condominio_id,
-        unidade_id=unidade.id,
-        conta_bancaria_id=conta.id,
-        competencia=competencia,
-        titulo=f"Multa — infração #{infracao.id}"[:200],
-        nosso_numero=numeros[0],
+        unidade=infracao.unidade,
+        conta=conta,
+        plano=plano,
+        titulo=f"Multa — infração #{infracao.id}",
+        valor=valor,
         vencimento=vencimento,
-        pagador_nome=(nome or "")[:200],
-        pagador_documento=(documento or "")[:20] or None,
-        pagador_email=(email or "")[:120] or None,
-        pagador_telefone=(telefone or "")[:20] or None,
-        composicao_json=[
-            {
-                "plano_conta_id": plano.id,
-                "descricao": "Multas e Penalidades",
-                "fundo_nome": plano.fundo.nome if plano.fundo else "",
-                "valor": valor,
-                "parcela_atual": 1,
-                "total_parcelas": 1,
-            }
-        ],
-        valor_original=valor,
-        status=(
-            StatusCobranca.A_VENCER
-            if vencimento >= hoje
-            else StatusCobranca.VENCIDA
-        ),
+        hoje=hoje,
         observacoes=observacao,
+        descricao="Multas e Penalidades",
     )
-    db.session.add(cobranca)
-    db.session.flush()
     return cobranca, None
 
 
