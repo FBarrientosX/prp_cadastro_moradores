@@ -7,6 +7,9 @@
 {% block body_extra_class %}auth-page-wide{% endblock %}
 
 {% block head %}
+{% if modo != 'atualizacao' %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+{% endif %}
 <style>
     .cadastro-card {
         width: 100%;
@@ -37,122 +40,165 @@
         padding: 1rem 1.1rem;
     }
 
-    .pessoa-item + .pessoa-item {
-        margin-top: 1rem;
-        padding-top: 1rem;
-        border-top: 1px dashed rgba(0, 0, 0, 0.08);
+    .cadastro-stepper {
+        display: flex;
+        gap: 0.35rem;
+        margin: 0 0 1.5rem;
+        padding: 0;
+    }
+
+    .cadastro-stepper-item {
+        position: relative;
+        flex: 1 1 0;
+        min-width: 0;
+        text-align: center;
+    }
+
+    .cadastro-stepper-item::before {
+        content: "";
+        position: absolute;
+        top: 1rem;
+        right: 50%;
+        left: -50%;
+        height: 2px;
+        background: #dee2e6;
+        z-index: 0;
+    }
+
+    .cadastro-stepper-item:first-child::before {
+        display: none;
+    }
+
+    .cadastro-stepper-item.is-atual::before,
+    .cadastro-stepper-item.is-concluida::before {
+        background: var(--bs-primary);
+    }
+
+    .cadastro-stepper-bolha {
+        position: relative;
+        z-index: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        border: 2px solid #ced4da;
+        border-radius: 50%;
+        background: #fff;
+        color: #6c757d;
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    .cadastro-stepper-item.is-atual .cadastro-stepper-bolha,
+    .cadastro-stepper-item.is-concluida .cadastro-stepper-bolha {
+        border-color: var(--bs-primary);
+        background: var(--bs-primary);
+        color: #fff;
+    }
+
+    .cadastro-stepper-rotulo {
+        display: block;
+        margin-top: 0.4rem;
+        color: #6c757d;
+        font-size: 0.72rem;
+        line-height: 1.25;
+    }
+
+    .cadastro-stepper-item.is-atual .cadastro-stepper-rotulo {
+        color: var(--bs-primary);
+        font-weight: 600;
+    }
+
+    @media (max-width: 575.98px) {
+        .cadastro-stepper-rotulo {
+            font-size: 0.65rem;
+        }
+    }
+
+    .cadastro-abas {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+    }
+
+    .cadastro-abas .nav-link {
+        color: var(--bs-primary);
+        white-space: nowrap;
+    }
+
+    .cadastro-abas .nav-link.active {
+        color: var(--bs-primary);
+        font-weight: 600;
+    }
+
+    .autocomplete-lista {
+        z-index: 30;
+        top: 100%;
+        left: 0;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+
+    .pessoa-card > .card-header {
+        background: #fff;
+    }
+
+    .pessoa-card .card-resumo-nome {
+        min-width: 0;
+    }
+
+    .avatar-facial {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+    }
+
+    .avatar-facial-vazio {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #e9ecef;
+        color: #6c757d;
+        font-size: 1.6rem;
+    }
+
+    .foto-facial-visor {
+        position: relative;
+        width: min(100%, 320px);
+        aspect-ratio: 3 / 4;
+        background: #111;
+        border-radius: 0.75rem;
+        overflow: hidden;
+    }
+
+    .foto-facial-visor video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .foto-facial-guia {
+        position: absolute;
+        inset: 12% 18%;
+        border: 3px solid rgba(255, 255, 255, 0.9);
+        border-radius: 50%;
+        box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
     }
 </style>
 {% endblock %}
 
-{% macro campos_pessoa(i, pessoa, vinculos) %}
-<div class="row g-3">
-    <div class="col-12">
-        <label class="form-label">Nome completo</label>
-        <input class="form-control" name="pessoa_{{ i }}_nome" required
-               value="{{ pessoa.nome_completo if pessoa else '' }}">
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">
-            CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
-        </label>
-        <input class="form-control" name="pessoa_{{ i }}_cpf" required
-               value="{{ pessoa.cpf if pessoa else '' }}">
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">Vínculo</label>
-        <select class="form-select" name="pessoa_{{ i }}_vinculo" required>
-            {% for vinculo in vinculos %}
-            <option value="{{ vinculo }}"
-                {% if pessoa and pessoa.vinculo == vinculo %}selected{% endif %}>
-                {{ vinculo }}
-            </option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">
-            Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
-        </label>
-        <input class="form-control" name="pessoa_{{ i }}_telefone"
-               value="{{ pessoa.telefone if pessoa else '' }}">
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">
-            E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
-        </label>
-        <input type="email" class="form-control" name="pessoa_{{ i }}_email"
-               value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">Data de nascimento</label>
-        <input type="date" class="form-control campo-data-nascimento"
-               autocomplete="bday" data-no-datepicker="true"
-               name="pessoa_{{ i }}_data_nascimento"
-               value="{{ pessoa.data_nascimento.isoformat() if pessoa and pessoa.data_nascimento else '' }}">
-        <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
-    </div>
-    <div class="col-12 col-md-6">
-        <label class="form-label">Parentesco</label>
-        <input class="form-control" name="pessoa_{{ i }}_parentesco"
-               value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
-    </div>
-    <div class="col-12">
-        <div class="lgpd-box interfone-consentimento">
-            <label class="form-label d-block mb-1 fw-semibold">
-                Consentimento LGPD — Uso do telefone no interfone
-            </label>
-            <p class="small text-muted mb-2">
-                Informe se autoriza o uso deste número no interfone da unidade.
-            </p>
-            <div class="form-check">
-                <input class="form-check-input" type="radio"
-                       name="pessoa_{{ i }}_autoriza_interfone"
-                       id="autoriza_interfone_{{ i }}_true"
-                       value="true" required
-                       {% if pessoa and pessoa.autoriza_interfone %}checked{% endif %}>
-                <label class="form-check-label" for="autoriza_interfone_{{ i }}_true">
-                    Sim, autorizo o uso deste número para o interfone.
-                </label>
-            </div>
-            <div class="form-check">
-                <input class="form-check-input" type="radio"
-                       name="pessoa_{{ i }}_autoriza_interfone"
-                       id="autoriza_interfone_{{ i }}_false"
-                       value="false" required
-                       {% if pessoa and not pessoa.autoriza_interfone %}checked{% endif %}>
-                <label class="form-check-label" for="autoriza_interfone_{{ i }}_false">
-                    Não autorizo.
-                </label>
-            </div>
-        </div>
-    </div>
-    <div class="col-12">
-        <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="pessoa_{{ i }}_is_responsavel"
-                   id="resp_{{ i }}"
-                   {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
-            <label class="form-check-label" for="resp_{{ i }}">Responsável pela unidade</label>
-        </div>
-    </div>
-</div>
-{% endmacro %}
+{% macro vinculo_ui(pessoa) -%}
+{%- if pessoa and pessoa.eh_proprietario and pessoa.vinculo == 'Proprietário' -%}Proprietário
+{%- elif pessoa and pessoa.vinculo == 'Locatário' -%}Inquilino
+{%- elif pessoa and pessoa.vinculo == 'Morador' -%}Familiar/Morador
+{%- else -%}Familiar/Morador
+{%- endif -%}
+{%- endmacro %}
 
 {% block content %}
-{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
-{% if pessoas %}
-    {% set lista_responsavel = pessoas|selectattr('is_responsavel')|list %}
-    {% set lista_outros = pessoas|rejectattr('is_responsavel')|list %}
-    {% if not lista_responsavel %}
-        {% set lista_responsavel = [pessoas[0]] %}
-        {% set lista_outros = pessoas[1:] %}
-    {% endif %}
-{% else %}
-    {% set lista_responsavel = [None] %}
-    {% set lista_outros = [] %}
-{% endif %}
-{% set ns = namespace(idx=0) %}
-{% set exibe_contrato_locacao = lista_responsavel and lista_responsavel[0] and lista_responsavel[0].vinculo == 'Locatário' %}
+{% set brand_logo = logo_publica(condominio) %}
 
 <div class="card cadastro-card shadow-lg mx-auto">
     <div class="card-body p-3 p-sm-4 p-md-5">
@@ -188,81 +234,785 @@
             <p class="text-muted mb-0">Bloco {{ bloco }} - Apartamento {{ apartamento }}</p>
         </div>
 
-        <form method="post"
-              action="{% if modo == 'cadastro' and slug %}{{ url_for('cadastro_inicial', slug=slug) }}{% else %}{{ url_for('salvar_cadastro') }}{% endif %}"
-              enctype="multipart/form-data">
+        {% if modo != 'atualizacao' %}
+        <ol class="cadastro-stepper list-unstyled" id="cadastroStepper">
+            <li class="cadastro-stepper-item is-atual" data-etapa="1" aria-current="step">
+                <span class="cadastro-stepper-bolha" aria-hidden="true">1</span>
+                <span class="cadastro-stepper-rotulo">Acesso &amp; Proprietários</span>
+            </li>
+            <li class="cadastro-stepper-item" data-etapa="2">
+                <span class="cadastro-stepper-bolha" aria-hidden="true">2</span>
+                <span class="cadastro-stepper-rotulo">Moradores</span>
+            </li>
+            <li class="cadastro-stepper-item" data-etapa="3">
+                <span class="cadastro-stepper-bolha" aria-hidden="true">3</span>
+                <span class="cadastro-stepper-rotulo">Veículos</span>
+            </li>
+            <li class="cadastro-stepper-item" data-etapa="4">
+                <span class="cadastro-stepper-bolha" aria-hidden="true">4</span>
+                <span class="cadastro-stepper-rotulo">Documentação</span>
+            </li>
+        </ol>
 
-            <section class="cadastro-section mb-4">
-                <p class="cadastro-section-title">Dados de Acesso</p>
+        <form method="post"
+              id="form-cadastro-inicial"
+              action="{{ url_for('salvar_cadastro') }}"
+              enctype="multipart/form-data"
+              novalidate>
+            <div class="wizard-etapa" data-etapa="1">
+                {% if pre_cadastro is defined and pre_cadastro %}
+                <div class="alert alert-info">
+                    <strong>Pré-cadastro da administração.</strong>
+                    Confirme os dados mascarados, crie a senha de acesso e complete moradores, fotos e veículos.
+                    <ul class="mb-0 mt-2">
+                        {% if mascara.nome %}<li>Pagador: {{ mascara.nome }}</li>{% endif %}
+                        {% if mascara.documento %}<li>CPF/CNPJ: {{ mascara.documento }}</li>{% endif %}
+                        {% if mascara.email %}<li>E-mail: {{ mascara.email }}</li>{% endif %}
+                        {% if mascara.telefone %}<li>Telefone: {{ mascara.telefone }}</li>{% endif %}
+                        {% if not mascara.nome and not mascara.documento %}
+                        <li>A administração ainda não informou o pagador desta unidade.</li>
+                        {% endif %}
+                    </ul>
+                </div>
+                {% if exige_cpf %}
+                <div class="mb-4">
+                    <label class="form-label" for="cpf_confirmacao">Confirme o CPF/CNPJ do pagador</label>
+                    <input class="form-control" id="cpf_confirmacao" name="cpf_confirmacao" inputmode="numeric" required autocomplete="off">
+                </div>
+                {% endif %}
+                {% endif %}
                 <h2 class="h5 mb-1">Senha da Unidade</h2>
-                {% if modo == 'cadastro' %}
                 <p class="text-muted small mb-3">
                     Crie uma senha segura (mínimo 6 caracteres). Ela será necessária para
-                    <strong>futuras atualizações</strong> de cadastro desta unidade.
-                    Guarde-a em local seguro.
+                    futuras atualizações de cadastro desta unidade.
                 </p>
-                {% else %}
-                <p class="text-muted small mb-3">
-                    Deixe em branco para manter a senha atual. Preencha apenas se desejar alterá-la.
-                </p>
-                {% endif %}
-                <div class="row g-3">
+                <div class="row g-3 mb-4">
                     <div class="col-12 col-md-6">
                         <label class="form-label" for="senha">Senha</label>
                         <input type="password" class="form-control" id="senha" name="senha"
-                               {% if modo == 'cadastro' %}required minlength="6"{% endif %}
-                               autocomplete="new-password">
+                               required minlength="6" autocomplete="new-password">
                     </div>
                     <div class="col-12 col-md-6">
                         <label class="form-label" for="confirmar_senha">Confirmar senha</label>
                         <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
-                               {% if modo == 'cadastro' %}required minlength="6"{% endif %}
-                               autocomplete="new-password">
+                               required minlength="6" autocomplete="new-password">
                     </div>
                 </div>
-            </section>
 
-            <section class="cadastro-section mb-4">
-                <p class="cadastro-section-title">Dados do Morador Responsável</p>
-                <h2 class="h5 mb-3">Morador responsável</h2>
-                {% for pessoa in lista_responsavel %}
-                <div class="pessoa-item">
-                    {% if modo == 'atualizacao' and pessoa %}
-                    <input type="hidden" name="pessoa_{{ ns.idx }}_id" value="{{ pessoa.id }}">
-                    {% endif %}
-                    {{ campos_pessoa(ns.idx, pessoa, vinculos) }}
-                </div>
-                {% set ns.idx = ns.idx + 1 %}
-                {% endfor %}
-            </section>
-
-            <section class="cadastro-section mb-4">
-                <p class="cadastro-section-title">Outros Moradores / Veículos</p>
-                <h2 class="h5 mb-1">Outros moradores</h2>
+                <h2 class="h5 mb-1">Proprietários</h2>
                 <p class="text-muted small mb-3">
-                    Inclua familiares ou demais ocupantes da unidade, se houver.
+                    Donos legais do imóvel. Informe ao menos um proprietário.
                 </p>
-                <div id="pessoas-container">
-                    {% for pessoa in lista_outros %}
-                    <div class="pessoa-item">
-                        {% if modo == 'atualizacao' and pessoa %}
-                        <input type="hidden" name="pessoa_{{ ns.idx }}_id" value="{{ pessoa.id }}">
-                        {% if pessoa.status == 'Pendente' %}
-                        <div class="mb-2">
-                            <span class="badge bg-warning text-dark">Aguardando Aprovação</span>
+                <div class="alert alert-warning d-none wizard-aviso" role="alert"></div>
+                <div id="proprietarios-container">
+                    <div class="card shadow-sm mb-3 pessoa-card proprietario-item">
+                        <div class="card-header border-bottom-0 pb-2">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <div class="min-w-0">
+                                    <div class="d-flex flex-wrap align-items-center gap-1">
+                                        <span class="fw-semibold text-truncate card-resumo-nome">Novo Proprietário</span>
+                                        <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                                    </div>
+                                    <div class="small text-muted card-resumo-cpf">CPF não informado</div>
+                                </div>
+                                <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">Recolher</button>
+                                    <button type="button"
+                                            class="btn btn-sm btn-link text-danger text-decoration-none px-2 remover-proprietario d-none"
+                                            data-remover aria-label="Remover">
+                                        <i class="bi bi-trash"></i>
+                                        <span class="d-none d-sm-inline ms-1">Remover</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                        {% endif %}
-                        {% endif %}
-                        {{ campos_pessoa(ns.idx, pessoa, vinculos) }}
+                        <div class="card-corpo card-body pt-2">
+<div class="row g-3">
+    <div class="col-12">
+        <label class="form-label">Nome completo</label>
+                                    <input class="form-control" name="proprietario_0_nome" required>
+    </div>
+    <div class="col-12 col-md-6">
+                                    <label class="form-label">CPF</label>
+                                    <input class="form-control" name="proprietario_0_cpf" required>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Telefone</label>
+                                    <input class="form-control" name="proprietario_0_telefone">
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">E-mail</label>
+                                    <input type="email" class="form-control" name="proprietario_0_email">
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Data de nascimento</label>
+                                    <input type="text" class="form-control datepicker"
+                                           name="proprietario_0_data_nascimento"
+                                           placeholder="DD/MM/AAAA" autocomplete="bday">
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    {% set ns.idx = ns.idx + 1 %}
-                    {% endfor %}
                 </div>
-                <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-pessoa">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="add-proprietario">
+                    + Adicionar proprietário
+                </button>
+                <div class="d-flex justify-content-end pt-4">
+                    <button type="button" class="btn btn-primary wizard-proximo">Próximo</button>
+                </div>
+            </div>
+
+            <div class="wizard-etapa d-none" data-etapa="2">
+                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-3">
+                    <div>
+                        <h2 class="h5 mb-1">Moradores</h2>
+                        <p class="text-muted small mb-0">
+                            Ocupantes do imóvel. Marque quem é o responsável pela unidade.
+                        </p>
+                    </div>
+                    <div class="dropdown">
+                        <button type="button" class="btn btn-outline-primary btn-sm dropdown-toggle"
+                                id="importar-proprietario" data-bs-toggle="dropdown"
+                                data-bs-auto-close="true" aria-expanded="false">
+                            + Importar Proprietário como Morador
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" id="menu-importar-proprietario"></ul>
+                    </div>
+                </div>
+                <div class="alert alert-warning d-none wizard-aviso" role="alert"></div>
+                <div id="moradores-container">
+                    <div class="card shadow-sm mb-3 pessoa-card morador-item">
+                        <div class="card-header border-bottom-0 pb-2">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <div class="min-w-0">
+                                    <div class="d-flex flex-wrap align-items-center gap-1">
+                                        <span class="fw-semibold text-truncate card-resumo-nome">Novo Morador</span>
+                                        <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                                    </div>
+                                    <div class="small text-muted card-resumo-cpf">CPF não informado</div>
+                                </div>
+                                <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">Recolher</button>
+                                    <button type="button"
+                                            class="btn btn-sm btn-link text-danger text-decoration-none px-2 remover-morador d-none"
+                                            data-remover aria-label="Remover">
+                                        <i class="bi bi-trash"></i>
+                                        <span class="d-none d-sm-inline ms-1">Remover</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-corpo card-body pt-2">
+                            <div class="row g-3">
+                                <div class="col-12 position-relative">
+                                    <label class="form-label">Nome completo</label>
+                                    <input class="form-control js-autocomplete" name="morador_0_nome"
+                                           autocomplete="off" required>
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                                </div>
+                                <div class="col-12 col-md-6 position-relative">
+        <label class="form-label">
+            CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+                                    <input class="form-control js-autocomplete" name="morador_0_cpf"
+                                           autocomplete="off" required>
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Vínculo</label>
+                                    <select class="form-select" name="morador_0_vinculo" required>
+                                        <option value="Proprietário" disabled>Proprietário</option>
+                                        <option value="Inquilino">Inquilino</option>
+                                        <option value="Familiar/Morador" selected>Familiar/Morador</option>
+        </select>
+    </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Parentesco</label>
+                                    <input class="form-control" name="morador_0_parentesco">
+                                </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">
+            Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+                                    <input class="form-control" name="morador_0_telefone">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">
+            E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
+        </label>
+                                    <input type="email" class="form-control" name="morador_0_email">
+    </div>
+    <div class="col-12 col-md-6">
+        <label class="form-label">Data de nascimento</label>
+                                    <input type="text" class="form-control datepicker"
+                                           name="morador_0_data_nascimento"
+                                           placeholder="DD/MM/AAAA" autocomplete="bday">
+    </div>
+    <div class="col-12">
+        <div class="lgpd-box interfone-consentimento">
+            <label class="form-label d-block mb-1 fw-semibold">
+                Consentimento LGPD — Uso do telefone no interfone
+            </label>
+            <p class="small text-muted mb-2">
+                Informe se autoriza o uso deste número no interfone da unidade.
+            </p>
+            <div class="form-check">
+                <input class="form-check-input" type="radio"
+                                                   name="morador_0_lgpd_interfone"
+                                                   id="lgpd_0_true" value="true" required>
+                                            <label class="form-check-label" for="lgpd_0_true">
+                    Sim, autorizo o uso deste número para o interfone.
+                </label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio"
+                                                   name="morador_0_lgpd_interfone"
+                                                   id="lgpd_0_false" value="false" required>
+                                            <label class="form-check-label" for="lgpd_0_false">
+                    Não autorizo.
+                </label>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+                                        <input class="form-check-input" type="checkbox"
+                                               name="morador_0_is_responsavel" id="resp_morador_0">
+                                        <label class="form-check-label" for="resp_morador_0">
+                                            Responsável pela unidade
+                                        </label>
+        </div>
+    </div>
+</div>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="add-morador">
                     + Adicionar morador
                 </button>
+                <div class="d-flex justify-content-between gap-2 pt-4">
+                    <button type="button" class="btn btn-outline-secondary wizard-voltar">Voltar</button>
+                    <button type="button" class="btn btn-primary wizard-proximo">Próximo</button>
+                </div>
+            </div>
 
-                <h2 class="h5 mb-2">Veículos</h2>
+            <div class="wizard-etapa d-none" data-etapa="3">
+                <h2 class="h5 mb-3">Veículos</h2>
+                <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" id="possui-veiculo">
+                    <label class="form-check-label" for="possui-veiculo">
+                        Possui veículo estacionado no condomínio?
+                    </label>
+            </div>
+                <div id="veiculos-section" class="d-none">
+                    <div id="veiculos-container">
+                        <div class="border rounded p-3 mb-3 veiculo-item">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h6 mb-0">Veículo</h3>
+                                <button type="button"
+                                        class="btn btn-sm btn-link text-danger text-decoration-none remover-veiculo d-none"
+                                        data-remover>Remover</button>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label">Placa</label>
+                                    <input class="form-control veiculo-field" name="veiculo_0_placa">
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label">Marca</label>
+                                    <input class="form-control veiculo-field" name="veiculo_0_marca">
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label">Cor</label>
+                                    <input class="form-control veiculo-field" name="veiculo_0_cor">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="add-veiculo">
+                        + Adicionar veículo
+                </button>
+        </div>
+                <div class="d-flex justify-content-between gap-2 pt-4">
+                    <button type="button" class="btn btn-outline-secondary wizard-voltar">Voltar</button>
+                    <button type="button" class="btn btn-primary wizard-proximo">Próximo</button>
+                </div>
+            </div>
+
+            <div class="wizard-etapa d-none" data-etapa="4">
+                <h2 class="h5 mb-2">Comprovante de Residência / Propriedade</h2>
+                <p class="text-muted small mb-3">
+                    Envie RGI, Contrato de Compra e Venda ou documento equivalente
+                    (PDF, PNG, JPG ou JPEG).
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="documento">Comprovante de Residência/Propriedade</label>
+                    <input type="file" class="form-control" id="documento" name="documento"
+                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                </div>
+                <div class="mb-4">
+                    <label class="form-label" for="documento2">Anexo Adicional (Opcional)</label>
+                    <input type="file" class="form-control" id="documento2" name="documento2"
+                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+        </div>
+
+                <section id="contrato-locacao-section" class="d-none">
+                    <h2 class="h5 mb-2">Contrato de Locação</h2>
+                <p class="text-muted small mb-3">
+                        Obrigatório quando o responsável pela unidade é inquilino
+                        (PDF, PNG, JPG ou JPEG).
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label" for="contrato_locacao">Contrato de Locação</label>
+                        <input type="file" class="form-control" id="contrato_locacao" name="contrato_locacao"
+                               accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                    </div>
+                </section>
+
+                <div class="d-flex justify-content-between gap-2 pt-4">
+                    <button type="button" class="btn btn-outline-secondary wizard-voltar">Voltar</button>
+                    <button type="submit" class="btn btn-primary">Enviar cadastro</button>
+                </div>
+                {% if slug %}
+                <div class="text-center pt-2">
+                    <a href="{{ url_for('tenant_login', slug=slug) }}" class="btn btn-link text-muted text-decoration-none">
+                        Voltar ao início
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </form>
+                {% else %}
+        {% set lista_prop = proprietarios if proprietarios else [None] %}
+        {% set lista_mor = moradores if moradores else [None] %}
+        {% set opcoes_vinculo = ['Proprietário', 'Inquilino', 'Familiar/Morador'] %}
+        {% set ns_cpfs_donos = namespace(lista=[]) %}
+        {% for pessoa in lista_prop %}
+            {% if pessoa and pessoa.cpf %}
+                {% set _cpf_dono = pessoa.cpf|replace('.', '')|replace('-', '')|replace(' ', '') %}
+                {% set ns_cpfs_donos.lista = ns_cpfs_donos.lista + [_cpf_dono] %}
+            {% endif %}
+        {% endfor %}
+        {% set ns_contrato = namespace(exibe=false) %}
+        {% for pessoa in moradores or [] %}
+            {% if pessoa and pessoa.is_responsavel and pessoa.vinculo == 'Locatário' %}
+                {% set ns_contrato.exibe = true %}
+            {% endif %}
+        {% endfor %}
+        {% set abas_cadastro = ['proprietarios', 'moradores', 'veiculos', 'seguranca'] %}
+        {% set aba_pedida = request.args.get('aba', '') %}
+        {% set aba_ativa = aba_pedida if aba_pedida in abas_cadastro else 'proprietarios' %}
+        <form method="post"
+              id="form-atualizar-dados"
+              action="{{ url_for('salvar_cadastro') }}"
+              enctype="multipart/form-data"
+              novalidate>
+            <input type="hidden" name="aba_ativa" id="inputAbaAtiva" value="{{ aba_ativa }}">
+            <ul class="nav nav-tabs cadastro-abas mb-4" id="cadastroAbas" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if aba_ativa == 'proprietarios' %}active{% endif %}"
+                            id="aba-proprietarios-tab" data-bs-toggle="tab" data-aba="proprietarios"
+                            data-bs-target="#aba-proprietarios" type="button" role="tab"
+                            aria-controls="aba-proprietarios"
+                            aria-selected="{{ 'true' if aba_ativa == 'proprietarios' else 'false' }}">
+                        Proprietários &amp; Documentos
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if aba_ativa == 'moradores' %}active{% endif %}"
+                            id="aba-moradores-tab" data-bs-toggle="tab" data-aba="moradores"
+                            data-bs-target="#aba-moradores" type="button" role="tab"
+                            aria-controls="aba-moradores"
+                            aria-selected="{{ 'true' if aba_ativa == 'moradores' else 'false' }}">
+                        Moradores
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if aba_ativa == 'veiculos' %}active{% endif %}"
+                            id="aba-veiculos-tab" data-bs-toggle="tab" data-aba="veiculos"
+                            data-bs-target="#aba-veiculos" type="button" role="tab"
+                            aria-controls="aba-veiculos"
+                            aria-selected="{{ 'true' if aba_ativa == 'veiculos' else 'false' }}">
+                        Veículos
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if aba_ativa == 'seguranca' %}active{% endif %}"
+                            id="aba-senha-tab" data-bs-toggle="tab" data-aba="seguranca"
+                            data-bs-target="#aba-senha" type="button" role="tab"
+                            aria-controls="aba-senha"
+                            aria-selected="{{ 'true' if aba_ativa == 'seguranca' else 'false' }}">
+                        Segurança (Senha)
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <div class="tab-pane fade {% if aba_ativa == 'proprietarios' %}show active{% endif %}"
+                     id="aba-proprietarios" role="tabpanel"
+                     aria-labelledby="aba-proprietarios-tab">
+                    <h2 class="h5 mb-1">Proprietários</h2>
+                <p class="text-muted small mb-3">
+                        Donos legais do imóvel. Quem também mora na unidade pode ser importado na aba Moradores.
+                    </p>
+                    <div id="proprietarios-container">
+                        {% for pessoa in lista_prop %}
+                        {% set i = loop.index0 %}
+                        {% set tem_dados = pessoa and pessoa.nome_completo and pessoa.cpf %}
+                        <div class="card shadow-sm mb-3 pessoa-card proprietario-item">
+                            {% if pessoa and pessoa.id %}
+                            <input type="hidden" name="proprietario_{{ i }}_id" value="{{ pessoa.id }}">
+                {% endif %}
+                            <div class="card-header border-bottom-0 pb-2">
+                                <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div class="min-w-0">
+                                        <div class="fw-semibold text-truncate card-resumo-nome">
+                                            {{ pessoa.nome_completo if tem_dados else 'Novo Proprietário' }}
+                                        </div>
+                                        <div class="small text-muted card-resumo-cpf">
+                                            {% if pessoa and pessoa.cpf %}CPF {{ pessoa.cpf }}{% else %}CPF não informado{% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">
+                                            {% if tem_dados %}Editar{% else %}Recolher{% endif %}
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-sm btn-link text-danger text-decoration-none px-2 remover-proprietario {% if lista_prop|length < 2 %}d-none{% endif %}"
+                                                aria-label="Remover">
+                                            <i class="bi bi-trash"></i>
+                                            <span class="d-none d-sm-inline ms-1">Remover</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="card-corpo card-body pt-2 {% if tem_dados %}d-none{% endif %}">
+                <div class="row g-3">
+                                <div class="col-12 position-relative">
+                                    <label class="form-label">Nome completo</label>
+                                    <input class="form-control js-autocomplete" name="proprietario_{{ i }}_nome"
+                                           autocomplete="off" required
+                                           value="{{ pessoa.nome_completo if pessoa else '' }}">
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                                </div>
+                                <div class="col-12 col-md-6 position-relative">
+                                    <label class="form-label">CPF</label>
+                                    <input class="form-control js-autocomplete" name="proprietario_{{ i }}_cpf"
+                                           autocomplete="off" required
+                                           value="{{ pessoa.cpf if pessoa and pessoa.cpf else '' }}">
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                                </div>
+                    <div class="col-12 col-md-6">
+                                    <label class="form-label">Telefone</label>
+                                    <input class="form-control" name="proprietario_{{ i }}_telefone"
+                                           value="{{ pessoa.telefone if pessoa and pessoa.telefone else '' }}">
+                    </div>
+                    <div class="col-12 col-md-6">
+                                    <label class="form-label">E-mail</label>
+                                    <input type="email" class="form-control" name="proprietario_{{ i }}_email"
+                                           value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
+                    </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Data de nascimento</label>
+                                    <input type="text" class="form-control datepicker"
+                                           name="proprietario_{{ i }}_data_nascimento"
+                                           placeholder="DD/MM/AAAA" autocomplete="bday"
+                                           value="{% if pessoa and pessoa.data_nascimento %}{{ pessoa.data_nascimento.isoformat() }}{% endif %}">
+                </div>
+                            </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-proprietario">
+                        + Adicionar proprietário
+                    </button>
+
+                    <section class="cadastro-section">
+                        <p class="cadastro-section-title">Documentação</p>
+                        <h2 class="h5 mb-2">Comprovante de Residência / Propriedade</h2>
+                        <p class="text-muted small mb-3">
+                            Envie RGI, Contrato de Compra e Venda ou documento equivalente
+                            (PDF, PNG, JPG ou JPEG).
+                        </p>
+                        <div class="mb-3">
+                            <label class="form-label" for="documento">Comprovante de Residência/Propriedade</label>
+                            <input type="file" class="form-control" id="documento" name="documento"
+                                   accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="documento2">Anexo Adicional (Opcional)</label>
+                            <input type="file" class="form-control" id="documento2" name="documento2"
+                                   accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                        </div>
+                        {% if unidade and (unidade.documento_url or unidade.documento2_url or unidade.documento_status) %}
+                        <div class="small mb-3">
+                            {% if unidade.documento_status %}
+                            <p class="mb-1">
+                                Status da documentação:
+                                {% if unidade.documento_status == 'Aprovado' or unidade.documento_status == 'Entregue' %}
+                                <span class="badge text-bg-success">{{ unidade.documento_status }}</span>
+                                {% elif unidade.documento_status == 'Rejeitado' %}
+                                <span class="badge text-bg-danger">{{ unidade.documento_status }}</span>
+                                {% elif unidade.documento_status == 'Pendente' %}
+                                <span class="badge text-bg-warning">{{ unidade.documento_status }}</span>
+                                {% else %}
+                                <span class="badge text-bg-secondary">{{ unidade.documento_status }}</span>
+                    {% endif %}
+                            </p>
+                            {% endif %}
+                            {% if unidade.documento_url %}
+                            <p class="mb-1">
+                                Documento atual:
+                                <a href="{{ unidade.documento_url }}" target="_blank" rel="noopener noreferrer">
+                                    visualizar no Drive
+                                </a>
+                            </p>
+                            {% endif %}
+                            {% if unidade.documento2_url %}
+                            <p class="mb-0">
+                                Anexo adicional:
+                                <a href="{{ unidade.documento2_url }}" target="_blank" rel="noopener noreferrer">
+                                    visualizar no Drive
+                                </a>
+                            </p>
+                            {% endif %}
+                </div>
+                        {% endif %}
+            </section>
+
+                    <section id="contrato-locacao-section" class="mt-4 {% if not ns_contrato.exibe %}d-none{% endif %}">
+                        <h2 class="h5 mb-2">Contrato de Locação</h2>
+                <p class="text-muted small mb-3">
+                            Obrigatório quando o responsável pela unidade é inquilino
+                            (PDF, PNG, JPG ou JPEG).
+                        </p>
+                        <div class="mb-3">
+                            <label class="form-label" for="contrato_locacao">Contrato de Locação</label>
+                            <input type="file" class="form-control" id="contrato_locacao" name="contrato_locacao"
+                                   accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                        </div>
+                        {% if unidade and unidade.contrato_locacao_url %}
+                        <p class="small mb-0">
+                            Contrato atual:
+                            <a href="{{ unidade.contrato_locacao_url }}" target="_blank" rel="noopener noreferrer">
+                                visualizar no Drive
+                            </a>
+                            {% if unidade.contrato_locacao_status %}
+                            <span class="badge text-bg-secondary ms-1">{{ unidade.contrato_locacao_status }}</span>
+                        {% endif %}
+                        </p>
+                        {% endif %}
+                    </section>
+                    </div>
+
+                <div class="tab-pane fade {% if aba_ativa == 'moradores' %}show active{% endif %}"
+                     id="aba-moradores" role="tabpanel"
+                     aria-labelledby="aba-moradores-tab">
+                    <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">Moradores</h2>
+                            <p class="text-muted small mb-0">
+                                Ocupantes do imóvel. Marque quem é o responsável pela unidade.
+                            </p>
+                        </div>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-outline-primary btn-sm dropdown-toggle"
+                                    id="importar-proprietario" data-bs-toggle="dropdown"
+                                    data-bs-auto-close="true" aria-expanded="false">
+                                + Importar Proprietário como Morador
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end" id="menu-importar-proprietario"></ul>
+                        </div>
+                    </div>
+                    <div class="alert alert-warning d-none" id="aviso-responsavel" role="alert">
+                        Marque ao menos um morador como responsável pela unidade.
+                    </div>
+                    <div id="moradores-container">
+                        {% for pessoa in lista_mor %}
+                        {% set i = loop.index0 %}
+                        {% set cpf_morador = (pessoa.cpf if pessoa and pessoa.cpf else '')|replace('.', '')|replace('-', '')|replace(' ', '') %}
+                        {% set pode_proprietario = cpf_morador and cpf_morador in ns_cpfs_donos.lista %}
+                        {% set ns_vinculo = namespace(escolhido=vinculo_ui(pessoa)|trim) %}
+                        {% if ns_vinculo.escolhido == 'Proprietário' and not pode_proprietario %}
+                            {% set ns_vinculo.escolhido = 'Familiar/Morador' %}
+                        {% endif %}
+                        {% set escolhido = ns_vinculo.escolhido %}
+                        {% set tem_dados = pessoa and pessoa.nome_completo and pessoa.cpf %}
+                        <div class="card shadow-sm mb-3 pessoa-card morador-item"
+                             data-foto="{{ '1' if pessoa and pessoa.foto_facial else '0' }}"
+                             {% if pessoa and pessoa.status == 'Pendente' %}data-status="Aguardando Aprovação"{% endif %}>
+                            {% if pessoa and pessoa.id %}
+                            <input type="hidden" name="morador_{{ i }}_id" value="{{ pessoa.id }}">
+                            {% endif %}
+                            <div class="card-header border-bottom-0 pb-2">
+                                <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div class="d-flex align-items-center gap-2 min-w-0">
+                                        <span class="avatar-facial-wrap flex-shrink-0">
+                                            {% if pessoa and foto_facial_url(pessoa) %}
+                                            <img class="avatar-facial rounded-circle" alt=""
+                                                 width="64" height="64"
+                                                 src="{{ foto_facial_url(pessoa) }}">
+                                            {% else %}
+                                            <span class="avatar-facial avatar-facial-vazio rounded-circle">
+                                                <i class="bi bi-person"></i>
+                                            </span>
+                                            {% endif %}
+                                        </span>
+                                        <div class="min-w-0">
+                                        <div class="d-flex flex-wrap align-items-center gap-1">
+                                            <span class="fw-semibold text-truncate card-resumo-nome">
+                                                {{ pessoa.nome_completo if tem_dados else 'Novo Morador' }}
+                                            </span>
+                                            <span class="card-resumo-badges d-flex flex-wrap gap-1">
+                                                {% if escolhido %}
+                                                <span class="badge text-bg-light border">{{ escolhido }}</span>
+                                                {% endif %}
+                                                {% if pessoa and pessoa.parentesco %}
+                                                <span class="badge text-bg-light border">{{ pessoa.parentesco }}</span>
+                                                {% endif %}
+                                                {% if pessoa and pessoa.is_responsavel %}
+                                                <span class="badge text-bg-primary">Responsável</span>
+                                                {% endif %}
+                                                {% if pessoa and pessoa.autoriza_interfone %}
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle">Interfone Ativo</span>
+                                                {% endif %}
+                                                {% if pessoa and pessoa.status == 'Pendente' %}
+                                                <span class="badge bg-warning text-dark">Aguardando Aprovação</span>
+                                                {% endif %}
+                                                {% if pessoa and pessoa.foto_facial %}
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle">📸 Facial Cadastrada</span>
+                                                {% else %}
+                                                <span class="badge bg-warning-subtle text-warning-emphasis border">⚠️ Sem Foto Facial</span>
+                                                {% endif %}
+                                            </span>
+                                        </div>
+                                        <div class="small text-muted card-resumo-cpf">
+                                            {% if pessoa and pessoa.cpf %}CPF {{ pessoa.cpf }}{% else %}CPF não informado{% endif %}
+                                        </div>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex flex-wrap flex-shrink-0 align-items-center gap-1">
+                                        <button type="button" class="btn btn-sm btn-outline-primary js-abrir-foto">📸 Enviar/Trocar Foto</button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">
+                                            {% if tem_dados %}Editar{% else %}Recolher{% endif %}
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-sm btn-link text-danger text-decoration-none px-2 remover-morador {% if lista_mor|length < 2 %}d-none{% endif %}"
+                                                aria-label="Remover">
+                                            <i class="bi bi-trash"></i>
+                                            <span class="d-none d-sm-inline ms-1">Remover</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            {% include "includes/foto_facial_painel.html" %}
+                            <div class="card-corpo card-body pt-2 {% if tem_dados %}d-none{% endif %}">
+                            <div class="row g-3">
+                                <div class="col-12 position-relative">
+                                    <label class="form-label">Nome completo</label>
+                                    <input class="form-control js-autocomplete" name="morador_{{ i }}_nome"
+                                           autocomplete="off" required
+                                           value="{{ pessoa.nome_completo if pessoa else '' }}">
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                                </div>
+                                <div class="col-12 col-md-6 position-relative">
+                                    <label class="form-label">
+                                        CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
+                                    <input class="form-control js-autocomplete" name="morador_{{ i }}_cpf"
+                                           autocomplete="off" required
+                                           value="{{ pessoa.cpf if pessoa and pessoa.cpf else '' }}">
+                                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Vínculo</label>
+                                    <select class="form-select" name="morador_{{ i }}_vinculo" required>
+                                        {% for opcao in opcoes_vinculo %}
+                                        <option value="{{ opcao }}"
+                                                {% if escolhido == opcao %}selected{% endif %}
+                                                {% if opcao == 'Proprietário' and not pode_proprietario %}disabled{% endif %}>{{ opcao }}</option>
+                    {% endfor %}
+                                    </select>
+                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Parentesco</label>
+                                    <input class="form-control" name="morador_{{ i }}_parentesco"
+                                           value="{{ pessoa.parentesco if pessoa and pessoa.parentesco else '' }}">
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">
+                                        Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
+                                    <input class="form-control" name="morador_{{ i }}_telefone"
+                                           value="{{ pessoa.telefone if pessoa and pessoa.telefone else '' }}">
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">
+                                        E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
+                                    </label>
+                                    <input type="email" class="form-control" name="morador_{{ i }}_email"
+                                           value="{{ pessoa.email if pessoa and pessoa.email else '' }}">
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label">Data de nascimento</label>
+                                    <input type="text" class="form-control datepicker"
+                                           name="morador_{{ i }}_data_nascimento"
+                                           placeholder="DD/MM/AAAA" autocomplete="bday"
+                                           value="{% if pessoa and pessoa.data_nascimento %}{{ pessoa.data_nascimento.isoformat() }}{% endif %}">
+                                </div>
+                                <div class="col-12">
+                                    <div class="lgpd-box interfone-consentimento">
+                                        <label class="form-label d-block mb-1 fw-semibold">
+                                            Consentimento LGPD — Uso do telefone no interfone
+                                        </label>
+                                        <p class="small text-muted mb-2">
+                                            Informe se autoriza o uso deste número no interfone da unidade.
+                                        </p>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio"
+                                                   name="morador_{{ i }}_lgpd_interfone"
+                                                   id="lgpd_{{ i }}_true" value="true" required
+                                                   {% if pessoa and pessoa.autoriza_interfone %}checked{% endif %}>
+                                            <label class="form-check-label" for="lgpd_{{ i }}_true">
+                                                Sim, autorizo o uso deste número para o interfone.
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio"
+                                                   name="morador_{{ i }}_lgpd_interfone"
+                                                   id="lgpd_{{ i }}_false" value="false" required
+                                                   {% if pessoa and not pessoa.autoriza_interfone %}checked{% endif %}>
+                                            <label class="form-check-label" for="lgpd_{{ i }}_false">
+                                                Não autorizo.
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox"
+                                               name="morador_{{ i }}_is_responsavel" id="resp_morador_{{ i }}"
+                                               {% if pessoa and pessoa.is_responsavel %}checked{% endif %}>
+                                        <label class="form-check-label" for="resp_morador_{{ i }}">
+                                            Responsável pela unidade
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="add-morador">
+                    + Adicionar morador
+                </button>
+                </div>
+
+                <div class="tab-pane fade {% if aba_ativa == 'veiculos' %}show active{% endif %}"
+                     id="aba-veiculos" role="tabpanel"
+                     aria-labelledby="aba-veiculos-tab">
+                    <h2 class="h5 mb-3">Veículos</h2>
                 <div class="mb-3">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="possui-veiculo"
@@ -272,12 +1022,12 @@
                         </label>
                     </div>
                 </div>
-                <div id="veiculos-section" {% if not veiculos %}style="display: none;"{% endif %}>
+                    <div id="veiculos-section" {% if not veiculos %}class="d-none"{% endif %}>
                     <div id="veiculos-container">
                         {% if veiculos %}
                             {% for veiculo in veiculos %}
-                            <div class="border rounded p-3 mb-3 veiculo-item">
                                 {% set i = loop.index0 %}
+                                <div class="border rounded p-3 mb-3 veiculo-item">
                                 <div class="row g-3">
                                     <div class="col-12 col-md-4">
                                         <label class="form-label">Placa</label>
@@ -320,276 +1070,204 @@
                         + Adicionar veículo
                     </button>
                 </div>
-            </section>
+                </div>
 
-            <section class="cadastro-section mb-4">
-                <p class="cadastro-section-title">Documentação</p>
-                <h2 class="h5 mb-2">Comprovante de Residência / Propriedade</h2>
+                <div class="tab-pane fade {% if aba_ativa == 'seguranca' %}show active{% endif %}"
+                     id="aba-senha" role="tabpanel" aria-labelledby="aba-senha-tab">
+                    <h2 class="h5 mb-1">Senha da Unidade</h2>
                 <p class="text-muted small mb-3">
-                    Envie RGI, Contrato de Compra e Venda ou documento equivalente
-                    (PDF, PNG, JPG ou JPEG).
-                </p>
-                <div class="mb-3">
-                    <label class="form-label" for="documento">Comprovante de Residência/Propriedade</label>
-                    <input type="file" class="form-control" id="documento" name="documento"
-                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label" for="documento2">Anexo Adicional (Opcional)</label>
-                    <input type="file" class="form-control" id="documento2" name="documento2"
-                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
-                </div>
-                {% if modo == 'atualizacao' and unidade and (unidade.documento_url or unidade.documento2_url or unidade.documento_status) %}
-                <div class="small mb-0">
-                    {% if unidade.documento_status %}
-                    <p class="mb-1">
-                        Status da documentação:
-                        {% if unidade.documento_status == 'Aprovado' or unidade.documento_status == 'Entregue' %}
-                        <span class="badge text-bg-success">{{ unidade.documento_status }}</span>
-                        {% elif unidade.documento_status == 'Rejeitado' %}
-                        <span class="badge text-bg-danger">{{ unidade.documento_status }}</span>
-                        {% elif unidade.documento_status == 'Pendente' %}
-                        <span class="badge text-bg-warning">{{ unidade.documento_status }}</span>
-                        {% else %}
-                        <span class="badge text-bg-secondary">{{ unidade.documento_status }}</span>
-                        {% endif %}
-                    </p>
-                    {% endif %}
-                    {% if unidade.documento_url %}
-                    <p class="mb-1">
-                        Documento atual:
-                        <a href="{{ unidade.documento_url }}" target="_blank" rel="noopener noreferrer">
-                            visualizar no Drive
-                        </a>
-                    </p>
-                    {% endif %}
-                    {% if unidade.documento2_url %}
-                    <p class="mb-0">
-                        Anexo adicional:
-                        <a href="{{ unidade.documento2_url }}" target="_blank" rel="noopener noreferrer">
-                            visualizar no Drive
-                        </a>
-                    </p>
-                    {% endif %}
-                </div>
-                {% endif %}
-            </section>
-
-            <section id="contrato-locacao-section" class="cadastro-section mb-4"
-                     {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
-                <h2 class="h5 mb-2">Contrato de Locação</h2>
-                <p class="text-muted small mb-3">
-                    Obrigatório quando o responsável é locatário (PDF, PNG, JPG ou JPEG).
-                </p>
-                <div class="mb-3">
-                    <label class="form-label" for="contrato_locacao">Contrato de Locação</label>
-                    <input type="file" class="form-control" id="contrato_locacao" name="contrato_locacao"
-                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
-                </div>
-                {% if modo == 'atualizacao' and unidade and unidade.contrato_locacao_url %}
-                <p class="small mb-0">
-                    Contrato atual:
-                    <a href="{{ unidade.contrato_locacao_url }}" target="_blank" rel="noopener noreferrer">
-                        visualizar no Drive
-                    </a>
-                    {% if unidade.contrato_locacao_status %}
-                    <span class="badge text-bg-secondary ms-1">{{ unidade.contrato_locacao_status }}</span>
-                    {% endif %}
-                </p>
-                {% endif %}
-            </section>
-
-            <section id="proprietario-section" class="cadastro-section mb-4"
-                     {% if not exibe_contrato_locacao %}style="display: none;"{% endif %}>
-                <h2 class="h5 mb-1">Dados do Proprietário (Dono do Imóvel)</h2>
-                <p class="text-muted small mb-3">
-                    Insira os dados básicos do dono do imóvel. A administração complementará o restante dos dados.
+                        Deixe em branco para manter a senha atual. Preencha os dois campos apenas se desejar alterá-la.
                 </p>
                 <div class="row g-3">
-                    <div class="col-12">
-                        <label class="form-label">Nome do Proprietário</label>
-                        <input type="text" class="form-control" name="proprietario_nome"
-                               value="{{ unidade.proprietario_nome if unidade and unidade.proprietario_nome else '' }}">
+                    <div class="col-12 col-md-6">
+                            <label class="form-label" for="senha">Senha</label>
+                            <input type="password" class="form-control" id="senha" name="senha"
+                                   autocomplete="new-password">
                     </div>
                     <div class="col-12 col-md-6">
-                        <label class="form-label">Telefone do Proprietário (se souber)</label>
-                        <input type="text" class="form-control" name="proprietario_telefone"
-                               value="{{ unidade.proprietario_telefone if unidade and unidade.proprietario_telefone else '' }}">
-                    </div>
-                    <div class="col-12 col-md-6">
-                        <label class="form-label">E-mail do Proprietário (se souber)</label>
-                        <input type="email" class="form-control" name="proprietario_email"
-                               value="{{ unidade.proprietario_email if unidade and unidade.proprietario_email else '' }}">
+                            <label class="form-label" for="confirmar_senha">Confirmar senha</label>
+                            <input type="password" class="form-control" id="confirmar_senha" name="confirmar_senha"
+                                   autocomplete="new-password">
                     </div>
                 </div>
-            </section>
+                </div>
+            </div>
 
-            <div class="d-grid gap-2 pt-2">
-                <button type="submit" class="btn btn-primary btn-lg">
-                    {% if modo == 'cadastro' %}Enviar cadastro{% else %}Salvar alterações{% endif %}
-                </button>
-                {% if modo == 'cadastro' and slug %}
-                <a href="{{ url_for('tenant_login', slug=slug) }}" class="btn btn-link text-muted text-decoration-none">
-                    Voltar ao início
-                </a>
-                {% endif %}
+            <div class="d-grid gap-2 pt-4">
+                <button type="submit" class="btn btn-primary btn-lg">Salvar alterações</button>
             </div>
         </form>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+{% if modo != 'atualizacao' %}
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
 <script>
-    const vinculosOptions = {{ vinculos | tojson }};
-    const vinculoLocatario = "Locatário";
-    let pessoaIndex = document.querySelectorAll(".pessoa-item").length;
-    let veiculoIndex = document.querySelectorAll(".veiculo-item").length;
+    const opcoesNascimento = {
+        locale: "pt",
+        dateFormat: "Y-m-d",
+        altInput: true,
+        altFormat: "d/m/Y",
+        maxDate: "today",
+        minDate: new Date(new Date().getFullYear() - 120, 0, 1),
+        disableMobile: true,
+        allowInput: true,
+    };
+    let etapaAtual = 1;
+    const formCadastro = document.getElementById("form-cadastro-inicial");
+    const cardCadastro = document.querySelector(".cadastro-card");
 
-    // === Toggle de Veículos ===
-    const possuiVeiculoCheck = document.getElementById("possui-veiculo");
-    const veiculosSection = document.getElementById("veiculos-section");
-
-    function toggleVeiculos() {
-        const visivel = possuiVeiculoCheck.checked;
-        veiculosSection.style.display = visivel ? "" : "none";
-
-        veiculosSection.querySelectorAll(".veiculo-field").forEach((input) => {
-            if (visivel) {
-                input.setAttribute("required", "");
-            } else {
-                input.removeAttribute("required");
-                input.value = "";
+    function ativarNascimento(escopo) {
+        escopo.querySelectorAll("input.datepicker").forEach((campo) => {
+            if (campo._flatpickr) {
+                return;
             }
+            flatpickr(campo, opcoesNascimento);
         });
-    }
-
-    possuiVeiculoCheck.addEventListener("change", toggleVeiculos);
-    toggleVeiculos();
-
-    // === Toggle de Contrato de Locação ===
-    const contratoSection = document.getElementById("contrato-locacao-section");
-    const proprietarioSection = document.getElementById("proprietario-section");
-    const proprietarioInputs = proprietarioSection
-        ? proprietarioSection.querySelectorAll("input")
-        : [];
-
-    function deveExibirContratoLocacao() {
-        const pessoas = document.querySelectorAll(".pessoa-item");
-        return Array.from(pessoas).some((pessoa) => {
-            const vinculo = pessoa.querySelector('select[name$="_vinculo"]');
-            const responsavel = pessoa.querySelector('input[name$="_is_responsavel"]');
-            return vinculo && responsavel && responsavel.checked && vinculo.value === vinculoLocatario;
-        });
-    }
-
-    function toggleContratoLocacao() {
-        const visivel = deveExibirContratoLocacao();
-        contratoSection.style.display = visivel ? "" : "none";
-        if (proprietarioSection) {
-            proprietarioSection.style.display = visivel ? "" : "none";
-        }
-        const inputContrato = document.getElementById("contrato_locacao");
-        if (inputContrato) {
-            if (!visivel) {
-                inputContrato.value = "";
-            }
-        }
-        if (!visivel) {
-            proprietarioInputs.forEach((input) => {
-                input.value = "";
-            });
-        }
     }
 
     function calcularIdade(dataStr) {
         if (!dataStr) {
             return null;
         }
-
-        const nascimento = new Date(`${dataStr}T00:00:00`);
+        const nascimento = new Date(dataStr + "T00:00:00");
         if (Number.isNaN(nascimento.getTime())) {
             return null;
         }
-
         const hoje = new Date();
         let idade = hoje.getFullYear() - nascimento.getFullYear();
         const aindaNaoFezAniversario =
             hoje.getMonth() < nascimento.getMonth() ||
             (hoje.getMonth() === nascimento.getMonth() && hoje.getDate() < nascimento.getDate());
-
         if (aindaNaoFezAniversario) {
             idade -= 1;
         }
         return idade;
     }
 
-    function configurarCampoDataNascimento(campoData) {
-        if (!campoData) {
-            return;
-        }
-
-        // Mantem o seletor nativo HTML5 (iOS/Android).
-        campoData.type = "date";
-        campoData.setAttribute("autocomplete", "bday");
-        campoData.setAttribute("data-no-datepicker", "true");
-
-        // Faixa util para selecao rapida de ano no seletor nativo.
-        const hoje = new Date();
-        const maxData = hoje.toISOString().split("T")[0];
-        const minData = new Date(
-            hoje.getFullYear() - 120,
-            hoje.getMonth(),
-            hoje.getDate(),
-        )
-            .toISOString()
-            .split("T")[0];
-        campoData.max = maxData;
-        campoData.min = minData;
+    function cpfDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
     }
 
-    function atualizarObrigatoriedadePessoa(elementoPessoa) {
-        const campoData = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
-        const campoCpf = elementoPessoa.querySelector('input[name$="_cpf"]');
-        const campoTelefone = elementoPessoa.querySelector('input[name$="_telefone"]');
-        const campoEmail = elementoPessoa.querySelector('input[name$="_email"]');
-        const campoResponsavel = elementoPessoa.querySelector('input[name$="_is_responsavel"]');
-        const radiosInterfone = elementoPessoa.querySelectorAll('input[type="radio"][name$="_autoriza_interfone"]');
-        const interfoneContainer = elementoPessoa.querySelector(".interfone-consentimento");
-        const cpfHint = elementoPessoa.querySelector(".cpf-minor-hint");
-        const telefoneHint = elementoPessoa.querySelector(".telefone-minor-hint");
-        const emailHint = elementoPessoa.querySelector(".email-minor-hint");
+    function valorCampo(card, sufixo) {
+        const campo = card.querySelector('[name$="_' + sufixo + '"]');
+        return campo ? campo.value.trim() : "";
+    }
 
-        const idade = campoData ? calcularIdade(campoData.value) : null;
-        const isMenor = idade !== null && idade < 18;
-        const isResponsavel = Boolean(campoResponsavel && campoResponsavel.checked);
+    function reindexar(seletor, prefixo) {
+        const cards = document.querySelectorAll(seletor);
+        cards.forEach((card, indice) => {
+            card.querySelectorAll("[name]").forEach((campo) => {
+                campo.name = campo.name.replace(
+                    new RegExp("^" + prefixo + "_\\d+_"),
+                    prefixo + "_" + indice + "_"
+                );
+            });
+            card.querySelectorAll("[id]").forEach((campo) => {
+                const novo = campo.id.replace(/_(\d+)(?=_|$)/, "_" + indice);
+                const label = card.querySelector('label[for="' + campo.id + '"]');
+                campo.id = novo;
+                if (label) {
+                    label.htmlFor = novo;
+                }
+            });
+            const botao = card.querySelector("[data-remover]");
+            if (botao) {
+                botao.classList.toggle("d-none", cards.length < 2);
+            }
+        });
+    }
 
-        if (campoCpf) {
-            if (isMenor) {
-                campoCpf.removeAttribute("required");
+    function primeiroInvalido(escopo) {
+        return Array.from(escopo.querySelectorAll("input, select, textarea")).find((campo) => {
+            if (campo.disabled || campo.type === "hidden") {
+                return false;
+            }
+            return !campo.checkValidity();
+        });
+    }
+
+    function limparAvisos() {
+        formCadastro.querySelectorAll(".wizard-aviso").forEach((aviso) => {
+            aviso.textContent = "";
+            aviso.classList.add("d-none");
+        });
+    }
+
+    function mostrarAviso(etapa, texto) {
+        const aviso = formCadastro.querySelector(
+            '.wizard-etapa[data-etapa="' + etapa + '"] .wizard-aviso'
+        );
+        if (!aviso) {
+            return;
+        }
+        aviso.textContent = texto;
+        aviso.classList.remove("d-none");
+    }
+
+    function pintarStepper(numero) {
+        document.querySelectorAll(".cadastro-stepper-item").forEach((item) => {
+            const etapa = Number(item.dataset.etapa);
+            item.classList.toggle("is-atual", etapa === numero);
+            item.classList.toggle("is-concluida", etapa < numero);
+            if (etapa === numero) {
+                item.setAttribute("aria-current", "step");
             } else {
-                campoCpf.setAttribute("required", "");
+                item.removeAttribute("aria-current");
+            }
+            const bolha = item.querySelector(".cadastro-stepper-bolha");
+            bolha.textContent = etapa < numero ? "\u2713" : String(etapa);
+        });
+        document.querySelectorAll(".wizard-etapa").forEach((painel) => {
+            painel.classList.toggle("d-none", Number(painel.dataset.etapa) !== numero);
+        });
+        etapaAtual = numero;
+        atualizarContrato();
+    }
+
+    function irPara(numero) {
+        pintarStepper(numero);
+        cardCadastro.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function atualizarObrigatoriedadeMorador(card) {
+        const idade = calcularIdade(valorCampo(card, "data_nascimento"));
+        const menor = idade !== null && idade < 18;
+        const responsavel = card.querySelector('input[name$="_is_responsavel"]');
+        const ehResponsavel = Boolean(responsavel && responsavel.checked);
+        const cpf = card.querySelector('input[name$="_cpf"]');
+        const telefone = card.querySelector('input[name$="_telefone"]');
+        const email = card.querySelector('input[name$="_email"]');
+        const radios = card.querySelectorAll('input[name$="_lgpd_interfone"]');
+        const caixa = card.querySelector(".interfone-consentimento");
+
+        if (cpf) {
+            if (menor) {
+                cpf.removeAttribute("required");
+            } else {
+                cpf.setAttribute("required", "");
             }
         }
-
-        if (campoTelefone) {
-            if (isMenor || !isResponsavel) {
-                campoTelefone.removeAttribute("required");
+        if (telefone) {
+            if (menor || !ehResponsavel) {
+                telefone.removeAttribute("required");
             } else {
-                campoTelefone.setAttribute("required", "");
+                telefone.setAttribute("required", "");
             }
         }
-
-        if (campoEmail) {
-            if (isMenor || !isResponsavel) {
-                campoEmail.removeAttribute("required");
+        if (email) {
+            if (menor || !ehResponsavel) {
+                email.removeAttribute("required");
             } else {
-                campoEmail.setAttribute("required", "");
+                email.setAttribute("required", "");
             }
         }
-
-        radiosInterfone.forEach((radio) => {
-            if (isMenor) {
+        radios.forEach((radio) => {
+            if (menor) {
                 radio.removeAttribute("required");
                 radio.checked = false;
                 radio.disabled = true;
@@ -598,151 +1276,1724 @@
                 radio.setAttribute("required", "");
             }
         });
-        if (interfoneContainer) {
-            interfoneContainer.style.display = isMenor ? "none" : "";
+        if (caixa) {
+            caixa.classList.toggle("d-none", menor);
         }
+        card.querySelectorAll(".cpf-minor-hint, .telefone-minor-hint, .email-minor-hint").forEach((hint) => {
+            hint.classList.toggle("d-none", !menor);
+        });
+    }
 
-        [cpfHint, telefoneHint, emailHint].forEach((hint) => {
-            if (!hint) {
+    function cpfsProprietarios() {
+        const conjunto = new Set();
+        document.querySelectorAll(".proprietario-item").forEach((card) => {
+            const digitos = cpfDigitos(valorCampo(card, "cpf"));
+            if (digitos) {
+                conjunto.add(digitos);
+            }
+        });
+        return conjunto;
+    }
+
+    function sincronizarVinculoMoradores() {
+        const donos = cpfsProprietarios();
+        document.querySelectorAll(".morador-item").forEach((card) => {
+            const select = card.querySelector('select[name$="_vinculo"]');
+            if (!select) {
                 return;
             }
-            if (isMenor) {
-                hint.classList.remove("d-none");
+            const cpf = cpfDigitos(valorCampo(card, "cpf"));
+            const ehDono = Boolean(cpf) && donos.has(cpf);
+            const opcao = Array.from(select.options).find((item) => item.value === "Proprietário");
+            if (opcao) {
+                opcao.disabled = !ehDono;
+            }
+            if (ehDono) {
+                select.value = "Proprietário";
+            } else if (select.value === "Proprietário" || !select.value) {
+                select.value = "Familiar/Morador";
+            }
+            atualizarResumo(card);
+        });
+    }
+
+    function atualizarContrato() {
+        const visivel = Array.from(document.querySelectorAll(".morador-item")).some((card) => {
+            const resp = card.querySelector('input[name$="_is_responsavel"]');
+            const vinculo = card.querySelector('select[name$="_vinculo"]');
+            return resp && resp.checked && vinculo && vinculo.value === "Inquilino";
+        });
+        const secao = document.getElementById("contrato-locacao-section");
+        if (secao) {
+            secao.classList.toggle("d-none", !visivel);
+        }
+        if (!visivel) {
+            const arquivo = document.getElementById("contrato_locacao");
+            if (arquivo) {
+                arquivo.value = "";
+            }
+        }
+    }
+
+    function toggleVeiculos() {
+        const marcado = document.getElementById("possui-veiculo").checked;
+        const secao = document.getElementById("veiculos-section");
+        secao.classList.toggle("d-none", !marcado);
+        secao.querySelectorAll(".veiculo-field").forEach((input) => {
+            if (marcado) {
+                input.setAttribute("required", "");
             } else {
-                hint.classList.add("d-none");
+                input.removeAttribute("required");
+                input.value = "";
             }
         });
     }
 
-    function registrarEventosPessoa(elementoPessoa) {
-        const vinculo = elementoPessoa.querySelector('select[name$="_vinculo"]');
-        const responsavel = elementoPessoa.querySelector('input[name$="_is_responsavel"]');
-        const dataNascimento = elementoPessoa.querySelector('input[name$="_data_nascimento"]');
-        configurarCampoDataNascimento(dataNascimento);
-        if (vinculo) {
-            vinculo.addEventListener("change", toggleContratoLocacao);
+    function proprietarioPreenchido() {
+        return Array.from(document.querySelectorAll(".proprietario-item")).some((card) => {
+            return valorCampo(card, "nome") && cpfDigitos(valorCampo(card, "cpf"));
+        });
+    }
+
+    function moradorPreenchido() {
+        return Array.from(document.querySelectorAll(".morador-item")).some((card) => {
+            return Boolean(valorCampo(card, "nome"));
+        });
+    }
+
+    function validarSenha() {
+        const senha = document.getElementById("senha");
+        const confirmar = document.getElementById("confirmar_senha");
+        senha.setCustomValidity("");
+        confirmar.setCustomValidity("");
+        if (senha.value.length < 6) {
+            senha.setCustomValidity("A senha deve ter ao menos 6 caracteres.");
+            return senha;
         }
-        if (responsavel) {
-            responsavel.addEventListener("change", () => {
-                toggleContratoLocacao();
-                atualizarObrigatoriedadePessoa(elementoPessoa);
+        if (senha.value !== confirmar.value) {
+            confirmar.setCustomValidity("As senhas não conferem.");
+            return confirmar;
+        }
+        return null;
+    }
+
+    function validarEtapa(numero) {
+        limparAvisos();
+        const painel = formCadastro.querySelector('.wizard-etapa[data-etapa="' + numero + '"]');
+        if (numero === 1) {
+            const senhaInvalida = validarSenha();
+            painel.querySelectorAll('input[name$="_nome"]').forEach((campo) => {
+                campo.setCustomValidity("");
             });
+            if (!proprietarioPreenchido()) {
+                const nome = painel.querySelector('input[name$="_nome"]');
+                if (nome && !nome.value.trim()) {
+                    nome.setCustomValidity("Informe ao menos um proprietário.");
+                }
+            }
+            const invalido = senhaInvalida || primeiroInvalido(painel);
+            if (invalido) {
+                revelarInvalido(invalido);
+                return false;
+            }
+            if (!proprietarioPreenchido()) {
+                mostrarAviso(1, "Informe ao menos um proprietário, com nome e CPF.");
+                return false;
+            }
+            return true;
         }
-        if (dataNascimento) {
-            dataNascimento.addEventListener("change", () => atualizarObrigatoriedadePessoa(elementoPessoa));
-            dataNascimento.addEventListener("input", () => atualizarObrigatoriedadePessoa(elementoPessoa));
+        if (numero === 2) {
+            document.querySelectorAll(".morador-item").forEach(atualizarObrigatoriedadeMorador);
+            sincronizarVinculoMoradores();
+            painel.querySelectorAll('input[name$="_nome"]').forEach((campo) => {
+                campo.setCustomValidity("");
+            });
+            if (!moradorPreenchido()) {
+                const nome = painel.querySelector('input[name$="_nome"]');
+                if (nome && !nome.value.trim()) {
+                    nome.setCustomValidity("Informe ao menos um morador.");
+                }
+            }
+            const invalido = primeiroInvalido(painel);
+            if (invalido) {
+                revelarInvalido(invalido);
+                return false;
+            }
+            if (!moradorPreenchido()) {
+                mostrarAviso(2, "Informe ao menos um morador.");
+                const primeiro = document.querySelector(".morador-item");
+                if (primeiro) {
+                    definirCardAberto(primeiro, true, true);
+                }
+                return false;
+            }
+            const semConsentimento = Array.from(document.querySelectorAll(".morador-item")).find((card) => {
+                const radios = card.querySelectorAll('input[name$="_lgpd_interfone"]');
+                if (!radios.length || radios[0].disabled) {
+                    return false;
+                }
+                return !Array.from(radios).some((radio) => radio.checked);
+            });
+            if (semConsentimento) {
+                mostrarAviso(2, "Marque o consentimento LGPD de cada morador.");
+                definirCardAberto(semConsentimento, true, false);
+                return false;
+            }
+            if (!document.querySelector('.morador-item input[name$="_is_responsavel"]:checked')) {
+                mostrarAviso(2, "Marque ao menos um morador como responsável pela unidade.");
+                const primeiro = document.querySelector(".morador-item");
+                if (primeiro) {
+                    definirCardAberto(primeiro, true, false);
+                }
+                return false;
+            }
+            return true;
+        }
+        if (numero === 3) {
+            if (!document.getElementById("possui-veiculo").checked) {
+                return true;
+            }
+            const invalido = primeiroInvalido(document.getElementById("veiculos-section"));
+            if (invalido) {
+                revelarInvalido(invalido);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function avancar() {
+        if (!validarEtapa(etapaAtual)) {
+            return;
+        }
+        if (etapaAtual < 4) {
+            irPara(etapaAtual + 1);
         }
     }
 
-    document.querySelectorAll(".pessoa-item").forEach((item) => {
-        registrarEventosPessoa(item);
-        atualizarObrigatoriedadePessoa(item);
-    });
-    toggleContratoLocacao();
+    function voltar() {
+        if (etapaAtual > 1) {
+            irPara(etapaAtual - 1);
+        }
+    }
 
-    function htmlCamposPessoa(index) {
-        const vinculoOptions = vinculosOptions.map((v) => `<option value="${v}">${v}</option>`).join("");
+    function esc(valor) {
+        return String(valor || "")
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/</g, "&lt;");
+    }
+
+    function cpfResumo(valor) {
+        const digitos = cpfDigitos(valor);
+        if (!digitos) {
+            return "CPF não informado";
+        }
+        if (digitos.length === 11) {
+            return "CPF " + digitos.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+        }
+        return "CPF " + digitos.slice(0, 3) + "...";
+    }
+
+    function atualizarResumo(card) {
+        if (!card) {
+            return;
+        }
+        const nomeEl = card.querySelector(".card-resumo-nome");
+        const cpfEl = card.querySelector(".card-resumo-cpf");
+        if (nomeEl) {
+            const nome = valorCampo(card, "nome");
+            nomeEl.textContent = nome || (card.classList.contains("morador-item") ? "Novo Morador" : "Novo Proprietário");
+        }
+        if (cpfEl) {
+            cpfEl.textContent = cpfResumo(valorCampo(card, "cpf"));
+        }
+        const badges = card.querySelector(".card-resumo-badges");
+        if (!badges || !card.classList.contains("morador-item")) {
+            return;
+        }
+        const pedacos = [];
+        const vinculo = valorCampo(card, "vinculo");
+        const parentesco = valorCampo(card, "parentesco");
+        if (vinculo) {
+            pedacos.push('<span class="badge text-bg-light border">' + esc(vinculo) + "</span>");
+        }
+        if (parentesco && parentesco !== vinculo) {
+            pedacos.push('<span class="badge text-bg-light border">' + esc(parentesco) + "</span>");
+        }
+        const responsavel = card.querySelector('input[name$="_is_responsavel"]');
+        if (responsavel && responsavel.checked) {
+            pedacos.push('<span class="badge text-bg-primary">Responsável</span>');
+        }
+        const interfone = card.querySelector('input[type="radio"][name$="_lgpd_interfone"][value="true"]');
+        if (interfone && interfone.checked) {
+            pedacos.push('<span class="badge bg-success-subtle text-success border border-success-subtle">Interfone Ativo</span>');
+        }
+        badges.innerHTML = pedacos.join("");
+    }
+
+    function definirCardAberto(card, aberto, focar) {
+        const corpo = card.querySelector(".card-corpo");
+        const botao = card.querySelector(".alternar-card");
+        if (corpo) {
+            corpo.classList.toggle("d-none", !aberto);
+        }
+        if (botao) {
+            botao.textContent = aberto ? "Recolher" : "Editar";
+        }
+        atualizarResumo(card);
+        if (aberto && focar) {
+            const campo = card.querySelector('.card-corpo input[name$="_nome"]');
+            if (campo) {
+                campo.focus();
+            }
+        }
+    }
+
+    function revelarInvalido(campo) {
+        const card = campo.closest(".proprietario-item, .morador-item");
+        if (card) {
+            definirCardAberto(card, true, false);
+        }
+        campo.focus();
+        campo.reportValidity();
+    }
+
+    function cardValidoParaRecolher(card) {
+        if (!valorCampo(card, "nome")) {
+            return false;
+        }
+        if (card.classList.contains("proprietario-item") && !cpfDigitos(valorCampo(card, "cpf"))) {
+            return false;
+        }
+        return Array.from(card.querySelectorAll("input, select, textarea")).every((campo) => {
+            if (campo.disabled || campo.type === "hidden") {
+                return true;
+            }
+            return campo.checkValidity();
+        });
+    }
+
+    function recolherCardsValidos(seletor, exceto) {
+        document.querySelectorAll(seletor).forEach((card) => {
+            if (card !== exceto && cardValidoParaRecolher(card)) {
+                definirCardAberto(card, false, false);
+            }
+        });
+    }
+
+    function definirCampo(card, sufixo, valor) {
+        const campo = card.querySelector('[name$="_' + sufixo + '"]');
+        if (!campo || campo.type === "radio" || campo.type === "checkbox") {
+            return;
+        }
+        if (campo._flatpickr) {
+            if (valor) {
+                campo._flatpickr.setDate(valor, true);
+            } else {
+                campo._flatpickr.clear();
+            }
+            return;
+        }
+        campo.value = valor || "";
+    }
+
+    function dadosDoCard(card) {
+        return {
+            nome: valorCampo(card, "nome"),
+            cpf: valorCampo(card, "cpf"),
+            telefone: valorCampo(card, "telefone"),
+            email: valorCampo(card, "email"),
+            data_nascimento: valorCampo(card, "data_nascimento"),
+        };
+    }
+
+    function htmlCabecalhoCard(titulo, classeRemover) {
         return `
+            <div class="card-header border-bottom-0 pb-2">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="min-w-0">
+                        <div class="d-flex flex-wrap align-items-center gap-1">
+                            <span class="fw-semibold text-truncate card-resumo-nome">${esc(titulo)}</span>
+                            <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                        </div>
+                        <div class="small text-muted card-resumo-cpf">CPF não informado</div>
+                    </div>
+                    <div class="d-flex flex-shrink-0 align-items-center gap-1">
+                        <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">Recolher</button>
+                        <button type="button" class="btn btn-sm btn-link text-danger text-decoration-none px-2 ${classeRemover}" data-remover aria-label="Remover">
+                            <i class="bi bi-trash"></i><span class="d-none d-sm-inline ms-1">Remover</span>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    function htmlProprietario(index) {
+        return `
+            <div class="card shadow-sm mb-3 pessoa-card proprietario-item">
+                ${htmlCabecalhoCard("Novo Proprietário", "remover-proprietario")}
+                <div class="card-corpo card-body pt-2">
             <div class="row g-3">
                 <div class="col-12">
                     <label class="form-label">Nome completo</label>
-                    <input class="form-control" name="pessoa_${index}_nome" required>
+                        <input class="form-control" name="proprietario_${index}_nome" required>
                 </div>
                 <div class="col-12 col-md-6">
-                    <label class="form-label">
-                        CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                    </label>
-                    <input class="form-control" name="pessoa_${index}_cpf" required>
+                        <label class="form-label">CPF</label>
+                        <input class="form-control" name="proprietario_${index}_cpf" required>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Telefone</label>
+                        <input class="form-control" name="proprietario_${index}_telefone">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">E-mail</label>
+                        <input type="email" class="form-control" name="proprietario_${index}_email">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Data de nascimento</label>
+                        <input type="text" class="form-control datepicker" name="proprietario_${index}_data_nascimento" placeholder="DD/MM/AAAA" autocomplete="bday">
+                    </div>
+                </div>
+                </div>
+            </div>`;
+    }
+
+    function htmlMorador(index) {
+        return `
+            <div class="card shadow-sm mb-3 pessoa-card morador-item">
+                ${htmlCabecalhoCard("Novo Morador", "remover-morador")}
+                <div class="card-corpo card-body pt-2">
+                <div class="row g-3">
+                    <div class="col-12 position-relative">
+                        <label class="form-label">Nome completo</label>
+                        <input class="form-control js-autocomplete" name="morador_${index}_nome" autocomplete="off" required>
+                        <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                    </div>
+                    <div class="col-12 col-md-6 position-relative">
+                        <label class="form-label">CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                        <input class="form-control js-autocomplete" name="morador_${index}_cpf" autocomplete="off" required>
+                        <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
                 </div>
                 <div class="col-12 col-md-6">
                     <label class="form-label">Vínculo</label>
-                    <select class="form-select" name="pessoa_${index}_vinculo" required>${vinculoOptions}</select>
+                        <select class="form-select" name="morador_${index}_vinculo" required>
+                            <option value="Proprietário" disabled>Proprietário</option>
+                            <option value="Inquilino">Inquilino</option>
+                            <option value="Familiar/Morador" selected>Familiar/Morador</option>
+                        </select>
                 </div>
                 <div class="col-12 col-md-6">
-                    <label class="form-label">
-                        Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                    </label>
-                    <input class="form-control" name="pessoa_${index}_telefone">
+                        <label class="form-label">Parentesco</label>
+                        <input class="form-control" name="morador_${index}_parentesco">
                 </div>
                 <div class="col-12 col-md-6">
-                    <label class="form-label">
-                        E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small>
-                    </label>
-                    <input type="email" class="form-control" name="pessoa_${index}_email">
+                        <label class="form-label">Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                        <input class="form-control" name="morador_${index}_telefone">
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                        <input type="email" class="form-control" name="morador_${index}_email">
                 </div>
                 <div class="col-12 col-md-6">
                     <label class="form-label">Data de nascimento</label>
-                    <input type="date" class="form-control campo-data-nascimento"
-                           autocomplete="bday" data-no-datepicker="true"
-                           name="pessoa_${index}_data_nascimento">
-                    <small class="form-text text-muted">Dica: No celular, toque no ano no topo do calendário para seleção rápida.</small>
+                        <input type="text" class="form-control datepicker" name="morador_${index}_data_nascimento" placeholder="DD/MM/AAAA" autocomplete="bday">
+                    </div>
+                    <div class="col-12">
+                        <div class="lgpd-box interfone-consentimento">
+                            <label class="form-label d-block mb-1 fw-semibold">Consentimento LGPD — Uso do telefone no interfone</label>
+                            <p class="small text-muted mb-2">Informe se autoriza o uso deste número no interfone da unidade.</p>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="morador_${index}_lgpd_interfone" id="lgpd_${index}_true" value="true" required>
+                                <label class="form-check-label" for="lgpd_${index}_true">Sim, autorizo o uso deste número para o interfone.</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="morador_${index}_lgpd_interfone" id="lgpd_${index}_false" value="false" required>
+                                <label class="form-check-label" for="lgpd_${index}_false">Não autorizo.</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="morador_${index}_is_responsavel" id="resp_morador_${index}">
+                            <label class="form-check-label" for="resp_morador_${index}">Responsável pela unidade</label>
+                        </div>
+                    </div>
+                </div>
+                </div>
+            </div>`;
+    }
+
+    function htmlVeiculo(index) {
+        return `
+            <div class="border rounded p-3 mb-3 veiculo-item">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="h6 mb-0">Veículo</h3>
+                    <button type="button" class="btn btn-sm btn-link text-danger text-decoration-none remover-veiculo" data-remover>Remover</button>
+                </div>
+                <div class="row g-3">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Placa</label>
+                        <input class="form-control veiculo-field" name="veiculo_${index}_placa" required>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Marca</label>
+                        <input class="form-control veiculo-field" name="veiculo_${index}_marca" required>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Cor</label>
+                        <input class="form-control veiculo-field" name="veiculo_${index}_cor" required>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    function acrescentarCard(container, html, seletor, prefixo) {
+        const suporte = document.createElement("div");
+        suporte.innerHTML = html.trim();
+        const card = suporte.firstElementChild;
+        container.appendChild(card);
+        ativarNascimento(card);
+        reindexar(seletor, prefixo);
+        if (card.classList.contains("morador-item")) {
+            atualizarObrigatoriedadeMorador(card);
+            ligarAutocomplete(card);
+            sincronizarVinculoMoradores();
+        }
+        if (card.classList.contains("proprietario-item") || card.classList.contains("morador-item")) {
+            recolherCardsValidos(seletor, card);
+            definirCardAberto(card, true, true);
+            return card;
+        }
+        const foco = card.querySelector("input, select");
+        if (foco) {
+            foco.focus();
+        }
+        return card;
+    }
+
+    document.getElementById("add-proprietario").addEventListener("click", () => {
+        acrescentarCard(
+            document.getElementById("proprietarios-container"),
+            htmlProprietario(document.querySelectorAll(".proprietario-item").length),
+            ".proprietario-item",
+            "proprietario"
+        );
+    });
+
+    document.getElementById("add-morador").addEventListener("click", () => {
+        acrescentarCard(
+            document.getElementById("moradores-container"),
+            htmlMorador(document.querySelectorAll(".morador-item").length),
+            ".morador-item",
+            "morador"
+        );
+    });
+
+    document.getElementById("add-veiculo").addEventListener("click", () => {
+        const marcado = document.getElementById("possui-veiculo").checked;
+        acrescentarCard(
+            document.getElementById("veiculos-container"),
+            htmlVeiculo(document.querySelectorAll(".veiculo-item").length),
+            ".veiculo-item",
+            "veiculo"
+        );
+        if (marcado) {
+            document.getElementById("veiculos-section").querySelectorAll(".veiculo-field").forEach((input) => {
+                input.setAttribute("required", "");
+            });
+        }
+    });
+
+    formCadastro.addEventListener("click", (event) => {
+        const alternar = event.target.closest(".alternar-card");
+        if (alternar) {
+            const cardAlternar = alternar.closest(".proprietario-item, .morador-item");
+            if (cardAlternar) {
+                const fechado = cardAlternar.querySelector(".card-corpo").classList.contains("d-none");
+                definirCardAberto(cardAlternar, fechado, false);
+            }
+            return;
+        }
+        if (event.target.closest(".wizard-proximo")) {
+            avancar();
+            return;
+        }
+        if (event.target.closest(".wizard-voltar")) {
+            voltar();
+            return;
+        }
+        const remover = event.target.closest("[data-remover]");
+        if (!remover) {
+            return;
+        }
+        const card = remover.closest(".proprietario-item, .morador-item, .veiculo-item");
+        if (!card) {
+            return;
+        }
+        const irmaos = card.parentElement.querySelectorAll(
+            card.classList.contains("proprietario-item")
+                ? ".proprietario-item"
+                : card.classList.contains("morador-item")
+                    ? ".morador-item"
+                    : ".veiculo-item"
+        );
+        if (irmaos.length < 2) {
+            return;
+        }
+        if (card.classList.contains("proprietario-item")) {
+            card.remove();
+            reindexar(".proprietario-item", "proprietario");
+            sincronizarVinculoMoradores();
+        } else if (card.classList.contains("morador-item")) {
+            card.remove();
+            reindexar(".morador-item", "morador");
+            sincronizarVinculoMoradores();
+            atualizarContrato();
+        } else {
+            card.remove();
+            reindexar(".veiculo-item", "veiculo");
+            if (document.getElementById("possui-veiculo").checked) {
+                document.getElementById("veiculos-section").querySelectorAll(".veiculo-field").forEach((input) => {
+                    input.setAttribute("required", "");
+                });
+            }
+        }
+    });
+
+    formCadastro.addEventListener("input", (event) => {
+        if (event.target.setCustomValidity) {
+            event.target.setCustomValidity("");
+        }
+        const card = event.target.closest(".proprietario-item, .morador-item");
+        if (card && event.target.name && event.target.name.endsWith("_data_nascimento")) {
+            if (card.classList.contains("morador-item")) {
+                atualizarObrigatoriedadeMorador(card);
+            }
+        }
+        if (event.target.name && event.target.name.endsWith("_cpf")) {
+            sincronizarVinculoMoradores();
+        }
+        if (card) {
+            atualizarResumo(card);
+        }
+    });
+
+    formCadastro.addEventListener("change", (event) => {
+        const card = event.target.closest(".proprietario-item, .morador-item");
+        if (card && card.classList.contains("morador-item")) {
+            atualizarObrigatoriedadeMorador(card);
+        }
+        if (event.target.id === "possui-veiculo") {
+            toggleVeiculos();
+        }
+        sincronizarVinculoMoradores();
+        atualizarContrato();
+        if (card) {
+            atualizarResumo(card);
+        }
+    });
+
+    formCadastro.addEventListener("submit", (event) => {
+        if (etapaAtual < 4) {
+            event.preventDefault();
+            avancar();
+            return;
+        }
+        for (let etapa = 1; etapa <= 3; etapa += 1) {
+            if (!validarEtapa(etapa)) {
+                event.preventDefault();
+                if (etapa !== etapaAtual) {
+                    pintarStepper(etapa);
+                    validarEtapa(etapa);
+                }
+                return;
+            }
+        }
+    });
+
+    document.getElementById("possui-veiculo").addEventListener("change", toggleVeiculos);
+
+    function marcarResponsavelSeVazio(card) {
+        if (document.querySelector('.morador-item input[name$="_is_responsavel"]:checked')) {
+            return;
+        }
+        const caixa = card.querySelector('input[name$="_is_responsavel"]');
+        if (caixa) {
+            caixa.checked = true;
+        }
+    }
+
+    function aplicarProprietarioNoMorador(card, dados, marcarResponsavel) {
+        definirCampo(card, "nome", dados.nome);
+        definirCampo(card, "cpf", dados.cpf);
+        definirCampo(card, "telefone", dados.telefone);
+        definirCampo(card, "email", dados.email);
+        definirCampo(card, "data_nascimento", dados.data_nascimento);
+        const select = card.querySelector('select[name$="_vinculo"]');
+        if (select) {
+            const opcao = Array.from(select.options).find((item) => item.value === "Proprietário");
+            if (opcao) {
+                opcao.disabled = false;
+            }
+            select.value = "Proprietário";
+        }
+        if (marcarResponsavel) {
+            marcarResponsavelSeVazio(card);
+        }
+        atualizarObrigatoriedadeMorador(card);
+        sincronizarVinculoMoradores();
+        atualizarResumo(card);
+        const nome = card.querySelector('input[name$="_nome"]');
+        if (nome) {
+            nome.dataset.suprimirSugestao = "1";
+        }
+        definirCardAberto(card, true, true);
+    }
+
+    function moradorComCpf(cpf) {
+        const digitos = cpfDigitos(cpf);
+        if (!digitos) {
+            return null;
+        }
+        return Array.from(document.querySelectorAll(".morador-item")).find((card) => {
+            return cpfDigitos(valorCampo(card, "cpf")) === digitos;
+        }) || null;
+    }
+
+    function destinoImportacao() {
+        const primeiro = document.querySelector(".morador-item");
+        if (primeiro && !valorCampo(primeiro, "nome") && !cpfDigitos(valorCampo(primeiro, "cpf"))) {
+            return primeiro;
+        }
+        return acrescentarCard(
+            document.getElementById("moradores-container"),
+            htmlMorador(document.querySelectorAll(".morador-item").length),
+            ".morador-item",
+            "morador"
+        );
+    }
+
+    document.getElementById("importar-proprietario").addEventListener("show.bs.dropdown", () => {
+        const menu = document.getElementById("menu-importar-proprietario");
+        menu.innerHTML = "";
+        const donos = Array.from(document.querySelectorAll(".proprietario-item"))
+            .map(dadosDoCard)
+            .filter((pessoa) => pessoa.nome);
+        if (!donos.length) {
+            menu.innerHTML = '<li><span class="dropdown-item-text text-muted">Preencha um proprietário na primeira etapa.</span></li>';
+            return;
+        }
+        donos.forEach((dono) => {
+            const item = document.createElement("li");
+            const botao = document.createElement("button");
+            botao.type = "button";
+            botao.className = "dropdown-item";
+            botao.textContent = dono.nome;
+            botao.addEventListener("click", () => {
+                const existente = moradorComCpf(dono.cpf);
+                const card = existente || destinoImportacao();
+                aplicarProprietarioNoMorador(card, dono, true);
+            });
+            item.appendChild(botao);
+            menu.appendChild(item);
+        });
+    });
+
+    function combinaTermo(item, termo) {
+        const texto = termo.trim().toLowerCase();
+        if (!texto) {
+            return true;
+        }
+        const digitos = cpfDigitos(termo);
+        const nomeOk = (item.nome || "").toLowerCase().includes(texto);
+        const cpfOk = Boolean(digitos) && cpfDigitos(item.cpf).includes(digitos);
+        return nomeOk || cpfOk;
+    }
+
+    function textoSugestao(item) {
+        const digitos = cpfDigitos(item.cpf);
+        const cpfTxt = digitos ? "CPF " + digitos.slice(0, 3) + "..." : "sem CPF";
+        return (item.nome || "Sem nome") + " — " + cpfTxt + " (Proprietário)";
+    }
+
+    function desenharSugestoes(caixa, sugestoes, card) {
+        caixa.innerHTML = "";
+        if (!sugestoes.length) {
+            caixa.classList.add("d-none");
+            return;
+        }
+        sugestoes.forEach((item) => {
+            const botao = document.createElement("button");
+            botao.type = "button";
+            botao.className = "list-group-item list-group-item-action py-2 small";
+            botao.textContent = textoSugestao(item);
+            botao.addEventListener("mousedown", (event) => {
+                event.preventDefault();
+                aplicarProprietarioNoMorador(card, item, false);
+                caixa.classList.add("d-none");
+            });
+            caixa.appendChild(botao);
+        });
+        caixa.classList.remove("d-none");
+    }
+
+    function sugestoesDosProprietarios(termo) {
+        return Array.from(document.querySelectorAll(".proprietario-item"))
+            .map(dadosDoCard)
+            .filter((item) => item.nome || cpfDigitos(item.cpf))
+            .filter((item) => combinaTermo(item, termo));
+    }
+
+    function ligarAutocomplete(escopo) {
+        escopo.querySelectorAll(".morador-item .js-autocomplete").forEach((input) => {
+            if (input.dataset.autocomplete === "1") {
+                return;
+            }
+            input.dataset.autocomplete = "1";
+            const mostrar = () => {
+                if (input.dataset.suprimirSugestao === "1") {
+                    delete input.dataset.suprimirSugestao;
+                    return;
+                }
+                const caixa = input.parentElement.querySelector(".autocomplete-lista");
+                const card = input.closest(".morador-item");
+                if (!caixa || !card) {
+                    return;
+                }
+                desenharSugestoes(caixa, sugestoesDosProprietarios(input.value), card);
+            };
+            input.addEventListener("focus", mostrar);
+            input.addEventListener("input", mostrar);
+            input.addEventListener("blur", () => {
+                const caixa = input.parentElement.querySelector(".autocomplete-lista");
+                setTimeout(() => caixa && caixa.classList.add("d-none"), 180);
+            });
+        });
+    }
+
+    ativarNascimento(document);
+    ligarAutocomplete(document);
+    document.querySelectorAll(".morador-item").forEach(atualizarObrigatoriedadeMorador);
+    document.querySelectorAll(".proprietario-item, .morador-item").forEach(atualizarResumo);
+    sincronizarVinculoMoradores();
+    toggleVeiculos();
+    atualizarContrato();
+    pintarStepper(1);
+</script>
+{% else %}
+<script src="{{ url_for('static', filename='js/foto-facial.js') }}"></script>
+<script>
+    const urlAutocomplete = {{ url_for("api_unidade_pessoas_autocomplete") | tojson }};
+    const opcoesVinculo = ["Proprietário", "Inquilino", "Familiar/Morador"];
+    const opcoesNascimento = {
+        locale: "pt",
+        dateFormat: "Y-m-d",
+        altInput: true,
+        altFormat: "d/m/Y",
+        maxDate: "today",
+        minDate: new Date(new Date().getFullYear() - 120, 0, 1),
+        disableMobile: true,
+        allowInput: true,
+    };
+
+    function esc(valor) {
+        return String(valor || "")
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/</g, "&lt;");
+    }
+
+    function cpfDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+
+    function ativarNascimento(escopo) {
+        escopo.querySelectorAll("input.datepicker").forEach((campo) => {
+            if (campo._flatpickr) {
+                return;
+            }
+            flatpickr(campo, opcoesNascimento);
+        });
+    }
+
+    function reindexar(container, itemSelector, prefixo) {
+        container.querySelectorAll(itemSelector).forEach((item, index) => {
+            item.querySelectorAll("[name]").forEach((campo) => {
+                campo.name = campo.name.replace(
+                    new RegExp("^" + prefixo + "_\\d+_"),
+                    prefixo + "_" + index + "_"
+                );
+            });
+            item.querySelectorAll("[id]").forEach((campo) => {
+                campo.id = campo.id
+                    .replace(/_\d+_/, "_" + index + "_")
+                    .replace(/_\d+$/, "_" + index);
+            });
+            item.querySelectorAll("label[for]").forEach((label) => {
+                label.htmlFor = label.htmlFor
+                    .replace(/_\d+_/, "_" + index + "_")
+                    .replace(/_\d+$/, "_" + index);
+            });
+        });
+    }
+
+    function atualizarBotoesRemover(itemSelector, botaoSelector) {
+        const itens = document.querySelectorAll(itemSelector);
+        itens.forEach((item) => {
+            const botao = item.querySelector(botaoSelector);
+            if (botao) {
+                botao.classList.toggle("d-none", itens.length < 2);
+            }
+        });
+    }
+
+    function campoDoBloco(bloco, sufixo) {
+        return bloco.querySelector('[name$="_' + sufixo + '"]');
+    }
+
+    function lerBloco(bloco) {
+        const valor = (sufixo) => {
+            const campo = campoDoBloco(bloco, sufixo);
+            return campo ? campo.value.trim() : "";
+        };
+        return {
+            id: valor("id"),
+            nome: valor("nome"),
+            cpf: valor("cpf"),
+            telefone: valor("telefone"),
+            email: valor("email"),
+            data_nascimento: valor("data_nascimento"),
+            vinculo: valor("vinculo"),
+        };
+    }
+
+    function definirCampo(bloco, sufixo, valor) {
+        const campo = campoDoBloco(bloco, sufixo);
+        if (!campo || campo.type === "radio" || campo.type === "checkbox") {
+            return;
+        }
+        if (campo.type === "hidden" && !campo._flatpickr) {
+            return;
+        }
+        if (campo._flatpickr) {
+            if (valor) {
+                campo._flatpickr.setDate(valor, true);
+            } else {
+                campo._flatpickr.clear();
+            }
+        } else {
+            campo.value = valor || "";
+        }
+    }
+
+    function htmlCabecalho(titulo, classeRemover, comFoto) {
+        const avatar = comFoto
+            ? `<span class="avatar-facial-wrap flex-shrink-0"><span class="avatar-facial avatar-facial-vazio rounded-circle"><i class="bi bi-person"></i></span></span>`
+            : "";
+        const botaoFoto = comFoto
+            ? `<button type="button" class="btn btn-sm btn-outline-primary js-abrir-foto">📸 Enviar/Trocar Foto</button>`
+            : "";
+        return `
+            <div class="card-header border-bottom-0 pb-2">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="d-flex align-items-center gap-2 min-w-0">
+                        ${avatar}
+                        <div class="min-w-0">
+                            <div class="d-flex flex-wrap align-items-center gap-1">
+                                <span class="fw-semibold text-truncate card-resumo-nome">${esc(titulo)}</span>
+                                <span class="card-resumo-badges d-flex flex-wrap gap-1"></span>
+                            </div>
+                            <div class="small text-muted card-resumo-cpf">CPF não informado</div>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap flex-shrink-0 align-items-center gap-1">
+                        ${botaoFoto}
+                        <button type="button" class="btn btn-sm btn-outline-secondary alternar-card">Recolher</button>
+                        <button type="button" class="btn btn-sm btn-link text-danger text-decoration-none px-2 ${classeRemover}" aria-label="Remover">
+                            <i class="bi bi-trash"></i><span class="d-none d-sm-inline ms-1">Remover</span>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    function cpfResumo(valor) {
+        const digitos = cpfDigitos(valor);
+        if (!digitos) {
+            return "CPF não informado";
+        }
+        if (digitos.length === 11) {
+            return "CPF " + digitos.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+        }
+        return "CPF " + digitos.slice(0, 3) + "...";
+    }
+
+    function rotuloPadrao(card) {
+        return card.classList.contains("morador-item") ? "Novo Morador" : "Novo Proprietário";
+    }
+
+    function atualizarResumo(card) {
+        if (!card) {
+            return;
+        }
+        const dados = lerBloco(card);
+        const nomeEl = card.querySelector(".card-resumo-nome");
+        const cpfEl = card.querySelector(".card-resumo-cpf");
+        if (nomeEl) {
+            nomeEl.textContent = dados.nome || rotuloPadrao(card);
+        }
+        if (cpfEl) {
+            cpfEl.textContent = cpfResumo(dados.cpf);
+        }
+        const badges = card.querySelector(".card-resumo-badges");
+        if (!badges || !card.classList.contains("morador-item")) {
+            return;
+        }
+        const pedacos = [];
+        const parentesco = (campoDoBloco(card, "parentesco")?.value || "").trim();
+        if (dados.vinculo) {
+            pedacos.push(`<span class="badge text-bg-light border">${esc(dados.vinculo)}</span>`);
+        }
+        if (parentesco && parentesco !== dados.vinculo) {
+            pedacos.push(`<span class="badge text-bg-light border">${esc(parentesco)}</span>`);
+        }
+        const responsavel = campoDoBloco(card, "is_responsavel");
+        if (responsavel && responsavel.checked) {
+            pedacos.push('<span class="badge text-bg-primary">Responsável</span>');
+        }
+        const interfone = card.querySelector('input[type="radio"][name$="_lgpd_interfone"][value="true"]');
+        if (interfone && interfone.checked) {
+            pedacos.push('<span class="badge bg-success-subtle text-success border border-success-subtle">Interfone Ativo</span>');
+        }
+        if (card.dataset.status) {
+            pedacos.push(`<span class="badge bg-warning text-dark">${esc(card.dataset.status)}</span>`);
+        }
+        if (card.dataset.foto === "1" || card.dataset.fotoPreview === "1") {
+            pedacos.push('<span class="badge bg-success-subtle text-success border border-success-subtle">📸 Facial Cadastrada</span>');
+        } else {
+            pedacos.push('<span class="badge bg-warning-subtle text-warning-emphasis border">⚠️ Sem Foto Facial</span>');
+        }
+        badges.innerHTML = pedacos.join("");
+    }
+    window.atualizarResumoFacial = atualizarResumo;
+
+    function definirCardAberto(card, aberto, focar) {
+        const corpo = card.querySelector(".card-corpo");
+        const botao = card.querySelector(".alternar-card");
+        if (corpo) {
+            corpo.classList.toggle("d-none", !aberto);
+        }
+        const painelFoto = card.querySelector(".foto-facial-painel");
+        if (painelFoto && card.classList.contains("morador-item")) {
+            painelFoto.classList.toggle("d-none", !aberto);
+            if (!aberto && window.pararCameraFacial) {
+                window.pararCameraFacial(painelFoto);
+            }
+        }
+        if (botao) {
+            botao.textContent = aberto ? "Recolher" : "Editar";
+        }
+        if (aberto && focar) {
+            const campo = card.querySelector(".card-corpo input.js-autocomplete, .card-corpo input:not([type=hidden])");
+            if (campo) {
+                campo.focus();
+            }
+            card.scrollIntoView({ block: "nearest" });
+        }
+    }
+
+    function htmlProprietario(index, dados) {
+        const info = dados || {};
+        const idOculto = info.id
+            ? `<input type="hidden" name="proprietario_${index}_id" value="${esc(info.id)}">`
+            : "";
+        return `
+            ${idOculto}
+            ${htmlCabecalho(info.nome || "Novo Proprietário", "remover-proprietario")}
+            <div class="card-corpo card-body pt-2">
+            <div class="row g-3">
+                <div class="col-12 position-relative">
+                    <label class="form-label">Nome completo</label>
+                    <input class="form-control js-autocomplete" name="proprietario_${index}_nome" autocomplete="off" required value="${esc(info.nome)}">
+                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                </div>
+                <div class="col-12 col-md-6 position-relative">
+                    <label class="form-label">CPF</label>
+                    <input class="form-control js-autocomplete" name="proprietario_${index}_cpf" autocomplete="off" required value="${esc(info.cpf)}">
+                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Telefone</label>
+                    <input class="form-control" name="proprietario_${index}_telefone" value="${esc(info.telefone)}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">E-mail</label>
+                    <input type="email" class="form-control" name="proprietario_${index}_email" value="${esc(info.email)}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Data de nascimento</label>
+                    <input type="text" class="form-control datepicker" name="proprietario_${index}_data_nascimento" placeholder="DD/MM/AAAA" autocomplete="bday" value="${esc(info.data_nascimento)}">
+                </div>
+            </div>
+            </div>`;
+    }
+
+    function htmlMorador(index, dados) {
+        const info = dados || {};
+        const idOculto = info.id
+            ? `<input type="hidden" name="morador_${index}_id" value="${esc(info.id)}">`
+            : "";
+        const opcoes = opcoesVinculo.map((opcao) => {
+            const selecionado = opcao === (info.vinculo || "Familiar/Morador") ? " selected" : "";
+            const bloqueado = opcao === "Proprietário" ? " disabled" : "";
+            return `<option value="${opcao}"${selecionado}${bloqueado}>${opcao}</option>`;
+        }).join("");
+        return `
+            ${idOculto}
+            ${htmlCabecalho(info.nome || "Novo Morador", "remover-morador", true)}
+            ${window.htmlPainelFotoFacial ? window.htmlPainelFotoFacial(index) : ""}
+            <div class="card-corpo card-body pt-2">
+            <div class="row g-3">
+                <div class="col-12 position-relative">
+                    <label class="form-label">Nome completo</label>
+                    <input class="form-control js-autocomplete" name="morador_${index}_nome" autocomplete="off" required value="${esc(info.nome)}">
+                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                </div>
+                <div class="col-12 col-md-6 position-relative">
+                    <label class="form-label">CPF <small class="text-muted cpf-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                    <input class="form-control js-autocomplete" name="morador_${index}_cpf" autocomplete="off" required value="${esc(info.cpf)}">
+                    <div class="autocomplete-lista list-group position-absolute w-100 shadow-sm d-none"></div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Vínculo</label>
+                    <select class="form-select" name="morador_${index}_vinculo" required>${opcoes}</select>
                 </div>
                 <div class="col-12 col-md-6">
                     <label class="form-label">Parentesco</label>
-                    <input class="form-control" name="pessoa_${index}_parentesco">
+                    <input class="form-control" name="morador_${index}_parentesco" value="${esc(info.parentesco)}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Telefone <small class="text-muted telefone-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                    <input class="form-control" name="morador_${index}_telefone" value="${esc(info.telefone)}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">E-mail <small class="text-muted email-minor-hint d-none">(não obrigatório para menor de idade)</small></label>
+                    <input type="email" class="form-control" name="morador_${index}_email" value="${esc(info.email)}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">Data de nascimento</label>
+                    <input type="text" class="form-control datepicker" name="morador_${index}_data_nascimento" placeholder="DD/MM/AAAA" autocomplete="bday" value="${esc(info.data_nascimento)}">
                 </div>
                 <div class="col-12">
                     <div class="lgpd-box interfone-consentimento">
                         <label class="form-label d-block mb-1 fw-semibold">Consentimento LGPD — Uso do telefone no interfone</label>
                         <p class="small text-muted mb-2">Informe se autoriza o uso deste número no interfone da unidade.</p>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="pessoa_${index}_autoriza_interfone" id="autoriza_interfone_${index}_true" value="true" required>
-                            <label class="form-check-label" for="autoriza_interfone_${index}_true">
-                                Sim, autorizo o uso deste número para o interfone.
-                            </label>
+                            <input class="form-check-input" type="radio" name="morador_${index}_lgpd_interfone" id="lgpd_${index}_true" value="true" required>
+                            <label class="form-check-label" for="lgpd_${index}_true">Sim, autorizo o uso deste número para o interfone.</label>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="pessoa_${index}_autoriza_interfone" id="autoriza_interfone_${index}_false" value="false" required>
-                            <label class="form-check-label" for="autoriza_interfone_${index}_false">
-                                Não autorizo.
-                            </label>
+                            <input class="form-check-input" type="radio" name="morador_${index}_lgpd_interfone" id="lgpd_${index}_false" value="false" required>
+                            <label class="form-check-label" for="lgpd_${index}_false">Não autorizo.</label>
                         </div>
                     </div>
                 </div>
                 <div class="col-12">
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="pessoa_${index}_is_responsavel" id="resp_${index}">
-                        <label class="form-check-label" for="resp_${index}">Responsável pela unidade</label>
+                        <input class="form-check-input" type="checkbox" name="morador_${index}_is_responsavel" id="resp_morador_${index}">
+                        <label class="form-check-label" for="resp_morador_${index}">Responsável pela unidade</label>
+                    </div>
                     </div>
                 </div>
             </div>`;
     }
 
-    // === Adicionar Morador ===
-    document.getElementById("add-pessoa").addEventListener("click", () => {
-        const container = document.getElementById("pessoas-container");
+    function prepararBloco(bloco) {
+        ativarNascimento(bloco);
+        ligarAutocomplete(bloco);
+        if (bloco.classList.contains("morador-item")) {
+            atualizarObrigatoriedadePessoa(bloco);
+        }
+    }
+
+    function adicionarProprietario(dados) {
+        const container = document.getElementById("proprietarios-container");
         const wrapper = document.createElement("div");
-        wrapper.className = "pessoa-item";
-        wrapper.innerHTML = htmlCamposPessoa(pessoaIndex);
+        wrapper.className = "card shadow-sm mb-3 pessoa-card proprietario-item";
+        wrapper.innerHTML = htmlProprietario(container.querySelectorAll(".proprietario-item").length, dados);
         container.appendChild(wrapper);
-        registrarEventosPessoa(wrapper);
-        atualizarObrigatoriedadePessoa(wrapper);
-        toggleContratoLocacao();
-        pessoaIndex += 1;
+        prepararBloco(wrapper);
+        atualizarResumo(wrapper);
+        definirCardAberto(wrapper, true, true);
+        atualizarBotoesRemover(".proprietario-item", ".remover-proprietario");
+        sincronizarVinculoMoradores();
+        return wrapper;
+    }
+
+    function adicionarMorador(dados) {
+        const container = document.getElementById("moradores-container");
+        const wrapper = document.createElement("div");
+        wrapper.className = "card shadow-sm mb-3 pessoa-card morador-item";
+        wrapper.innerHTML = htmlMorador(container.querySelectorAll(".morador-item").length, dados);
+        container.appendChild(wrapper);
+        prepararBloco(wrapper);
+        atualizarResumo(wrapper);
+        definirCardAberto(wrapper, true, true);
+        atualizarBotoesRemover(".morador-item", ".remover-morador");
+        sincronizarVinculoMoradores();
+        return wrapper;
+    }
+
+    document.getElementById("add-proprietario").addEventListener("click", () => {
+        adicionarProprietario();
+    });
+    document.getElementById("add-morador").addEventListener("click", () => {
+        adicionarMorador();
     });
 
-    // === Adicionar Veículo ===
+    document.getElementById("proprietarios-container").addEventListener("click", (event) => {
+        const botao = event.target.closest(".remover-proprietario");
+        if (!botao || document.querySelectorAll(".proprietario-item").length < 2) {
+            return;
+        }
+        botao.closest(".proprietario-item").remove();
+        reindexar(document.getElementById("proprietarios-container"), ".proprietario-item", "proprietario");
+        atualizarBotoesRemover(".proprietario-item", ".remover-proprietario");
+        sincronizarVinculoMoradores();
+    });
+
+    document.getElementById("moradores-container").addEventListener("click", (event) => {
+        const botao = event.target.closest(".remover-morador");
+        if (!botao || document.querySelectorAll(".morador-item").length < 2) {
+            return;
+        }
+        botao.closest(".morador-item").remove();
+        reindexar(document.getElementById("moradores-container"), ".morador-item", "morador");
+        atualizarBotoesRemover(".morador-item", ".remover-morador");
+        sincronizarVinculoMoradores();
+    });
+
+    function calcularIdade(dataStr) {
+        if (!dataStr) {
+            return null;
+        }
+        const nascimento = new Date(`${dataStr}T00:00:00`);
+        if (Number.isNaN(nascimento.getTime())) {
+            return null;
+        }
+        const hoje = new Date();
+        let idade = hoje.getFullYear() - nascimento.getFullYear();
+        const aindaNaoFez =
+            hoje.getMonth() < nascimento.getMonth() ||
+            (hoje.getMonth() === nascimento.getMonth() && hoje.getDate() < nascimento.getDate());
+        if (aindaNaoFez) {
+            idade -= 1;
+        }
+        return idade;
+    }
+
+    function atualizarObrigatoriedadePessoa(bloco) {
+        const dados = lerBloco(bloco);
+        const idade = calcularIdade(dados.data_nascimento);
+        const isMenor = idade !== null && idade < 18;
+        const responsavel = campoDoBloco(bloco, "is_responsavel");
+        const isResponsavel = Boolean(responsavel && responsavel.checked);
+        const cpf = campoDoBloco(bloco, "cpf");
+        const telefone = campoDoBloco(bloco, "telefone");
+        const email = campoDoBloco(bloco, "email");
+        const radios = bloco.querySelectorAll('input[type="radio"][name$="_lgpd_interfone"]');
+        const caixa = bloco.querySelector(".interfone-consentimento");
+
+        if (cpf) {
+            cpf.required = !isMenor;
+        }
+        if (telefone) {
+            telefone.required = !isMenor && isResponsavel;
+        }
+        if (email) {
+            email.required = !isMenor && isResponsavel;
+        }
+        radios.forEach((radio) => {
+            radio.disabled = isMenor;
+            radio.required = !isMenor;
+            if (isMenor) {
+                radio.checked = false;
+            }
+        });
+        if (caixa) {
+            caixa.style.display = isMenor ? "none" : "";
+        }
+        bloco.querySelectorAll(".cpf-minor-hint, .telefone-minor-hint, .email-minor-hint").forEach((hint) => {
+            hint.classList.toggle("d-none", !isMenor);
+        });
+    }
+
+    function toggleContrato() {
+        const visivel = Array.from(document.querySelectorAll(".morador-item")).some((bloco) => {
+            const vinculo = campoDoBloco(bloco, "vinculo");
+            const responsavel = campoDoBloco(bloco, "is_responsavel");
+            return responsavel && responsavel.checked && vinculo &&
+                (vinculo.value === "Inquilino" || vinculo.value === "Locatário");
+        });
+        document.getElementById("contrato-locacao-section").classList.toggle("d-none", !visivel);
+    }
+
+    document.getElementById("moradores-container").addEventListener("change", (event) => {
+        const bloco = event.target.closest(".morador-item");
+        if (!bloco) {
+            return;
+        }
+        atualizarObrigatoriedadePessoa(bloco);
+        toggleContrato();
+        if (event.target.name && event.target.name.endsWith("_is_responsavel") && event.target.checked) {
+            document.getElementById("aviso-responsavel").classList.add("d-none");
+        }
+    });
+    document.getElementById("moradores-container").addEventListener("input", (event) => {
+        const bloco = event.target.closest(".morador-item");
+        if (bloco && event.target.name && event.target.name.endsWith("_data_nascimento")) {
+            atualizarObrigatoriedadePessoa(bloco);
+        }
+    });
+
+    const possuiVeiculoCheck = document.getElementById("possui-veiculo");
+    const veiculosSection = document.getElementById("veiculos-section");
+
+    function toggleVeiculos() {
+        const visivel = possuiVeiculoCheck.checked;
+        veiculosSection.classList.toggle("d-none", !visivel);
+        veiculosSection.querySelectorAll(".veiculo-field").forEach((input) => {
+            if (visivel) {
+                input.required = true;
+            } else {
+                input.required = false;
+                input.value = "";
+            }
+        });
+    }
+
+    possuiVeiculoCheck.addEventListener("change", toggleVeiculos);
+    toggleVeiculos();
+
     document.getElementById("add-veiculo").addEventListener("click", () => {
         const container = document.getElementById("veiculos-container");
+        const index = container.querySelectorAll(".veiculo-item").length;
         const wrapper = document.createElement("div");
         wrapper.className = "border rounded p-3 mb-3 veiculo-item";
         wrapper.innerHTML = `
             <div class="row g-3">
                 <div class="col-12 col-md-4">
                     <label class="form-label">Placa</label>
-                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_placa" required>
+                    <input class="form-control veiculo-field" name="veiculo_${index}_placa" required>
                 </div>
                 <div class="col-12 col-md-4">
                     <label class="form-label">Marca</label>
-                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_marca" required>
+                    <input class="form-control veiculo-field" name="veiculo_${index}_marca" required>
                 </div>
                 <div class="col-12 col-md-4">
                     <label class="form-label">Cor</label>
-                    <input class="form-control veiculo-field" name="veiculo_${veiculoIndex}_cor" required>
+                    <input class="form-control veiculo-field" name="veiculo_${index}_cor" required>
                 </div>
             </div>`;
         container.appendChild(wrapper);
-        veiculoIndex += 1;
     });
+
+    function mostrarAba(idPainel) {
+        const botao = document.querySelector('[data-bs-target="#' + idPainel + '"]');
+        if (botao) {
+            bootstrap.Tab.getOrCreateInstance(botao).show();
+        }
+    }
+
+    function cpfsProprietarios() {
+        const conjunto = new Set();
+        document.querySelectorAll(".proprietario-item").forEach((card) => {
+            const digitos = cpfDigitos(lerBloco(card).cpf);
+            if (digitos) {
+                conjunto.add(digitos);
+            }
+        });
+        return conjunto;
+    }
+
+    function sincronizarVinculoMoradores() {
+        const donos = cpfsProprietarios();
+        document.querySelectorAll(".morador-item").forEach((card) => {
+            const select = campoDoBloco(card, "vinculo");
+            if (!select) {
+                return;
+            }
+            const cpf = cpfDigitos(lerBloco(card).cpf);
+            const ehDono = Boolean(cpf) && donos.has(cpf);
+            const opcaoDono = Array.from(select.options).find((opcao) => opcao.value === "Proprietário");
+            if (opcaoDono) {
+                opcaoDono.disabled = !ehDono;
+            }
+            if (ehDono) {
+                select.value = "Proprietário";
+            } else if (select.value === "Proprietário" || !select.value) {
+                select.value = "Familiar/Morador";
+            }
+            atualizarResumo(card);
+        });
+        toggleContrato();
+    }
+
+    function cpfJaMorador(cpf) {
+        const digitos = cpfDigitos(cpf);
+        if (!digitos) {
+            return false;
+        }
+        return Array.from(document.querySelectorAll(".morador-item")).some((bloco) => {
+            return cpfDigitos(lerBloco(bloco).cpf) === digitos;
+        });
+    }
+
+    function aplicarPessoaNoBloco(bloco, dados, vinculo) {
+        definirCampo(bloco, "nome", dados.nome);
+        definirCampo(bloco, "cpf", dados.cpf);
+        definirCampo(bloco, "telefone", dados.telefone);
+        definirCampo(bloco, "email", dados.email);
+        definirCampo(bloco, "data_nascimento", dados.data_nascimento);
+        if (vinculo) {
+            const select = campoDoBloco(bloco, "vinculo");
+            if (select) {
+                select.value = vinculo;
+            }
+        }
+        if (dados.id && !campoDoBloco(bloco, "id")) {
+            const oculto = document.createElement("input");
+            oculto.type = "hidden";
+            const nomeCampo = bloco.querySelector("[name]")?.name || "";
+            const prefixo = nomeCampo.startsWith("proprietario_") ? "proprietario" : "morador";
+            const indice = (nomeCampo.match(/_(\d+)_/) || [0, "0"])[1];
+            oculto.name = prefixo + "_" + indice + "_id";
+            oculto.value = dados.id;
+            bloco.prepend(oculto);
+        }
+        if (bloco.classList.contains("morador-item")) {
+            atualizarObrigatoriedadePessoa(bloco);
+        }
+        sincronizarVinculoMoradores();
+        atualizarResumo(bloco);
+    }
+
+    document.getElementById("importar-proprietario").addEventListener("show.bs.dropdown", () => {
+        const menu = document.getElementById("menu-importar-proprietario");
+        menu.innerHTML = "";
+        const donos = Array.from(document.querySelectorAll(".proprietario-item"))
+            .map(lerBloco)
+            .filter((pessoa) => pessoa.nome);
+        if (!donos.length) {
+            menu.innerHTML = '<li><span class="dropdown-item-text text-muted">Preencha um proprietário na primeira aba.</span></li>';
+            return;
+        }
+        donos.forEach((dono) => {
+            const item = document.createElement("li");
+            const botao = document.createElement("button");
+            botao.type = "button";
+            botao.className = "dropdown-item";
+            botao.textContent = dono.nome;
+            botao.addEventListener("click", () => {
+                if (cpfJaMorador(dono.cpf)) {
+                    const existente = Array.from(document.querySelectorAll(".morador-item")).find((bloco) => {
+                        return cpfDigitos(lerBloco(bloco).cpf) === cpfDigitos(dono.cpf);
+                    });
+                    mostrarAba("aba-moradores");
+                    if (existente) {
+                        definirCardAberto(existente, true, true);
+                        sincronizarVinculoMoradores();
+                    }
+                    return;
+                }
+                const vazio = Array.from(document.querySelectorAll(".morador-item")).find((bloco) => !lerBloco(bloco).nome);
+                const bloco = vazio || adicionarMorador();
+                aplicarPessoaNoBloco(bloco, dono, "Proprietário");
+                definirCardAberto(bloco, true, true);
+                mostrarAba("aba-moradores");
+            });
+            item.appendChild(botao);
+            menu.appendChild(item);
+        });
+    });
+
+    function combinaTermo(item, termo) {
+        const texto = termo.trim().toLowerCase();
+        if (!texto) {
+            return true;
+        }
+        const digitos = cpfDigitos(termo);
+        const nomeOk = (item.nome || "").toLowerCase().includes(texto);
+        const cpfOk = Boolean(digitos) && cpfDigitos(item.cpf).includes(digitos);
+        return nomeOk || cpfOk;
+    }
+
+    function sugestoesLocais(blocoAtual) {
+        return Array.from(document.querySelectorAll(".proprietario-item"))
+            .filter((bloco) => bloco !== blocoAtual)
+            .map((bloco) => {
+                const dados = lerBloco(bloco);
+                return {
+                    nome: dados.nome,
+                    cpf: dados.cpf,
+                    telefone: dados.telefone,
+                    email: dados.email,
+                    data_nascimento: dados.data_nascimento,
+                    origem: "Proprietário",
+                };
+            })
+            .filter((item) => item.nome || cpfDigitos(item.cpf));
+    }
+
+    function mesclarSugestoes(locais, remotas) {
+        const vistos = new Set();
+        const saida = [];
+        [...locais, ...remotas].forEach((item) => {
+            const chave = cpfDigitos(item.cpf) || (item.nome || "").trim().toLowerCase();
+            if (!chave || vistos.has(chave)) {
+                return;
+            }
+            vistos.add(chave);
+            saida.push(item);
+        });
+        return saida;
+    }
+
+    function textoSugestao(item) {
+        const digitos = cpfDigitos(item.cpf);
+        const cpfTxt = digitos ? "CPF " + digitos.slice(0, 3) + "..." : "sem CPF";
+        return (item.nome || "Sem nome") + " — " + cpfTxt + " (" + (item.origem || "Morador") + ")";
+    }
+
+    let buscaTimer = null;
+    let buscaAtiva = null;
+
+    function desenharSugestoes(caixa, sugestoes, bloco) {
+        caixa.innerHTML = "";
+        if (!sugestoes.length) {
+            caixa.classList.add("d-none");
+            return;
+        }
+        sugestoes.forEach((item) => {
+            const botao = document.createElement("button");
+            botao.type = "button";
+            botao.className = "list-group-item list-group-item-action py-2 small";
+            botao.textContent = textoSugestao(item);
+            botao.addEventListener("mousedown", (event) => {
+                event.preventDefault();
+                aplicarPessoaNoBloco(bloco, item);
+                caixa.classList.add("d-none");
+            });
+            caixa.appendChild(botao);
+        });
+        caixa.classList.remove("d-none");
+    }
+
+    async function buscarSugestoes(input) {
+        const caixa = input.parentElement.querySelector(".autocomplete-lista");
+        const bloco = input.closest(".proprietario-item, .morador-item");
+        if (!caixa || !bloco) {
+            return;
+        }
+        const termo = input.value.trim();
+        const locais = sugestoesLocais(bloco).filter((item) => combinaTermo(item, termo));
+        if (buscaAtiva) {
+            buscaAtiva.abort();
+        }
+        buscaAtiva = new AbortController();
+        let remotas = [];
+        try {
+            const resposta = await fetch(urlAutocomplete + "?q=" + encodeURIComponent(termo), {
+                signal: buscaAtiva.signal,
+                headers: { Accept: "application/json" },
+            });
+            if (resposta.ok) {
+                remotas = await resposta.json();
+            }
+        } catch (erro) {
+            if (erro.name === "AbortError") {
+                return;
+            }
+        }
+        if (document.activeElement !== input) {
+            return;
+        }
+        desenharSugestoes(
+            caixa,
+            mesclarSugestoes(locais, remotas.filter((item) => combinaTermo(item, termo))),
+            bloco
+        );
+    }
+
+    function ligarAutocomplete(escopo) {
+        escopo.querySelectorAll(".js-autocomplete").forEach((input) => {
+            if (input.dataset.autocomplete === "1") {
+                return;
+            }
+            input.dataset.autocomplete = "1";
+            const disparar = () => {
+                clearTimeout(buscaTimer);
+                buscaTimer = setTimeout(() => buscarSugestoes(input), 200);
+            };
+            input.addEventListener("focus", disparar);
+            input.addEventListener("input", disparar);
+            input.addEventListener("blur", () => {
+                const caixa = input.parentElement.querySelector(".autocomplete-lista");
+                setTimeout(() => caixa && caixa.classList.add("d-none"), 180);
+            });
+        });
+    }
+
+    function primeiroInvalido(form) {
+        return Array.from(form.querySelectorAll("input, select, textarea")).find((campo) => {
+            if (campo.disabled || campo.type === "hidden") {
+                return false;
+            }
+            return !campo.checkValidity();
+        });
+    }
+
+    document.getElementById("form-atualizar-dados").addEventListener("submit", (event) => {
+        const senha = document.getElementById("senha");
+        const confirmar = document.getElementById("confirmar_senha");
+        senha.setCustomValidity("");
+        confirmar.setCustomValidity("");
+        if ((senha.value || confirmar.value) && senha.value !== confirmar.value) {
+            confirmar.setCustomValidity("As senhas não conferem.");
+        } else if (senha.value && senha.value.length < 6) {
+            senha.setCustomValidity("A senha deve ter ao menos 6 caracteres.");
+        }
+
+        const campo = primeiroInvalido(document.getElementById("form-atualizar-dados"));
+        const semResponsavel = !document.querySelector('.morador-item input[name$="_is_responsavel"]:checked');
+        if (!campo && !semResponsavel) {
+            return;
+        }
+        event.preventDefault();
+        if (!campo && semResponsavel) {
+            document.getElementById("aviso-responsavel").classList.remove("d-none");
+            mostrarAba("aba-moradores");
+            const primeiro = document.querySelector(".morador-item");
+            if (primeiro) {
+                definirCardAberto(primeiro, true, false);
+            }
+            return;
+        }
+        const aba = campo.closest(".tab-pane");
+        const mostrarErro = () => {
+            const card = campo.closest(".proprietario-item, .morador-item");
+            if (card) {
+                definirCardAberto(card, true, false);
+            }
+            campo.reportValidity();
+        };
+        if (!aba || aba.classList.contains("active")) {
+            mostrarErro();
+            return;
+        }
+        const botao = document.querySelector('[data-bs-target="#' + aba.id + '"]');
+        botao.addEventListener("shown.bs.tab", mostrarErro, { once: true });
+        bootstrap.Tab.getOrCreateInstance(botao).show();
+    });
+
+    document.getElementById("form-atualizar-dados").addEventListener("click", (event) => {
+        const alternar = event.target.closest(".alternar-card");
+        if (!alternar) {
+            return;
+        }
+        const card = alternar.closest(".proprietario-item, .morador-item");
+        if (!card) {
+            return;
+        }
+        const fechado = card.querySelector(".card-corpo").classList.contains("d-none");
+        definirCardAberto(card, fechado, false);
+    });
+    document.getElementById("form-atualizar-dados").addEventListener("input", (event) => {
+        const card = event.target.closest(".proprietario-item, .morador-item");
+        if (!card) {
+            return;
+        }
+        const nome = event.target.name || "";
+        if (nome.endsWith("_cpf")) {
+            sincronizarVinculoMoradores();
+        }
+        atualizarResumo(card);
+    });
+    document.getElementById("form-atualizar-dados").addEventListener("change", (event) => {
+        const card = event.target.closest(".proprietario-item, .morador-item");
+        if (!card) {
+            return;
+        }
+        const nome = event.target.name || "";
+        if (nome.endsWith("_cpf") || nome.endsWith("_vinculo")) {
+            sincronizarVinculoMoradores();
+        }
+        atualizarResumo(card);
+    });
+
+    ativarNascimento(document);
+    ligarAutocomplete(document);
+    document.querySelectorAll(".morador-item").forEach(atualizarObrigatoriedadePessoa);
+    document.querySelectorAll(".proprietario-item, .morador-item").forEach((card) => {
+        const dados = lerBloco(card);
+        const preenchido = Boolean(dados.nome && cpfDigitos(dados.cpf));
+        definirCardAberto(card, !preenchido, false);
+        atualizarResumo(card);
+    });
+    sincronizarVinculoMoradores();
+
+    const abasCadastro = {
+        proprietarios: "aba-proprietarios",
+        moradores: "aba-moradores",
+        veiculos: "aba-veiculos",
+        seguranca: "aba-senha",
+    };
+    const chaveAbaCadastro = "atualizar-dados-aba";
+
+    function gravarAbaAtiva(identificador) {
+        if (!abasCadastro[identificador]) {
+            return;
+        }
+        const campo = document.getElementById("inputAbaAtiva");
+        if (campo) {
+            campo.value = identificador;
+        }
+        try {
+            sessionStorage.setItem(chaveAbaCadastro, identificador);
+        } catch (erro) {
+            /* storage indisponível: o campo oculto ainda segue no POST */
+        }
+    }
+
+    function restaurarAbaAtiva() {
+        const pedida = new URLSearchParams(window.location.search).get("aba");
+        let identificador = abasCadastro[pedida] ? pedida : "";
+        if (!identificador) {
+            try {
+                const guardada = sessionStorage.getItem(chaveAbaCadastro);
+                if (abasCadastro[guardada]) {
+                    identificador = guardada;
+                }
+            } catch (erro) {
+                identificador = "";
+            }
+        }
+        if (!identificador) {
+            identificador = "proprietarios";
+        }
+        gravarAbaAtiva(identificador);
+        const botao = document.querySelector('#cadastroAbas [data-aba="' + identificador + '"]');
+        if (botao && !botao.classList.contains("active")) {
+            bootstrap.Tab.getOrCreateInstance(botao).show();
+        }
+    }
+
+    document.getElementById("cadastroAbas").addEventListener("shown.bs.tab", (event) => {
+        gravarAbaAtiva(event.target.getAttribute("data-aba"));
+    });
+    restaurarAbaAtiva();
 </script>
+{% endif %}
 {% endblock %}

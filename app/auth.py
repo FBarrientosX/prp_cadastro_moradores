@@ -296,8 +296,19 @@ def unidade_required(view):
     return wrapped
 
 
-def portaria_required(view):
-    """Acesso à portaria: porteiro, admin do tenant ou Super Admin da plataforma."""
+def _negar_sindico_sem_portaria(usuario):
+    """Síndico só entra na portaria com a permissão extra marcada."""
+    if usuario and usuario.role == Role.SINDICO and not usuario.perm_portaria:
+        flash(
+            "Seu acesso de síndico não inclui a portaria e o controle de acesso.",
+            "warning",
+        )
+        return redirect(url_for("sindico_dashboard"))
+    return None
+
+
+def interfone_required(view):
+    """Interfone da guarita: portaria, admin local, síndico do tenant ou Super Admin."""
 
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -307,6 +318,40 @@ def portaria_required(view):
         if usuario.role not in (
             Role.PORTEIRO,
             Role.ADMIN,
+            Role.SINDICO,
+            Role.SUPERADMIN,
+        ):
+            flash("Acesso restrito à portaria.", "danger")
+            return _redirect_login_tenant()
+        if usuario.role == Role.SUPERADMIN:
+            return view(*args, **kwargs)
+        if not usuario.condominio_id:
+            flash(
+                "Conta sem condomínio vinculado. Contate a administração.",
+                "danger",
+            )
+            return _redirect_login_tenant()
+        negado = _negar_sindico_sem_portaria(usuario)
+        if negado:
+            return negado
+        _sincronizar_sessao_tenant(usuario)
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def portaria_required(view):
+    """Acesso à portaria: porteiro, admin, síndico do tenant ou Super Admin."""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        usuario = get_current_user()
+        if not usuario:
+            return _redirect_login_tenant()
+        if usuario.role not in (
+            Role.PORTEIRO,
+            Role.ADMIN,
+            Role.SINDICO,
             Role.SUPERADMIN,
         ):
             flash("Acesso restrito à portaria.", "danger")
@@ -324,6 +369,9 @@ def portaria_required(view):
             )
             return _redirect_login_tenant()
 
+        negado = _negar_sindico_sem_portaria(usuario)
+        if negado:
+            return negado
         # Isolamento: sessão sempre no condominio_id do próprio usuário.
         _sincronizar_sessao_tenant(usuario)
         return view(*args, **kwargs)

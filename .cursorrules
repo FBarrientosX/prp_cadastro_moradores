@@ -27,7 +27,7 @@ Registro de rotas (OBRIGATORIO — nao confundir com Flask Blueprint):
   preservando os nomes de endpoint originais (`url_for("admin_index")`, nao `admin.admin_index`).
 - Motivo: `Blueprint.route()` prefixaria o endpoint e quebraria templates existentes.
 - `routes.init_app(app)` importa e chama `register(app)` de:
-  `parceiro`, `superadmin`, `sindico`, `admin`, `portaria`.
+  `parceiro`, `superadmin`, `sindico`, `admin`, `financeiro`, `portaria`, `infracoes`, `areas`.
 - Nucleo compartilhado permanece em `app/routes.py` (login tenant, cadastro da unidade,
   reservas, clube do morador, mudancas do morador, autorizacoes, ocorrencias do morador,
   notificacoes e helpers `_algo`).
@@ -45,8 +45,8 @@ app/
   email_service.py     # SMTP Gmail sincrono
   drive_api.py         # OAuth Google Drive (installed app)
   blueprints/
-    parceiro.py, superadmin.py, sindico.py, admin.py, portaria.py
-  static/uploads/      # logos, parceiros, ocorrencias, encomendas
+    parceiro.py, superadmin.py, sindico.py, admin.py, financeiro.py, portaria.py, infracoes.py, areas.py
+  static/uploads/      # logos, parceiros, ocorrencias, encomendas, infracoes
   templates/           # bases por contexto + pastas admin/, morador/, portaria/, includes/
 ```
 
@@ -84,7 +84,7 @@ Bibliotecas externas homologadas (frontend via CDN):
 - flatpickr — campos de data (exibicao DD/MM/YYYY via altInput; valor enviado Y-m-d).
   CSS/JS + locale pt em `base.html`. Novos campos: `type="text"` + classe `datepicker`;
   evitar `<input type="date">` nativo.
-- FullCalendar 6 — calendario de reservas em `base.html` / `reservas.html`.
+- FullCalendar 6 — calendario de reservas em `base.html` / `admin/areas.html` / `morador/areas.html`.
 - Chart.js 4 — dashboards (`admin_dashboard.html`, analytics do clube).
 - qrcode.js — QR de cupons resgatados no cliente.
 - html5-qrcode — leitura de QR (validacao do parceiro e encomendas na portaria).
@@ -142,9 +142,26 @@ Transicao de schema:
 - Tabelas novas (`visitantes`, `registros_acesso`, `encomendas`,
   `autorizacoes_acesso`, `notificacoes`, `ocorrencias`) nascem com
   `condominio_id` NOT NULL.
-- Constraint atual de `Unidade`: `UniqueConstraint("bloco", "apartamento")`
-  (sem tenant). Lookups de negocio sempre filtram `condominio_id`; nao assumir
-  unicidade por condominio no banco.
+- Constraint de `Unidade`: `UniqueConstraint("condominio_id", "bloco", "apartamento")`.
+ Lookups de negocio sempre filtram `condominio_id`.
+- Planta física: `criada_pela_admin`, `conta_reivindicada` e `cpf_pre_autorizado`.
+  O boot do `prp` completa as 496 unidades (blocos 1–8) que ainda não existem,
+  com status `Pré-Cadastro Admin` e sem senha do morador. Quem já tinha
+  cadastro fica `conta_reivindicada=True`. O autocadastro só reivindica
+  unidade da planta; conta já reivindicada não refaz o cadastro. A fração
+  igualitária e o rateio incluem as 496, mesmo sem pagador.
+- Setor interno: `eh_setor_interno=True`, `bloco="ADM"`, `apartamento` = nome
+ do setor (ex.: "Administração"). O boot cria Administração em todo condomínio
+ (`garantir_setor_administracao`), status `Aprovada`, senha aleatória.
+ Nao entra no login/cadastro do morador (planta 1-8), na fila residencial do
+ admin nem na carteirinha/API de credenciais. `identificador` vira
+ `Setor: {nome}`. Admin e sindico gerenciam setores e contatos em
+ `GET|POST /admin/setores` (assistente nao acessa). O setor Administração
+ nao e excluido. Contato de setor nao pede CPF nem nascimento: grava
+ `eh_morador=True` e `autoriza_interfone=True`.
+ Salvar `/admin/condominio` com telefone e e-mail sincroniza o contato
+ institucional "Administração Geral" nesse setor quando ele esta vazio
+ ou quando esse contato ja existe.
 
 Estrutura fisica de blocos (`app/utils.py`):
 - `BLOCOS_ANDARES` / `validar_unidade()` descrevem a planta do PRP (blocos 1-8).
@@ -179,17 +196,23 @@ Desacoplamento de identidade (Parceiros):
   (`POST /parceiro/perfil/editar`). `usuario_login` nao e alterado pelo parceiro.
 
 Scoping por perfil:
-- Morador: `_buscar_unidade_e_email_login(email, condominio_id)` consulta apenas
-  `Unidade` + `Pessoa` responsavel (e `proprietario_email`) DO MESMO `condominio_id`.
-  Sem `condominio_id` nao resolve (anti-enumeracao cross-tenant).
+- Morador: a recuperacao exige Bloco + Apartamento + e-mail ou CPF.
+  Primeiro localiza a `Unidade` por condominio + bloco + apartamento
+  (`_buscar_unidade`). Depois `_email_destino_recuperacao_unidade` so aceita
+  `Pessoa.unidade_id` dessa unidade (ou `proprietario_email`/`proprietario_cpf`
+  da mesma linha). Sem `condominio_id` nao resolve (anti-enumeracao cross-tenant).
+  Nunca escolher a unidade com `.first()` global de e-mail/CPF.
 - Parceiro: `Parceiro.query.filter_by(email=...)` — so tabela `parceiro`; envio
   apenas se `status == 'Ativo'`.
 - Cada fluxo tem rotas, templates e salt proprios.
 
 Anti-enumeracao (OBRIGATORIO):
-- `/esqueci_senha` e `/parceiro/esqueci_senha` NUNCA revelam se o e-mail existe.
-- Sempre a mesma mensagem: "Se o e-mail estiver cadastrado, enviaremos instruções
-  para redefinição de senha."
+- `/esqueci_senha` e `/parceiro/esqueci_senha` NUNCA revelam se o e-mail existe
+  nem se a pessoa tem vinculo com a unidade informada.
+- Morador, sempre a mesma mensagem: "Se os dados informados estiverem corretos
+  e vinculados a esta unidade, as instruções de recuperação foram enviadas."
+- Parceiro: "Se o e-mail estiver cadastrado, enviaremos instruções para
+  redefinição de senha."
 - Enviar e-mail so quando a entidade existir e estiver elegivel; senao, mesma mensagem.
 - Falha tecnica de SMTP: erro generico de indisponibilidade, sem confirmar existencia.
 
@@ -198,10 +221,12 @@ Tokens (`app/utils.py`):
 - `max_age=3600`.
 - Salts: `SALT_RECUPERACAO_MORADOR = "recuperacao-morador"`,
   `SALT_RECUPERACAO_PARCEIRO = "recuperacao-parceiro"`.
-- Payload atual: `{"email", "condominio_id"}`. Resolver a unidade pelo
-  `condominio_id` do token, nunca pelo tenant da sessao no clique do link.
-- Aceita payload legado (e-mail puro) na janela de validade.
-- `verificar_token_redefinicao` devolve `(email, condominio_id, emitido_em)`.
+- Payload da unidade: `{"email", "condominio_id", "unidade_id"}`. A nova senha
+  grava somente na `Unidade` desse `unidade_id` (e do mesmo `condominio_id`).
+  Nunca resolver pelo tenant da sessao nem pelo primeiro cadastro do e-mail.
+- Token de unidade sem `unidade_id` (payload legado) e rejeitado.
+- `verificar_token_redefinicao` devolve `(email, condominio_id, emitido_em, unidade_id)`.
+- E-mail e tela de nova senha identificam a unidade (Bloco X, Apto Y).
 - Rejeitar token se `emitido_em` for anterior a `senha_atualizada_em` da entidade
   (unidade, usuario ou parceiro) — evita reuso apos troca de senha.
 - Token invalido/expirado: "Link inválido ou expirado..." sem detalhes internos.
@@ -229,13 +254,12 @@ Decorators (`app/auth.py`, extras em `routes.py` / `parceiro.py`):
 - `@superadmin_required` — so `Role.SUPERADMIN`; login em `/superadmin/login`.
 - `@admin_required` — so `Role.ADMIN` local com `condominio_id`.
 - `@admin_or_assistente_required` — admin ou assistente, com tenant.
-- `@admin_or_sindico_required` — kanban de ocorrencias (admin ou sindico do tenant).
+- `@admin_or_sindico_required` — kanban de ocorrencias e rito de infracoes
+  (admin ou sindico do tenant; assistente fica de fora).
 - `@sindico_required` — so sindico com tenant.
-- `@portaria_required` — porteiro, admin local ou Super Admin.
+- `@portaria_required` — porteiro, admin local, sindico do tenant ou Super Admin.
 - `@unidade_required` — sessao de unidade; injeta `unidade` na view.
 - `@parceiro_required` — `session['parceiro_id']` (`app/blueprints/parceiro.py`).
-- `@acesso_reservas_required` — unidade ou equipe, bloqueia porteiro.
-- `@gestao_espacos_required` — admin, assistente ou sindico (com tenant).
 
 Usuarios locais sem `condominio_id` sao barrados pelos decorators (exceto Super Admin).
 
@@ -252,9 +276,9 @@ Admin e Assistente (tenant):
 - `POST /admin/registrar/<id>`
 - `POST /admin/unidades/<id>/alterar_senha`
 - `GET|POST /admin/mudancas` (aprovacao final + mudanca avulsa ja aprovada)
-- `GET /reservas` e gestao de espacos `gerenciado_por='admin'`
-- Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, clube, portaria
-  no menu; validacao documental e CRUD de usuarios sao `@admin_required`.
+- Assistente NAO ve aba Equipe, dashboard analitico, ocorrencias, infracoes,
+  areas comuns, clube, portaria nem Financeiro no menu; validacao documental
+  e CRUD de usuarios sao `@admin_required`.
 
 Somente Admin local:
 - `GET /admin/dashboard`
@@ -266,12 +290,34 @@ Somente Admin local:
 - exclusao de unidade: rota `@admin_or_assistente_required`, botao na UI so para admin;
   bloqueia se houver encomenda pendente
 - atalho para `/portaria/dashboard` com botao "Voltar ao Painel Admin"
+- Financeiro (`@admin_required`): `/admin/financeiro`, `/bancos`, `/fracoes`,
+  `/rateios`, `/cobrancas`, `/acordos`, `/conciliacao`, `/pagamentos`, `/repasses`,
+  `/medidores`.
+  Planta e pagadores: `GET /admin/cadastros` e `GET /admin/financeiro/pagadores`
+  (admin e síndico do bloco; assistente não entra).
+  Repasse por bloco quando `fin_repasses_ativos`; caixa unico quando desligado.
+  Boleto e recibo em `/financeiro/boleto/<id>` e `/financeiro/recibo/<id>`
+  (admin do tenant, síndico do bloco da unidade ou a unidade dona). Morador vê a 2ª via em `/boletos`.
+  Síndico vê só os próprios blocos em `GET /sindico/financeiro`.
 
 Somente Sindico:
-- dashboard do bloco (mapa + validacao unificada)
-- `GET|POST /sindico/mudancas` (JOIN unidade; so agrupamentos do sindico)
-- ocorrencias do proprio recorte (`admin_ocorrencias` com filtro de bloco)
-- reservas de espacos vinculados ao(s) bloco(s)
+- Escopo em `Usuario.blocos_escopo`: `"1"`, `"1,2"` ou `"*"` (sindico geral).
+  `get_blocos_permitidos()` devolve a lista ou `None` (todos). Consultas usam
+  `Unidade.bloco.in_(blocos)`. Mais de um bloco: filtro rapido `?bloco=` no
+  mapa, mudancas e ocorrencias.
+- Sem permissao extra, ve Aprovacao de Moradores, Mudancas, Ocorrencias,
+  Infrações só das unidades do mandato, Áreas Comuns do proprio bloco
+  e a prestação de contas só desses
+  blocos (`/sindico/financeiro`). Flags default False:
+  `perm_portaria`, `perm_reservas_geral`, `perm_configuracoes`.
+- Sem `perm_portaria`: sidebar sem Portaria e rotas `/portaria` e
+  `/api/portaria` redirecionam ao painel do sindico.
+- Sem `perm_configuracoes`: sem Dados do Condominio nem Setores ADM
+  (`/admin/condominio`, `/admin/setores`).
+- `perm_reservas_geral` nao esconde o menu. Libera criar e ver espacos
+  gerais (`bloco_vinculado` vazio ou `GERAL`), alem dos blocos do escopo.
+- Equipe (`/admin?tab=equipe`): admin define escopo e as tres permissoes
+  ao criar ou editar o sindico.
 
 Porteiro:
 - `/portaria`, `/portaria/dashboard`, `/portaria/acesso`, `/portaria/encomendas`
@@ -288,6 +334,26 @@ Parceiro logado:
 
 `Condominio`:
 - `nome`, `slug` (unico), `cnpj`, `ativo` (soft delete), `data_cadastro`
+- Dados do cliente em `GET|POST /admin/condominio`: `razao_social`, `plano`
+  (default Profissional), `fuso_horario` (default America/Sao_Paulo),
+  `criado_em`, contato (`telefone_fixo`, `telefone_whatsapp`, `email_contato`),
+  endereco e governanca (`tipo_divisao` bloco_apto|quadra_casa|torre_unica,
+  `total_unidades_previsto`, `nome_responsavel_gestao`, `fim_mandato`,
+  `horario_mudancas`). Super Admin edita tambem razao, CNPJ, slug e plano.
+  Admin local edita nome, fuso, contato, endereco e governanca. Sindico
+  edita so contato e endereco. Assistente nao acessa. No mesmo formulario,
+  admin e superadmin gravam `exigir_cpf_convidados` (default False),
+  `dias_padrao_defesa_multa` (default 15) e `aprovacao_automatica_reservas`
+  (default False). O modal de edicao do Super Admin grava as mesmas tres.
+  Ao salvar com telefone
+  e e-mail, cria ou atualiza o contato "Administração Geral" no setor ADM
+  se o setor ainda nao tiver outro contato.
+- Arquivos do tenant: `logo_filename`, `regimento_filename`, `convencao_filename`
+  (opcionais). Upload so Admin e Super Admin. A logo aparece na sidebar
+  (admin, sindico, portaria e morador) e no cabecalho da carteirinha; se
+  vazia, a UI usa `ConfiguracaoCondominio.logo_filename`. PDFs saem por
+  rota autenticada do tenant. `GET /c/<slug>` redireciona ao login do
+  morador e e a URL do QR de divulgacao.
 
 `ConfiguracaoCondominio` (1:1):
 - `label_agrupamento` (default "Bloco"), `label_unidade` (default "Apto")
@@ -306,6 +372,10 @@ Parceiro logado:
 - `condominio_id` (NULL so para superadmin)
 - `senha_atualizada_em` (invalida tokens antigos)
 - `set_password()` atualiza hash e timestamp
+- Sindico: `blocos_escopo` (`"1"`, `"1,2"` ou `"*"`), `perm_portaria`,
+  `perm_reservas_geral`, `perm_configuracoes` (default False).
+  Boot copia agrupamentos/`bloco_responsavel` para `blocos_escopo` vazio
+  e nao liga as flags. `SindicoAgrupamento` continua espelhado na gravacao.
 
 `Unidade`:
 - (`bloco`, `apartamento`) unico no banco atual; sempre filtrar por `condominio_id`
@@ -317,18 +387,67 @@ Parceiro logado:
 `Pessoa`:
 - contato, vinculo (`Proprietário`/`Locatário`/`Morador`), nascimento
 - `is_responsavel`, `autoriza_interfone`
+- `foto_facial` (JPG em `static/uploads/faciais/`, no máximo 600x600) e
+  `foto_atualizada_em`. Morador aprovado com foto ganha credencial `Facial`.
 
 `Veiculo`: placa, marca, cor por unidade
 
-`EspacoComum` + `Reserva`:
-- espaco com `condominio_id`, `gerenciado_por` (`admin` ou sindico),
-  `bloco_vinculado`, dias, valor, `ativo` (default True; soft disable para reforma)
-- reserva: `espaco_id`, `unidade_id` nullable (gestao pode criar), `data_reserva`,
-  `status`, `valor_pago`, `motivo_reserva`
-- duplo-booking (mesmo espaco+data em Pendente/Aprovada) e bloqueado NA APLICACAO
-  (`_existe_reserva_ativa`), nao por indice parcial (MySQL nao suporta)
-- hard delete do espaco so se nao houver nenhuma `Reserva` vinculada; caso contrario
-  desativar (`ativo=False`). Morador so ve/solicita espacos `ativo=True`.
+`EspacoComum` + `Reserva` (tabelas historicas, sem tela de gestao):
+- A interface `/reservas` e os POSTs de solicitar, aprovar, pagar e cadastrar
+  espaco foram removidos. Os models e as tabelas `espacos_comuns` e `reservas`
+  permanecem. Nao dropar essas tabelas.
+- A portaria ainda le essa tabela em `/portaria/reservas` para eventos ja
+  gravados e para entrega/devolucao de chaves.
+- `AreaComum` / `ReservaArea` (`app/blueprints/areas.py`) e o modulo vigente.
+  Gestao em `GET /admin/reservas` e
+  `GET /sindico/reservas`: admin ve todas as areas; sindico so as de
+  `bloco_vinculado` no mandato (geral ve tambem `GERAL`). Assistente nao entra.
+  A tela tem tres abas sempre visiveis: Solicitacoes & Historico, calendario
+  e gestao de espacos. A entrada abre na primeira. O selo vermelho so aparece
+  quando ha pendencia. O filtro padrao e Pendentes; Aprovadas,
+  Recusadas/Canceladas e Todas mostram o historico sem os botoes de decisao.
+  No calendario, o clique num evento pendente abre o modal de analise
+  na mesma aba. Aprovar e recusar gravam por fetch, atualizam a cor
+  (ou retiram o evento recusado) e o contador, sem recarregar a pagina.
+  A fila mostra so o que aguarda resposta, com o selo da cobranca antecipada
+  ou embutida, e os botoes aprovar e recusar.
+  Morador em `GET /morador/reservas` ve areas ativas gerais ou do proprio bloco.
+  Reserva `Aprovada` com data de hoje ou futura vira o card do proximo evento,
+  com atalho da lista de convidados e, se houver, as regras do espaco.
+  Cobranca em aberto da taxa antecipada mostra o atalho do boleto. Taxa
+  embutida (sem antecipacao) avisa que entra no proximo boleto mensal.
+  Cobranca paga mostra a taxa quitada. Linha pendente fica em amarelo.
+  O dia fica ocupado em `Pendente`, `Aguardando Pagamento` ou `Aprovada`.
+  Boleto vencido da cota nao impede o pedido. Se
+  `aprovacao_automatica_reservas` e a taxa e zero, nasce `Aprovada`.
+  Aprovar area gratuita: `Aprovada`. Taxa com pagamento antecipado:
+  `Aguardando Pagamento`, boleto em 3 dias no plano "Taxas de Áreas Comuns";
+  a liquidacao CNAB dessa cobranca promove a reserva a `Aprovada`.
+  Taxa sem antecipacao: `Aprovada` e boleto no dia 10 do mes seguinte.
+  Lista em `GET|POST /morador/reservas/<id>/convidados`, so com reserva
+  `Aprovada`. O contador para na `capacidade` da area. CPF do convidado
+  so e obrigatorio quando `exigir_cpf_convidados` esta ligado; senao o
+  campo fica oculto. Remover so antes do horario de inicio e se ainda
+  nao houve check-in. A portaria mostra no dashboard as reservas
+  `Aprovada` de hoje. `GET /portaria/eventos/<id>` lista os convidados
+  em ordem alfabetica, com busca e check-in em um clique
+  (`status_checkin`, `checkin_em`, `checkin_por_usuario`). Desfazer
+  volta o botao. O painel mostra presentes e quem ainda falta.
+- `Infracao` (`infracoes`): rito em `app/blueprints/infracoes.py`.
+  `GET /admin/infracoes` e `GET /sindico/infracoes` listam com filtro de
+  status, tipo, bloco e unidade. Admin ve todos os blocos; sindico so
+  registra e julga unidades do mandato. Assistente nao entra.
+  Nasce `Notificada/Aguardando Defesa`. O prazo sugerido e hoje (America/Sao_Paulo)
+  + `dias_padrao_defesa_multa`, e pode ser editado. O morador em
+  `GET /morador/infracoes` envia defesa enquanto o status e esse e a data
+  e menor ou igual ao prazo; o status passa a `Em Análise` e o sino avisa
+  admin e o sindico do bloco. Acatar defesa: `Cancelada/Absolvida`.
+  Confirmar penalidade (em analise, ou notificada com prazo ja vencido)
+  vai para `Penalidade Confirmada`. Multa com valor gera `CobrancaUnidade`
+  no plano "Multas e Penalidades" (receita; criado se nao existir), com
+  vencimento em 5 dias ou no dia 10 do mes seguinte, e grava `cobranca_id`.
+  Anexos ficam em `static/uploads/infracoes` e so saem por rota autenticada.
+  O boot cria as tabelas antes das consultas.
 
 `LogAuditoria`: `usuario_id`, `condominio_id`, `mensagem`, `data_criacao`
 
@@ -365,10 +484,100 @@ Parceiro logado:
 
 `AutorizacaoAcesso`: pre-autorizacao do morador; status Pendente/Concluída/Cancelada
 
-`Notificacao`: `perfil_destino` MORADOR|PORTARIA; `unidade_id` so para morador
+`Notificacao`: `perfil_destino` MORADOR|PORTARIA|ADMIN|SINDICO;
+  `unidade_id` no morador e no alerta do sindico (filtrado pelo bloco da unidade);
+  `tipo` (default GERAL) e `link_destino` relativo. Admin ve ADMIN e PORTARIA.
+  Sininho do sindico so os chamados dos blocos do mandato.
 
 `Ocorrencia`: helpdesk; categorias Manutenção/Reclamação/Sugestão/Outros;
-  status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional
+  status Aberto / Em Andamento / Resolvido; `foto_arquivo` opcional;
+  `resposta`/`respondida_em`/`respondida_por_id`; `competencia` `bloco` ou `geral`.
+  `lida_pela_gestao` (False quando o morador abre ou responde; True quando a
+  gestao visualiza, responde ou muda o status), `ultima_interacao_em` e
+  `ultima_interacao_por` (MORADOR|GESTAO). Boot em `_garantir_colunas_ocorrencias`
+  antes de qualquer query, com backfill de notificacao para status Aberto.
+
+Financeiro (`app/blueprints/financeiro.py`, calculo em `app/financeiro_boleto.py`):
+- `Condominio`: `fin_repasses_ativos` (default True), `fin_multa_percentual`
+  (2.0), `fin_juros_mensal` (1.0), `fin_indice_correcao` (`UFIR-RJ`).
+  `_garantir_colunas_financeiro()` altera essas colunas antes de qualquer
+  `Condominio.query`.
+- Tabelas com `condominio_id`: `ContaBancaria`, `FundoFinanceiro`,
+  `PlanoConta` (`escopo_repasse` `ADM_GERAL` ou `BLOCO`), `IndiceEconomico`,
+  `RateioCondominio` (`Rascunho`/`Rateado`), `CobrancaUnidade`
+  (`A Vencer`/`Vencida`/`Paga`/`Cancelada`/`Acordo`) e `AcordoFinanceiro`
+  (`Ativo`/`Quitado`/`Cancelado`). A tabela nova nasce no `db.create_all()`
+  do boot, antes das consultas.
+- Seed do slug `prp` so se ainda nao houver conta nem plano: Itau 341,
+  agencia 0358, conta 43029-6, carteira 109; fundos CAIXA, RESERVA e OBRAS;
+  planos TAXA ADM, TAXA EXTRA, TAXA BLOCO, Acordos (`1.2.2`) e as duas despesas.
+- Rateio gera uma cobranca por unidade `Aprovada`/`Registrada` que nao seja
+  setor interno. Pagador: proprietario externo, senao pessoa proprietaria,
+  senao responsavel. `nosso_numero` sequencial do condominio.
+- Atraso: correcao pelo indice do condominio (zero no mes do vencimento),
+  multa sobre (original + correcao) e juros pro-rata de 30 dias. Paga e
+  cancelada nao recalculam.
+- Acordo cancela os titulos escolhidos e gera parcelas no plano `1.2.2`,
+  fundo do plano, composicao proporcional (a ultima parcela absorve o
+  centavo). Boleto Itaú 341 usa modulo 10/11, linha de 47 e barras ITF.
+- Remessa CNAB 400 Itaú e retorno (400, 240 ou CSV) em
+  `/admin/financeiro/conciliacao`. `CobrancaUnidade.status_banco` nasce
+  `Nao Enviado`. O boot faz o ALTER dessas colunas antes das consultas.
+  Liquidação `06`/`07`/`08`/`10` baixa o título, soma o saldo da conta e
+  quita o acordo quando todas as parcelas ficam pagas. Ocorrência `02`
+  só registra. Arquivo repetido não soma o saldo de novo.
+  A liquidação grava `retorno_cnab_id` no título.
+- Cobranças: `destinatario_tipo`, `situacao_juridica`, `notificacoes_json`
+  e `anexos_json` nascem no ALTER do boot. A lista esconde canceladas por
+  padrão; o switch inclui o valor delas só no card Total. Busca com `#id`,
+  `@nosso número` ou `*acordo` ignora o mês. E-mail e WhatsApp gravam o
+  envio; abrir o boleto do morador ou com `?track=1` preenche `lido_em`.
+  Anexo fica em `static/uploads/financeiro` e só sai pela rota autenticada
+  da própria cobrança.
+- Contas a pagar: `Fornecedor`, `DespesaPagamento` e `RepasseBloco` nascem
+  no `create_all`. Baixa de despesa e repasse debitam `saldo_atual` uma vez.
+  Anexo fica em `static/uploads/financeiro` e só sai por rota autenticada.
+  `apurar_repasses_blocos` lê boletos pagos: plano `ADM_GERAL` fica retido;
+  plano `BLOCO` segue o bloco da unidade; despesa paga do bloco e repasse
+  já feito abatem o saldo. O síndico só vê o próprio `blocos_escopo`.
+- Correção monetária: `CatalogoIndice` (global quando `condominio_id` é nulo)
+  e `ValorIndiceMensal`. O boot semeia os 22 índices e a série da UFIR-RJ
+  (2009–2026) mais IPCA, IGP-M e Poupança recentes. `calcular_encargos_atraso`
+  usa fator nominal ou percentual mensal, e ignora deflação quando o índice
+  manda. No mês do vencimento a correção continua zerada.
+- Frações: `GrupoFracao` e `ItemFracaoUnidade`. O boot cria a fração igualitária
+  (peso 1) se o condomínio ainda não tiver nenhuma, sem setores internos.
+  Rateio com `grupo_fracao_id` nulo continua cobrando a mesma cota de todas
+  as elegíveis. Com fração, `VALOR_UNITARIO` usa a composição como cota do
+  peso 1 e `DIVIDIR_TOTAL` reparte o montante. Isenção de 100% não gera boleto.
+  Unidade inativa sai do denominador. `Ativar Todas as Unidades` religa
+  todas as residenciais da fração. `Definir Peso 1,0` também reativa todas
+  e volta `modo_calculo` para `VALOR`. Fração usada em rateio não é excluída.
+- Medidores: `MedidorConfig`, `ParticipanteMedidor`, `CicloLeituraMedidor`
+  e `ItemLeituraMedidor`. Escopos por unidade, por bloco e da administração.
+  O síndico só gerencia o medidor do bloco do mandato. A autoleitura do
+  morador vale com o ciclo em aberto. `embutido_taxa_ordinaria` nasce
+  marcado: a fatura vai para Contas a Pagar e a rota de boleto/avulsa
+  recusa o lançamento. Com a trava desmarcada, a cobrança extra só nasce
+  depois da confirmação que mostra o impacto. Recalcular não altera boleto.
+  Boleto já remetido ao banco não é alterado.
+- Previsão orçamentária: `PrevisaoOrcamentaria` guarda o valor mensal de
+  cada plano, no escopo `GERAL` ou de um bloco. A tela compara o orçado
+  com boletos pagos (receita) e com `DespesaPagamento` não cancelada
+  (despesa, pelo `valor_original` e `bloco_alocado`). Despesa acima de
+  100% do teto fica vermelha. A fatura lançada pelo medidor entra na
+  competência e no plano daquele relógio.
+- Livro-caixa e fechamento: `LancamentoCaixaAvulso` registra entrada, saída
+  ou transferência entre fundos. Entrada e saída alteram `saldo_atual` da
+  conta; transferência só move o saldo contábil entre fundos. O extrato
+  une boletos pagos, despesas pagas, repasses realizados e lançamentos
+  avulsos. `FechamentoMensal` guarda o retrato da competência. Com o mês
+  fechado, criar, editar, baixar ou excluir cobrança, despesa, repasse e
+  lançamento avulso daquela competência é recusado, inclusive a baixa do
+  retorno CNAB. Reabrir exige justificativa e é só do admin. O balancete
+  impresso do admin usa o snapshot do fechamento. O síndico imprime só o
+  demonstrativo dos blocos do mandato, apurado ao vivo, sem o saldo das
+  contas bancárias do condomínio.
 
 ==================================================
 6) ROTAS E FLUXOS PRINCIPAIS
@@ -400,7 +609,27 @@ Administracao local (`app/blueprints/admin.py`):
 - `/admin/usuarios/novo`, excluir, alterar senha (admin only; sindico ganha
   `SindicoAgrupamento` no create)
 - `/admin/ocorrencias` + atualizar status (admin ou sindico)
+- `/admin/infracoes` e `/sindico/infracoes` (rito em `infracoes.py`; assistente nao)
+- `/admin/reservas` e `/sindico/reservas` (areas comuns em `areas.py`; a rota antiga `/reservas` nao existe mais)
 - `/admin/mudancas`
+- Financeiro (`app/blueprints/financeiro.py`, so admin local):
+  `GET /admin/financeiro`, `GET /admin/financeiro/bancos`,
+  `GET /admin/cadastros`, `GET /admin/financeiro/pagadores`,
+  `GET|POST /admin/financeiro/fracoes`, `GET /admin/financeiro/medidores`,
+  `GET|POST /admin/financeiro/orcamento`,
+  `GET|POST /admin/financeiro/lancamentos`,
+  `GET|POST /admin/financeiro/fechamento`,
+  `GET /sindico/medidores`, `GET|POST /admin/financeiro/rateios`,
+  `GET /admin/financeiro/cobrancas`,
+  `GET /admin/financeiro/cobrancas/imprimir`,
+  `GET|POST /admin/financeiro/acordos`,
+  `GET /admin/financeiro/conciliacao`,
+  `GET /admin/financeiro/pagamentos`, `GET /admin/financeiro/repasses`,
+  `GET /admin/financeiro/correcao-monetaria`.
+  Boleto e recibo: `GET /financeiro/boleto/<id>`, `GET /financeiro/recibo/<id>`.
+  Demonstrativo: `GET /financeiro/repasse/<id>` (admin do tenant ou síndico
+  do bloco). Morador: `GET /boletos`. Síndico: `GET /sindico/financeiro`,
+  `GET /sindico/financeiro/balancete`.
 
 Super Admin (`app/blueprints/superadmin.py`):
 - `/superadmin/login`, `/superadmin`, `/superadmin/condominios*`
@@ -413,27 +642,83 @@ Agendamento de Mudancas:
   Aprovar avanca para `Pendente Administração` com UPDATE condicional (anti-corrida).
 - Admin: aprova/rejeita pendentes da administracao (UPDATE condicional);
   pode criar mudanca avulsa ja `Aprovada` (bypass).
-- Portaria: check-in so se `Aprovada`, na data do dia (timezone America/Sao_Paulo)
-  e sem `data_chegada` previa.
+- Portaria: início (`data_chegada`) só se `Aprovada`, na data do dia
+  (America/Sao_Paulo) e sem chegada prévia. Finalizar grava `data_termino`,
+  observação opcional e status `Concluída`.
+- Histórico do morador lista todos os status da unidade, do mais recente
+  ao mais antigo. Cancelar só enquanto pendente.
+- Data da mudança no morador: `input type="date"` com `min` em D+3.
+  Domingo continua rejeitado no servidor.
 
 Reservas:
-- `GET /reservas` — morador solicita (so espacos `ativo=True`); admin/assistente/sindico gerenciam na jurisdicao.
-- POST solicitar / gestao criar / responder / cancelar / pagamento / salvar espaco
-- POST `/reservas/espacos/<id>/alternar_status` e `/reservas/espacos/<id>/excluir`
-  (`@gestao_espacos_required` + `_espaco_do_tenant` + `_usuario_pode_gerenciar_espaco`)
-- Exclusao aborta se houver historico de `Reserva`; usar desativar.
-- `GET /api/reservas/eventos` — FullCalendar
-- E-mails: `enviar_email_nova_reserva`, `enviar_email_resposta_reserva`
+- Modulo vigente: `AreaComum` / `ReservaArea` em `app/blueprints/areas.py`
+  (`/admin/reservas`, `/sindico/reservas`, `/morador/reservas`).
+- A rota generica `/reservas`, a API `/api/reservas/eventos` e o template
+  `reservas.html` foram removidos. As tabelas antigas ficam no banco.
+- Portaria `/portaria/reservas`: eventos antigos ja gravados e
+  entrega/devolucao de chaves (`chaves_entregue_em`, `chaves_devolvida_em`).
 
 Portaria (`app/blueprints/portaria.py`):
 - dashboard do dia (mudancas aprovadas + contexto operacional)
+- `/portaria/mudancas` mostra `horario_mudancas` e todas as aprovadas futuras
+  (sem teto de 7 dias). WhatsApp do morador só com `autoriza_interfone`.
+- Livro: com plantão aberto, anotações rápidas (pílulas) gravam carimbo
+  de hora em `ocorrencias` antes do fechamento.
 - controle de acesso: entrada avulsa, baixa de autorizacao, saida
-- encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador
+- encomendas: receber (foto opcional), entregar, reenviar notificacao ao morador.
+  A tela `/portaria/encomendas` coloca o recebimento ao lado da fila pendente.
+  Atalhos preenchem a descricao (`transportadora`). Chips abaixo do
+  destinatario listam so moradores `eh_morador` com telefone e
+  `autoriza_interfone`. O clique grava o nome e o numero formatado em
+  `destinatario_telefone` (o servidor normaliza para 55 + DDD). Um unico
+  chip ja vem selecionado. O checkbox
+  "Abrir WhatsApp para avisar o morador logo apos salvar" fica no
+  localStorage (`portaria_encomenda_whatsapp_auto`, padrao ligado).
+  Ligado, o JS abre `api.whatsapp.com/send` e so entao
+  `POST /portaria/encomendas/<id>/marcar_avisado`. Desligado, salva sem
+  aba e sem marcar aviso. O selo da fila e `Avisado` ou `Pendente de Aviso`.
+  "Avisar Pendentes em Lote" agrupa quem ainda nao foi avisado pelo telefone
+  (ou pela unidade, se nao houver numero) e abre uma mensagem por morador
+  (`1x Mercado Livre, 2x Shopee`). `Enviar Mensagem` marca so aquele grupo.
+  Nao ha gateway externo. Pacote com 3 dias ou mais usa texto de lembrete
+  no aviso manual. O historico de entregues fica recolhido.
+  Se a unidade for setor interno, apos o commit avisa por e-mail os contatos
+  do setor que tiverem e-mail (`enviar_email_encomenda_setor`). Falha de SMTP
+  nao desfaz a encomenda. Pendencias desses setores aparecem no dashboard
+  do admin e do sindico.
 - QR html5-qrcode na tela de encomendas
+- Dashboard da portaria mostra o banner dos eventos de área comum aprovados
+  para hoje e abre `/portaria/eventos/<id>` para o check-in da lista.
+- Sidebar unica da guarita (porteiro, admin e sindico): Visitantes & Acesso,
+  Interfone / Contatos, Encomendas, Mudancas, Reservas e Livro de Servico.
+  Um unico item `active`. `/portaria/acesso` marca so Visitantes & Acesso.
+  Admin, sindico e superadmin tem o botao de volta no topo dessa sidebar.
+  Nao ha sub-barra de pilulas no corpo da pagina.
+- Check-in em `GET /portaria/acesso`: formulario no topo, ao lado de quem
+  esta no condominio e das pre-autorizacoes de hoje. Saida e confirmacao
+  de chegada sao um clique. `GET /api/portaria/visitante-historico?doc=`
+  devolve nome, tipo e ultima placa so do tenant (`@portaria_required`).
+  Ao escolher a unidade, o mesmo check-in consulta o interfone
+  (`autoriza_interfone`) sem sair da tela.
+- Interfone / Contatos: `GET /portaria/contatos` e
+  `GET /api/portaria/buscar-unidade` (`@interfone_required`: porteiro, admin,
+  sindico do tenant ou superadmin). So pessoas com `eh_morador=True`.
+  Sindico limitado aos proprios agrupamentos. Telefone so sai no JSON se
+  `autoriza_interfone=True` (digitos com prefixo 55 + numero formatado).
+  Sem consentimento: nome, vinculo/parentesco e `autoriza_interfone: false`.
+  Setores internos (`eh_setor_interno`) aparecem no bloco `ADM` e na busca
+  `adm` / `administracao` / `zeladoria` / `sindico`. O sindico ve esses
+  setores mesmo fora dos agrupamentos residenciais.
+  Cada unidade inclui `autorizacoes_ativas`: pre-autorizacoes com status
+  Pendente e `data_prevista` igual a hoje em America/Sao_Paulo
+  (nome, tipo, documento, placa e validade). Cancelada, Concluida e outra
+  data nao entram.
 
 Autorizacoes e ocorrencias (morador):
 - `/morador/autorizacoes`, cancelar
 - `/morador/ocorrencias`, POST nova (unidade precisa estar Aprovada/Registrada)
+- `/morador/infracoes`: menu `Minhas Infrações`; defesa no prazo
+- `/morador/reservas`: menu `Reservas` das areas comuns
 
 Notificacoes:
 - `/notificacoes`, `/notificacoes/ler/<id>`
@@ -445,7 +730,9 @@ Clube de Vantagens — Morador (`@unidade_required`):
 - `POST /clube_vantagens/resgatar/<cupom_id>` — UPDATE atomico em `total_resgatado`
   + limite por unidade na mesma transacao
 
-Clube — Admin local: so leitura/analytics do proprio tenant.
+Clube — Admin local: analytics do proprio tenant e aba de parceiros ativos.
+  Pode sugerir comercio local (status Pendente, vinculo so no condominio).
+  Ativar, editar e bloquear parceiro continua exclusivo do Super Admin.
 
 Portal do Parceiro (`@parceiro_required`, exceto login/recuperacao):
 - dashboard, validacao manual + QR, cupons criar/desativar, perfil
@@ -468,11 +755,27 @@ Separacao de contextos (obrigatorio):
 - `auth_base.html` — login, cadastro inicial, recuperacao, condominio suspenso.
 - Nao misturar navegacao de contextos no mesmo base.
 - Novo portal: base dedicado + cor de destaque distinta.
-- Sidebars: `nav-pills`, ativo via `request.endpoint`, offcanvas no mobile.
+- Sidebars: `nav-pills`, um unico `active` por rota, offcanvas no mobile.
+  O corpo do menu rola sozinho; a marca e o botao Sair ficam fixos.
+  Admin e sindico usam secoes colapsaveis; a secao do item ativo abre sozinha.
+  Admin agrupa Visao geral, Condominio, Portaria & acesso, Financeiro e Configuracoes.
+  Financeiro (so admin) fica abaixo de Portaria & Acesso: dashboard, bancos,
+  planta de unidades, fracoes, medidores, previsao orcamentaria, rateios, cobrancas, acordos, conciliacao CNAB,
+  pagamentos, lancamentos, fechamento do mes, repasses e correcao monetaria.
+  O síndico tem `Prestação de Contas / Bloco` na seção Condomínio.
+  O morador tem `Boletos / 2ª Via` abaixo de Encomendas, `Minhas Infrações`
+  abaixo de Ocorrências e `Reservas` das áreas comuns. Admin e síndico têm `Infrações` e `Áreas Comuns`
+  no grupo Condomínio; o assistente não vê esses dois itens.
+  `Gestao de Cadastros` abre unidades (`/admin`). `Equipe e Acessos` abre
+  `/admin?tab=equipe`.   Admin e sindico entram na guarita por um item
+  `Portaria & Interfone`, que abre `/portaria/acesso`. Dentro da portaria
+  a sidebar lista Visitantes, Interfone, Encomendas, Mudancas, Reservas
+  e Livro, sem sub-barra no corpo da pagina.
 
 Anti Dead-End:
 - Portaria NAO deve ser o unico caminho sem volta para Admin/Super Admin.
 - `portaria_base.html`: se `role == 'admin'` botao "Voltar ao Painel Admin";
+  se `role == 'sindico'` botao "Voltar ao Painel do Síndico";
   se `role == 'superadmin'` botao "Voltar à Plataforma".
 - Condicionar por `role`, nao por `current_user.perfil` (esse atributo nao existe).
 
@@ -505,7 +808,18 @@ CRUD de parceiros: `superadmin_parceiros.html` (modals criar/editar + Quill).
 
 Portal Parceiro: paginas por funcao; pendente isolado.
 
-Ocorrencias: kanban `admin/ocorrencias_kanban.html`; morador em `morador/ocorrencias.html`.
+Ocorrencias: kanban `admin/ocorrencias_kanban.html` (alias `/sindico/ocorrencias`)
+  com filtro, parecer, encaminhamento bloco/geral, selo de nao lida, SLA e
+  `?foco=` (borda pulsante e modal). Morador responde em
+  `morador/ocorrencias.html` enquanto Aberto ou Em Andamento. Sidebar do
+  admin e do sindico mostra badge de chamados em Aberto no grupo Condominio.
+  Banner no `/admin`, `/admin/dashboard` e `/sindico` quando ha chamado Aberto.
+  Controle de acesso: resumo, filtro e sincronizacao facial a partir de
+  `foto_perfil`/`foto_facial`. Aba Equipamentos: `EquipamentoAcesso`
+  (Control iD / Intelbras, escopo geral ou bloco) e token
+  `Condominio.agent_api_token`. O Vizinsync Agent usa
+  `GET /api/v1/agent/sync-payload` e `POST /api/v1/agent/report`
+  com `Authorization: Bearer`. Script em `agent/vizinsync_agent.py`.
 
 ==================================================
 8) ARQUITETURA DE EMAIL
@@ -548,6 +862,9 @@ Mudancas SILENCIOSAS (mantem Aprovada/Registrada):
 - Dados pessoais ja existentes: CPF, nome, parentesco, nascimento, `autoriza_interfone`.
 - Atributos de veiculo existente (mesma placa): marca, cor.
 - Contato do proprietario externo sem troca de identidade.
+- Foto facial (`foto_facial`): rota `POST /atualizar-dados/foto-facial/<id>`
+  atualiza só a foto e não marca atualização pendente. O salvamento geral
+  copia `foto_facial` e as credenciais ao recriar a pessoa.
 
 Mudancas CRITICAS (status = Pendente):
 - Add/remove moradores (`_houve_add_remove_pessoas`).
@@ -581,7 +898,8 @@ Migracoes leves no boot (`app/__init__.py`):
 - Funcoes atuais (ordem aproximada do boot):
   `_garantir_colunas_multi_tenant`, `_garantir_colunas_usuarios`,
   `_garantir_coluna_slug_condominio`, `_garantir_colunas_whitelabel`,
-  `_garantir_coluna_ativo_condominio`, `_seed_condominio_transicao`,
+  `_garantir_coluna_ativo_condominio`, `_garantir_colunas_financeiro`,
+  `_seed_condominio_transicao`, `_seed_financeiro_prp`,
   `_migrar_sindico_agrupamentos`, `_garantir_colunas_unidades`,
   `_garantir_colunas_pessoas`, `_garantir_colunas_reservas`,
   `_garantir_coluna_condominio_espacos_comuns`, `_garantir_coluna_ativo_espacos_comuns`,
@@ -631,7 +949,7 @@ Auditoria:
   - mudanca de status de ocorrencia
 
 Uploads:
-- Pastas em config: logos, parceiros, ocorrencias, encomendas.
+- Pastas em config: logos, parceiros, ocorrencias, encomendas, faciais, infracoes.
 - Extensoes globais de documento: `ALLOWED_EXTENSIONS = {pdf, png, jpg, jpeg}`.
 - Logo de parceiro: png/jpg/jpeg/webp, max 2MB (`salvar_logo_parceiro`).
 - Fotos de ocorrencia/encomenda: helpers com blindagem de tipo/tamanho.
@@ -703,6 +1021,9 @@ Mudancas / portaria:
   no check-in do dia.
 
 Reservas:
-- Manter bloqueio de conflito na aplicacao; gestao respeita `gerenciado_por`
-  e bloco do sindico.
-- Espaco comum tem `ativo`; desativar para reforma. Excluir so sem historico de reservas.
+- O modulo vigente e `AreaComum` / `ReservaArea`. Nao recriar a rota `/reservas`.
+- Conflito de data continua travado na aplicacao, na tabela `reservas_area`.
+- Sindico entra em `/sindico/reservas` e so gere areas do proprio escopo.
+  Com `perm_reservas_geral`, tambem as areas gerais.
+- Admin ve todas as areas em `/admin/reservas`. Assistente nao entra.
+- Morador ve areas ativas gerais e as do proprio bloco em `/morador/reservas`.

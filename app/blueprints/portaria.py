@@ -13,9 +13,22 @@ morador, admin, síndico) — são só importadas aqui, dentro de cada view.
 
 import json
 import os
+import re
+import unicodedata
+from urllib.parse import quote
 from datetime import datetime
 
-from flask import current_app, flash, redirect, render_template, request, url_for
+from flask import (
+    abort,
+    current_app,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -25,18 +38,32 @@ except ImportError:  # pragma: no cover - Python < 3.9
     ZoneInfo = None
 
 from app import db
-from app.auth import condominio_id_obrigatorio, get_current_user, logout_usuario, portaria_required
+from app.auth import (
+    condominio_id_obrigatorio,
+    get_current_user,
+    interfone_required,
+    logout_usuario,
+    portaria_required,
+)
+from app.utils import (
+    get_condominio_estrutura,
+    nome_foto_facial_seguro,
+    normalizar_bloco_apartamento,
+    normalizar_bloco_codigo,
+)
 from app.models import (
     AgendamentoMudanca,
     AutorizacaoAcesso,
     Condominio,
     Encomenda,
+    EspacoComum,
     Guarita,
     ItemChecklist,
     PerfilDestinoNotificacao,
     Pessoa,
     Plantao,
     RegistroAcesso,
+    Reserva,
     Role,
     StatusAgendamentoMudanca,
     StatusAutorizacaoAcesso,
@@ -55,6 +82,14 @@ def _normalizar_documento_visitante(documento):
     bruto = (documento or "").strip().upper()
     limpo = "".join(ch for ch in bruto if ch.isalnum())
     return limpo[:20]
+
+
+def _rotulo_chegada(tipo):
+    if tipo == TipoVisitante.PRESTADOR:
+        return "prestador"
+    if tipo == TipoVisitante.DELIVERY:
+        return "entregador"
+    return "visitante"
 
 
 def _entrada_aberta_visitante(condominio_id, visitante_id):
@@ -221,17 +256,22 @@ def portaria_dashboard():
     condominio_id = _condominio_id_portaria(usuario)
     visitantes_no_local, prestadores_no_local = _contagens_acesso_aberto(condominio_id)
     encomendas_pendentes = 0
+    eventos_hoje = []
     if condominio_id:
         encomendas_pendentes = Encomenda.query.filter_by(
             condominio_id=condominio_id,
             status=StatusEncomenda.PENDENTE,
         ).count()
+        from app.blueprints.areas import eventos_aprovados_no_dia
+
+        eventos_hoje = eventos_aprovados_no_dia(condominio_id, _hoje_sao_paulo())
     return render_template(
         "portaria/dashboard.html",
         current_user=usuario,
         visitantes_no_local=visitantes_no_local,
         prestadores_no_local=prestadores_no_local,
         encomendas_pendentes=encomendas_pendentes,
+        eventos_hoje=eventos_hoje,
     )
 
 
@@ -270,9 +310,20 @@ def portaria_acesso():
     )
     unidades = (
         Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
+        .order_by(
+            Unidade.eh_setor_interno.desc(),
+            Unidade.bloco,
+            Unidade.apartamento,
+        )
         .all()
     )
+    permitidos = _blocos_permitidos_interfone(usuario)
+    if permitidos is not None:
+        unidades = [
+            unidade
+            for unidade in unidades
+            if _bloco_permitido(unidade.bloco, permitidos)
+        ]
     hoje_brasil = _hoje_sao_paulo()
     autorizacoes_hoje = (
         AutorizacaoAcesso.query.join(Unidade)
@@ -360,7 +411,7 @@ def portaria_acesso_entrada():
         flash("Unidade inválida para este condomínio.", "danger")
         return redirect(url_for("portaria_acesso"))
 
-    if tipo != TipoVisitante.PRESTADOR:
+    if tipo not in (TipoVisitante.PRESTADOR, TipoVisitante.DELIVERY):
         empresa = None
 
     visitante = Visitante.query.filter_by(
@@ -410,7 +461,7 @@ def portaria_acesso_entrada():
         f"Portaria '{usuario.username}' registrou entrada de {visitante.nome} "
         f"({visitante.tipo}) na unidade {unidade.identificador}.",
     )
-    rotulo = "prestador" if visitante.tipo == TipoVisitante.PRESTADOR else "visitante"
+    rotulo = _rotulo_chegada(visitante.tipo)
     _criar_notificacao(
         condominio_id=condominio_id,
         perfil_destino=PerfilDestinoNotificacao.MORADOR,
@@ -512,7 +563,7 @@ def portaria_acesso_autorizada(auth_id):
         f"Portaria '{usuario.username}' confirmou chegada autorizada de "
         f"{visitante.nome} ({visitante.tipo}) na unidade {unidade.identificador}.",
     )
-    rotulo = "prestador" if visitante.tipo == TipoVisitante.PRESTADOR else "visitante"
+    rotulo = _rotulo_chegada(visitante.tipo)
     _criar_notificacao(
         condominio_id=condominio_id,
         perfil_destino=PerfilDestinoNotificacao.MORADOR,
@@ -573,6 +624,132 @@ def portaria_acesso_saida(registro_id):
     return redirect(url_for("portaria_acesso"))
 
 
+def _telefone_whatsapp_valido(telefone):
+    """DDI 55 com DDD e número (10 ou 11 dígitos nacionais). Sem isso, não há link."""
+    whatsapp, _formatado = _telefones_interfone(telefone)
+    if len(whatsapp) not in (12, 13):
+        return ""
+    return whatsapp
+
+
+def _href_whatsapp_morador(unidade, texto):
+    """Link wa.me só para morador com consentimento de interfone e telefone válido."""
+    if unidade is None:
+        return None
+    pessoas = (
+        Pessoa.query.filter_by(
+            unidade_id=unidade.id,
+            eh_morador=True,
+            autoriza_interfone=True,
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
+        .all()
+    )
+    for pessoa in pessoas:
+        numero = _telefone_whatsapp_valido(pessoa.telefone)
+        if not numero:
+            continue
+        corpo = texto
+        if "{nome}" in texto:
+            corpo = texto.replace("{nome}", pessoa.nome_completo)
+        return f"https://wa.me/{numero}?text={quote(corpo)}"
+    return None
+
+
+def _url_whatsapp(telefone, texto):
+    """Link nativo api.whatsapp.com. Não dispara gateway externo."""
+    digitos = "".join(ch for ch in str(telefone or "") if ch.isdigit())
+    if digitos.startswith("00"):
+        digitos = digitos[2:]
+    if digitos.startswith("0"):
+        digitos = digitos.lstrip("0")
+    if not digitos.startswith("55"):
+        digitos = "55" + digitos
+    if len(digitos) not in (12, 13) or not texto:
+        return ""
+    return f"https://api.whatsapp.com/send?phone={digitos}&text={quote(texto)}"
+
+
+def _texto_aviso_encomendas(nome, descricoes, condominio_nome):
+    contagem = {}
+    for descricao in descricoes:
+        rotulo = (descricao or "pacote").strip() or "pacote"
+        contagem[rotulo] = contagem.get(rotulo, 0) + 1
+    partes = [f"{qtd}x {rotulo}" for rotulo, qtd in contagem.items()]
+    total = sum(contagem.values()) or len(descricoes)
+    verbo = "Chegou" if total == 1 else "Chegaram"
+    substantivo = "encomenda" if total == 1 else "encomendas"
+    lugar = condominio_nome or "condomínio"
+    return (
+        f"Olá {nome}! {verbo} {total} {substantivo} para você "
+        f"na portaria do {lugar}: {', '.join(partes)}."
+    )
+
+
+def _marcar_whatsapp_encomenda(encomenda):
+    encomenda.whatsapp_notificado = True
+    encomenda.whatsapp_notificado_em = _agora_sao_paulo()
+
+
+def _telefone_destinatario_encomenda(unidade, nome, telefone_informado):
+    """Telefone do destinatário, ou o WhatsApp principal da unidade se ele não tiver."""
+    pessoas = (
+        Pessoa.query.filter(
+            Pessoa.unidade_id == unidade.id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
+        .all()
+    )
+    autorizados = []
+    for pessoa in pessoas:
+        if not pessoa.autoriza_interfone:
+            continue
+        numero = _telefone_whatsapp_valido(pessoa.telefone)
+        if numero:
+            autorizados.append((pessoa, numero))
+    principal = autorizados[0][1] if autorizados else ""
+    informado = _telefone_whatsapp_valido(telefone_informado)
+    if informado and any(numero == informado for _, numero in autorizados):
+        return informado
+    escolhido = (nome or "").casefold()
+    if escolhido:
+        for pessoa, numero in autorizados:
+            if (pessoa.nome_completo or "").casefold() == escolhido:
+                return numero
+        for pessoa in pessoas:
+            if (pessoa.nome_completo or "").casefold() == escolhido:
+                return principal
+    return principal
+
+
+PILULAS_LIVRO = (
+    "Passagem de Plantão",
+    "Portões / Controle de Acesso",
+    "CFTV / Câmeras",
+    "Manutenção / Zeladoria",
+    "Barulho / Conduta",
+)
+
+HORARIO_MUDANCAS_PADRAO = (
+    "2ª a 6ª feira, das 08:00 às 17:00, e sábados, das 08:00 às 12:00."
+)
+
+
+def _texto_busca_unidade(unidade, nomes):
+    partes = [
+        unidade.identificador or "",
+        unidade.bloco or "",
+        unidade.apartamento or "",
+        " ".join(nomes),
+    ]
+    if unidade.eh_setor_interno:
+        partes.append("adm setor")
+        if _sem_acento(unidade.apartamento or "").startswith("administra"):
+            partes.append("administracao")
+    return " ".join(parte for parte in partes if parte)
+
+
 @portaria_required
 def portaria_encomendas():
     from app.routes import _condominio_id_portaria
@@ -598,17 +775,6 @@ def portaria_encomendas():
         .order_by(Encomenda.data_recebimento.asc())
         .all()
     )
-    # Unidade.pessoas é lazy="dynamic" (não aceita joinedload); pré-carrega em lote.
-    pessoas_por_unidade = {}
-    unidade_ids = {item.unidade_id for item in pendentes if item.unidade_id}
-    if unidade_ids:
-        for pessoa in (
-            Pessoa.query.filter(Pessoa.unidade_id.in_(unidade_ids))
-            .order_by(Pessoa.nome_completo.asc())
-            .all()
-        ):
-            pessoas_por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa)
-
     historico = (
         Encomenda.query.join(Unidade)
         .filter(
@@ -620,18 +786,101 @@ def portaria_encomendas():
     )
     unidades = (
         Unidade.query.filter_by(condominio_id=condominio_id)
-        .order_by(Unidade.bloco, Unidade.apartamento)
+        .order_by(
+            Unidade.eh_setor_interno.desc(),
+            Unidade.bloco,
+            Unidade.apartamento,
+        )
         .all()
     )
+    pessoas = (
+        Pessoa.query.join(Unidade)
+        .filter(
+            Unidade.condominio_id == condominio_id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
+        .all()
+    )
+    nomes_por_unidade = {}
+    contatos_por_unidade = {}
+    for pessoa in pessoas:
+        nomes_por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa.nome_completo)
+        telefone = _telefone_whatsapp_valido(pessoa.telefone) if pessoa.autoriza_interfone else ""
+        if telefone:
+            contatos_por_unidade.setdefault(pessoa.unidade_id, []).append(
+                {"nome": pessoa.nome_completo, "telefone": telefone}
+            )
+    busca_unidades = {
+        unidade.id: _texto_busca_unidade(
+            unidade, nomes_por_unidade.get(unidade.id, [])
+        )
+        for unidade in unidades
+    }
+    condominio = db.session.get(Condominio, condominio_id)
+    qtd_sem_aviso = sum(1 for item in pendentes if not item.whatsapp_notificado)
+    nova_id = request.args.get("nova", type=int)
+    encomenda_nova = None
+    if nova_id:
+        candidata = Encomenda.query.options(joinedload(Encomenda.unidade)).filter_by(
+            id=nova_id, condominio_id=condominio_id
+        ).first()
+        if candidata and candidata.status == StatusEncomenda.PENDENTE:
+            encomenda_nova = candidata
+    contatos_aviso = []
+    if encomenda_nova:
+        todos = contatos_por_unidade.get(encomenda_nova.unidade_id, [])
+        escolhido = (encomenda_nova.destinatario or "").casefold()
+        if escolhido:
+            contatos_aviso = [
+                contato for contato in todos if contato["nome"].casefold() == escolhido
+            ]
+        else:
+            contatos_aviso = list(todos)
+    session.pop("encomenda_wa", None)
+    session.pop("encomendas_wa_lote", None)
     return render_template(
         "portaria/encomendas.html",
         current_user=usuario,
         pendentes=pendentes,
         historico=historico,
         unidades=unidades,
-        pessoas_por_unidade=pessoas_por_unidade,
+        nomes_por_unidade=nomes_por_unidade,
+        contatos_por_unidade=contatos_por_unidade,
+        busca_unidades=busca_unidades,
+        encomenda_nova=encomenda_nova,
+        contatos_aviso=contatos_aviso,
         agora_entrega=_agora_sao_paulo(),
+        nome_condominio=condominio.nome if condominio else "condomínio",
+        qtd_sem_aviso=qtd_sem_aviso,
+        whatsapp_toast=session.pop("encomenda_toast", None),
     )
+
+
+def _avisar_emails_setor(unidade, quando, destinatario, codigo_rastreio):
+    """E-mail aos contatos do setor que tiverem endereço. Falha não desfaz a encomenda."""
+    from app.email_service import enviar_email_encomenda_setor
+
+    vistos = set()
+    falhas = 0
+    contatos = unidade.pessoas.filter(Pessoa.eh_morador.is_(True)).all()
+    for pessoa in contatos:
+        email = (pessoa.email or "").strip()
+        chave = email.casefold()
+        if not email or chave in vistos:
+            continue
+        vistos.add(chave)
+        try:
+            enviar_email_encomenda_setor(
+                email,
+                unidade.identificador,
+                quando.strftime("%d/%m/%Y %H:%M"),
+                destinatario=destinatario,
+                codigo_rastreio=codigo_rastreio,
+            )
+        except Exception:
+            falhas += 1
+    return falhas
 
 
 @portaria_required
@@ -640,12 +889,17 @@ def portaria_encomendas_receber():
 
     usuario = get_current_user()
     condominio_id = _condominio_id_portaria(usuario)
-    if not condominio_id:
-        flash(
-            "Conta de portaria sem condomínio vinculado. Contate a administração.",
-            "danger",
-        )
+
+    def _erro(mensagem):
+        if request.form.get("via_fetch") == "1":
+            resposta = jsonify({"ok": False, "erro": mensagem})
+            resposta.status_code = 400
+            return resposta
+        flash(mensagem, "danger")
         return redirect(url_for("portaria_encomendas"))
+
+    if not condominio_id:
+        return _erro("Conta de portaria sem condomínio vinculado. Contate a administração.")
 
     destinatario = (request.form.get("destinatario", "") or "").strip() or None
     transportadora = (request.form.get("transportadora", "") or "").strip() or None
@@ -655,29 +909,30 @@ def portaria_encomendas_receber():
     try:
         unidade_id = int(unidade_id_raw)
     except (TypeError, ValueError):
-        flash("Selecione a unidade destinatária da encomenda.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro("Selecione a unidade destinatária da encomenda.")
 
     unidade = Unidade.query.filter_by(
         id=unidade_id, condominio_id=condominio_id
     ).first()
     if unidade is None:
-        flash("Unidade inválida para este condomínio.", "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro("Unidade inválida para este condomínio.")
 
     foto_pacote, erro_foto = _salvar_foto_encomenda(
         request.files.get("foto_pacote"),
         prefixo=f"enc{unidade.id}",
     )
     if erro_foto:
-        flash(erro_foto, "danger")
-        return redirect(url_for("portaria_encomendas"))
+        return _erro(erro_foto)
 
     agora = _agora_sao_paulo()
+    telefone = _telefone_destinatario_encomenda(
+        unidade, destinatario, request.form.get("destinatario_telefone")
+    )
     encomenda = Encomenda(
         condominio_id=condominio_id,
         unidade_id=unidade.id,
         destinatario=destinatario,
+        destinatario_telefone=telefone or None,
         transportadora=transportadora,
         codigo_rastreio=codigo_rastreio[:100] if codigo_rastreio else None,
         foto_pacote=foto_pacote,
@@ -687,6 +942,7 @@ def portaria_encomendas_receber():
         tentativas_contato=1,
         porteiro_recebimento_id=usuario.id,
         porteiro_entrega_id=None,
+        whatsapp_notificado=False,
     )
     db.session.add(encomenda)
     _registrar_auditoria(
@@ -704,11 +960,39 @@ def portaria_encomendas_receber():
         unidade_id=unidade.id,
     )
     db.session.commit()
-    flash(
-        f"Encomenda recebida para {unidade.identificador} "
-        f"às {agora.strftime('%H:%M')}.",
-        "success",
-    )
+    if unidade.eh_setor_interno:
+        falhas = _avisar_emails_setor(unidade, agora, destinatario, codigo_rastreio)
+        if falhas:
+            flash(
+                "Encomenda registrada, mas não foi possível avisar "
+                "todos os e-mails do setor.",
+                "warning",
+            )
+
+    condominio = db.session.get(Condominio, condominio_id)
+    descricao = transportadora or "pacote"
+    texto = ""
+    if telefone:
+        texto = _texto_aviso_encomendas(
+            destinatario or "morador",
+            [descricao],
+            condominio.nome if condominio else "condomínio",
+        )
+    if request.form.get("via_fetch") == "1":
+        return jsonify(
+            {
+                "ok": True,
+                "id": encomenda.id,
+                "telefone": telefone or "",
+                "texto": texto,
+                "nome": destinatario or "",
+                "descricao": descricao,
+                "unidade": unidade.identificador,
+                "unidade_id": unidade.id,
+                "quando": agora.strftime("%d/%m/%Y %H:%M"),
+            }
+        )
+    flash("Encomenda registrada.", "success")
     return redirect(url_for("portaria_encomendas"))
 
 
@@ -908,6 +1192,129 @@ def portaria_encomendas_notificar(id):
     return redirect(url_for("portaria_encomendas"))
 
 
+def _grupos_aviso_encomendas(condominio_id):
+    """Pendentes de aviso, agrupadas pelo telefone ou, sem ele, pela unidade."""
+    pendentes = (
+        Encomenda.query.options(joinedload(Encomenda.unidade))
+        .filter(
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+            Encomenda.whatsapp_notificado.is_(False),
+        )
+        .order_by(Encomenda.data_recebimento.asc())
+        .all()
+    )
+    grupos = {}
+    for item in pendentes:
+        if item.destinatario_telefone:
+            chave = f"tel:{item.destinatario_telefone}"
+        else:
+            chave = f"unidade:{item.unidade_id}"
+        grupos.setdefault(chave, []).append(item)
+    condominio = db.session.get(Condominio, condominio_id)
+    nome_condo = condominio.nome if condominio else "condomínio"
+    saida = []
+    for itens in grupos.values():
+        nome = next((item.destinatario for item in itens if item.destinatario), None)
+        if not nome and itens[0].unidade is not None:
+            nome = itens[0].unidade.identificador
+        nome = nome or "Morador"
+        telefone = next((item.destinatario_telefone for item in itens if item.destinatario_telefone), "")
+        texto = _texto_aviso_encomendas(
+            nome,
+            [item.transportadora or "pacote" for item in itens],
+            nome_condo,
+        )
+        saida.append(
+            {
+                "nome": nome,
+                "quantidade": len(itens),
+                "ids": [item.id for item in itens],
+                "url": _url_whatsapp(telefone, texto) if telefone else "",
+            }
+        )
+    saida.sort(key=lambda grupo: grupo["nome"].casefold())
+    return saida
+
+
+@portaria_required
+def portaria_encomendas_avisos_pendentes():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "grupos": [], "total": 0})
+        resposta.status_code = 403
+        return resposta
+    grupos = _grupos_aviso_encomendas(condominio_id)
+    total = sum(grupo["quantidade"] for grupo in grupos)
+    return jsonify({"ok": True, "total": total, "moradores": len(grupos), "grupos": grupos})
+
+
+def _encomendas_para_marcar(ids, condominio_id):
+    if not ids:
+        return []
+    return (
+        Encomenda.query.filter(
+            Encomenda.id.in_(ids),
+            Encomenda.condominio_id == condominio_id,
+            Encomenda.status == StatusEncomenda.PENDENTE,
+        )
+        .all()
+    )
+
+
+@portaria_required
+def portaria_encomendas_marcar_avisado(id):
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 403
+        return resposta
+    encomendas = _encomendas_para_marcar([id], condominio_id)
+    if not encomendas:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 404
+        return resposta
+    for encomenda in encomendas:
+        _marcar_whatsapp_encomenda(encomenda)
+    db.session.commit()
+    return jsonify({"ok": True, "ids": [encomenda.id for encomenda in encomendas]})
+
+
+@portaria_required
+def portaria_encomendas_marcar_avisados():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False})
+        resposta.status_code = 403
+        return resposta
+    brutos = []
+    if request.is_json:
+        brutos = (request.get_json(silent=True) or {}).get("ids") or []
+    if not brutos:
+        brutos = request.form.getlist("ids")
+    ids = []
+    for bruto in brutos:
+        try:
+            ids.append(int(bruto))
+        except (TypeError, ValueError):
+            continue
+    encomendas = _encomendas_para_marcar(ids, condominio_id)
+    for encomenda in encomendas:
+        _marcar_whatsapp_encomenda(encomenda)
+    if encomendas:
+        db.session.commit()
+    return jsonify({"ok": True, "ids": [encomenda.id for encomenda in encomendas]})
+
+
 @portaria_required
 def portaria_mudanca_chegar(agendamento_id):
     from app.routes import _agendamento_do_tenant, _registrar_auditoria
@@ -920,15 +1327,15 @@ def portaria_mudanca_chegar(agendamento_id):
 
     if agendamento.status != StatusAgendamentoMudanca.APROVADA:
         flash("Somente mudanças aprovadas podem ter chegada registrada.", "warning")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     if agendamento.data_mudanca != hoje:
         flash("O check-in de chegada só é permitido no dia da mudança.", "warning")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     if agendamento.data_chegada:
         flash("A chegada deste caminhão já foi registrada.", "info")
-        return redirect(url_for("portaria_dashboard"))
+        return redirect(url_for("portaria_mudancas"))
 
     agendamento.data_chegada = _agora_sao_paulo()
     # Registra o usuário logado (porteiro nominal ou admin em atuação).
@@ -946,12 +1353,229 @@ def portaria_mudanca_chegar(agendamento_id):
         f"às {agendamento.data_chegada.strftime('%H:%M')}.",
         "success",
     )
-    return redirect(url_for("portaria_dashboard"))
+    return redirect(url_for("portaria_mudancas"))
+
+
+@portaria_required
+def portaria_mudanca_finalizar(agendamento_id):
+    from app.routes import (
+        _agendamento_do_tenant,
+        _condominio_id_portaria,
+        _registrar_auditoria,
+    )
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    agendamento = _agendamento_do_tenant(agendamento_id, condominio_id)
+    if agendamento.status != StatusAgendamentoMudanca.APROVADA:
+        flash("Somente uma mudança aprovada e em andamento pode ser finalizada.", "warning")
+        return redirect(url_for("portaria_mudancas"))
+    if not agendamento.data_chegada:
+        flash("Registre o início da mudança antes de finalizá-la.", "warning")
+        return redirect(url_for("portaria_mudancas"))
+    if agendamento.data_termino:
+        flash("Esta mudança já foi finalizada.", "info")
+        return redirect(url_for("portaria_mudancas"))
+
+    observacao = (request.form.get("observacao_portaria") or "").strip() or None
+    agendamento.data_termino = _agora_sao_paulo()
+    agendamento.observacao_portaria = observacao
+    agendamento.porteiro_termino_id = usuario.id
+    agendamento.status = StatusAgendamentoMudanca.CONCLUIDA
+    _registrar_auditoria(
+        usuario,
+        f"Portaria '{usuario.username}' finalizou a mudança {agendamento.tipo} "
+        f"da unidade {agendamento.unidade.identificador} às "
+        f"{agendamento.data_termino.strftime('%d/%m/%Y %H:%M')}.",
+    )
+    db.session.commit()
+    flash(
+        f"Mudança finalizada às {agendamento.data_termino.strftime('%H:%M')}.",
+        "success",
+    )
+    return redirect(url_for("portaria_mudancas"))
 
 
 @portaria_required
 def portaria_mudancas():
-    return redirect(url_for("portaria_dashboard"))
+    from app.routes import _condominio_id_portaria, _nome_responsavel_unidade
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    hoje = _hoje_sao_paulo()
+    condominio = Condominio.query.filter_by(id=condominio_id).first()
+    horario = (condominio.horario_mudancas or "").strip() if condominio else ""
+    mudancas_hoje = (
+        AgendamentoMudanca.query.filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
+            AgendamentoMudanca.data_mudanca == hoje,
+            AgendamentoMudanca.status.in_(
+                (
+                    StatusAgendamentoMudanca.APROVADA,
+                    StatusAgendamentoMudanca.CONCLUIDA,
+                )
+            ),
+        )
+        .order_by(AgendamentoMudanca.id.asc())
+        .all()
+    )
+    mudancas_proximos = (
+        AgendamentoMudanca.query.filter(
+            AgendamentoMudanca.condominio_id == condominio_id,
+            AgendamentoMudanca.status == StatusAgendamentoMudanca.APROVADA,
+            AgendamentoMudanca.data_mudanca > hoje,
+        )
+        .order_by(AgendamentoMudanca.data_mudanca.asc(), AgendamentoMudanca.id.asc())
+        .all()
+    )
+
+    def _href_mudanca(item):
+        texto = (
+            "Olá, {nome}! Aqui é da Portaria do condomínio. "
+            f"Confirmamos a mudança ({item.tipo}) da unidade "
+            f"{item.unidade.identificador} em "
+            f"{item.data_mudanca.strftime('%d/%m/%Y')}."
+        )
+        return _href_whatsapp_morador(item.unidade, texto)
+
+    return render_template(
+        "portaria_mudancas.html",
+        current_user=usuario,
+        hoje=hoje,
+        mudancas_hoje=mudancas_hoje,
+        mudancas_proximos=mudancas_proximos,
+        nome_responsavel=_nome_responsavel_unidade,
+        horario_mudancas=horario or HORARIO_MUDANCAS_PADRAO,
+        href_whatsapp_mudanca=_href_mudanca,
+        status_concluida=StatusAgendamentoMudanca.CONCLUIDA,
+    )
+
+
+@portaria_required
+def portaria_reservas():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    hoje = _hoje_sao_paulo()
+    from app.routes import _nome_responsavel_unidade
+
+    reservas = (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            EspacoComum.condominio_id == condominio_id,
+            Reserva.status == "Aprovada",
+            Reserva.data_reserva >= hoje,
+        )
+        .order_by(Reserva.data_reserva.asc(), EspacoComum.nome.asc())
+        .all()
+    )
+    reservas_hoje = [item for item in reservas if item.data_reserva == hoje]
+    reservas_proximas = [item for item in reservas if item.data_reserva > hoje]
+
+    def _href_reserva(item):
+        if item.unidade is None:
+            return None
+        texto = (
+            "Olá, {nome}! Aqui é da Portaria do condomínio. "
+            f"Confirmamos a reserva de {item.espaco.nome} em "
+            f"{item.data_reserva.strftime('%d/%m/%Y')} para a unidade "
+            f"{item.unidade.identificador}."
+        )
+        return _href_whatsapp_morador(item.unidade, texto)
+
+    return render_template(
+        "portaria/reservas.html",
+        current_user=usuario,
+        reservas_hoje=reservas_hoje,
+        reservas_proximas=reservas_proximas,
+        hoje=hoje,
+        nome_responsavel=_nome_responsavel_unidade,
+        href_whatsapp_reserva=_href_reserva,
+    )
+
+
+def _reserva_aprovada_do_tenant(reserva_id, condominio_id):
+    return (
+        Reserva.query.join(EspacoComum)
+        .filter(
+            Reserva.id == reserva_id,
+            EspacoComum.condominio_id == condominio_id,
+            Reserva.status == "Aprovada",
+        )
+        .first_or_404()
+    )
+
+
+@portaria_required
+def portaria_reserva_chaves(reserva_id):
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        flash(
+            "Conta de portaria sem condomínio vinculado. Contate a administração.",
+            "danger",
+        )
+        return redirect(url_for("portaria_dashboard"))
+
+    reserva = _reserva_aprovada_do_tenant(reserva_id, condominio_id)
+    acao = (request.form.get("acao") or "").strip()
+    agora = _agora_sao_paulo()
+    if acao == "entrega":
+        if reserva.chaves_entregue_em:
+            flash("A entrega das chaves já foi registrada.", "info")
+            return redirect(url_for("portaria_reservas"))
+        reserva.chaves_entregue_em = agora
+        reserva.porteiro_entrega_chaves_id = usuario.id
+        _registrar_auditoria(
+            usuario,
+            f"Portaria registrou entrega de chaves da reserva #{reserva.id} "
+            f"({reserva.espaco.nome}) às {agora.strftime('%d/%m/%Y %H:%M')}.",
+        )
+        flash(f"Entrega de chaves registrada às {agora.strftime('%H:%M')}.", "success")
+    elif acao == "devolucao":
+        if not reserva.chaves_entregue_em:
+            flash("Registre a entrega das chaves antes da devolução.", "warning")
+            return redirect(url_for("portaria_reservas"))
+        if reserva.chaves_devolvida_em:
+            flash("A devolução das chaves já foi registrada.", "info")
+            return redirect(url_for("portaria_reservas"))
+        reserva.chaves_devolvida_em = agora
+        reserva.porteiro_devolucao_chaves_id = usuario.id
+        _registrar_auditoria(
+            usuario,
+            f"Portaria registrou devolução de chaves da reserva #{reserva.id} "
+            f"({reserva.espaco.nome}) às {agora.strftime('%d/%m/%Y %H:%M')}.",
+        )
+        flash(f"Devolução de chaves registrada às {agora.strftime('%H:%M')}.", "success")
+    else:
+        flash("Ação de chaves inválida.", "danger")
+        return redirect(url_for("portaria_reservas"))
+    db.session.commit()
+    return redirect(url_for("portaria_reservas"))
 
 
 def _guarita_do_tenant(guarita_id, condominio_id):
@@ -1145,6 +1769,7 @@ def portaria_livro():
         condominio=condominio,
         permitir_apoio=bool(condominio and condominio.permitir_apoio),
         permitir_ronda=bool(condominio and condominio.permitir_ronda),
+        pilulas_livro=PILULAS_LIVRO,
         itens_checklist=[],
         porteiros=porteiros,
         guaritas=guaritas,
@@ -1364,12 +1989,22 @@ def portaria_plantao_evento():
         return redirect(url_for("portaria_dashboard"))
 
     plantao_id = request.form.get("plantao_id", type=int)
-    texto = (request.form.get("evento") or request.form.get("texto") or "").strip()
+    pilula = (request.form.get("pilula") or "").strip()
+    texto_livre = (request.form.get("evento") or request.form.get("texto") or "").strip()
+    if pilula and pilula not in PILULAS_LIVRO:
+        flash("Anotação rápida inválida.", "danger")
+        return redirect(url_for("portaria_livro"))
+    if pilula and texto_livre:
+        texto = f"{pilula}: {texto_livre}"
+    elif pilula:
+        texto = pilula
+    else:
+        texto = texto_livre
     if not plantao_id:
         flash("Plantão inválido.", "danger")
         return redirect(url_for("portaria_livro"))
     if not texto:
-        flash("Informe o texto do evento.", "danger")
+        flash("Informe o texto do evento ou escolha uma anotação rápida.", "danger")
         return redirect(url_for("portaria_livro"))
 
     plantao = _plantao_do_tenant(plantao_id, condominio_id)
@@ -1377,8 +2012,8 @@ def portaria_plantao_evento():
         flash("Só é possível registrar evento em plantão aberto.", "warning")
         return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
 
-    hora_atual = _agora_sao_paulo().strftime("%H:%M")
-    linha = f"[{hora_atual}] - {texto}\n"
+    carimbo = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
+    linha = f"[{carimbo}] - {texto}\n"
     plantao.ocorrencias = f"{plantao.ocorrencias or ''}{linha}"
 
     _registrar_auditoria(
@@ -1388,6 +2023,529 @@ def portaria_plantao_evento():
     db.session.commit()
     flash("Evento registrado no plantão.", "success")
     return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
+
+
+_BUSCA_BLOCO_APTO = re.compile(
+    r"^(?:bloco\s*)?(?P<bloco>\d{1,2})\s*[-/]?\s*(?:apto|apartamento|ap\.?)?\s*(?P<apto>\d{2,4})$",
+    re.IGNORECASE,
+)
+_ROTULOS_VINCULO = {
+    "Proprietário": "Proprietário",
+    "Locatário": "Inquilino",
+    "Morador": "Familiar/Morador",
+}
+_LIMITE_UNIDADES_INTERFONE = 8
+
+
+def _blocos_permitidos_interfone(usuario):
+    """None libera o condomínio. Síndico fica nos agrupamentos dele."""
+    if usuario.role != Role.SINDICO:
+        return None
+    from app.routes import _blocos_codigo_sindico
+
+    return _blocos_codigo_sindico(usuario)
+
+
+def _sem_acento(texto):
+    base = unicodedata.normalize("NFD", str(texto or ""))
+    return "".join(
+        caractere for caractere in base if unicodedata.category(caractere) != "Mn"
+    ).casefold().strip()
+
+
+_ATALHOS_SETOR = {
+    "adm": "adm",
+    "administracao": "administracao",
+    "zeladoria": "zeladoria",
+    "sindico": "sindico",
+}
+
+
+def _bloco_permitido(bloco, permitidos):
+    if permitidos is None or normalizar_bloco_codigo(bloco) == "ADM":
+        return True
+    return normalizar_bloco_codigo(bloco) in set(permitidos)
+
+
+def _atalho_setor(texto):
+    return _ATALHOS_SETOR.get(_sem_acento(texto))
+
+
+def _setores_internos(condominio_id):
+    return (
+        Unidade.query.filter(
+            Unidade.condominio_id == condominio_id,
+            Unidade.eh_setor_interno.is_(True),
+        )
+        .order_by(Unidade.apartamento.asc())
+        .all()
+    )
+
+
+def _setores_por_atalho(condominio_id, atalho):
+    setores = _setores_internos(condominio_id)
+
+    def nome(unidade):
+        return _sem_acento(unidade.apartamento)
+
+    if atalho == "adm":
+        return setores
+    if atalho == "administracao":
+        return [unidade for unidade in setores if nome(unidade).startswith("administra")]
+    if atalho == "zeladoria":
+        return [unidade for unidade in setores if "zeladoria" in nome(unidade)]
+    if atalho == "sindico":
+        diretos = [unidade for unidade in setores if "sindico" in nome(unidade)]
+        if diretos:
+            return diretos
+        return [unidade for unidade in setores if nome(unidade).startswith("administra")]
+    return []
+
+
+def _interpretar_busca_rapida(texto):
+    """Devolve (bloco, apartamento, nome). Nome vazio quando a busca é a unidade.
+
+    Número puro ("703", "105") é apartamento. "6703" também é apartamento,
+    não bloco 6 + apto 703. Bloco e apto juntos exigem separador ou rótulo
+    ("6 703", "6-703", "bloco 6 apto 703").
+    """
+    consulta = " ".join(str(texto or "").split())
+    if not consulta:
+        return "", "", ""
+    if consulta.isdigit() and 2 <= len(consulta) <= 4:
+        return "", consulta, ""
+    encontrado = _BUSCA_BLOCO_APTO.match(consulta)
+    if encontrado:
+        return (
+            normalizar_bloco_codigo(encontrado.group("bloco")),
+            encontrado.group("apto"),
+            "",
+        )
+    return "", "", consulta
+
+
+def _telefones_interfone(telefone):
+    """Número com DDI 55 e a forma legível. Sem dígitos, devolve vazio."""
+    digitos = "".join(ch for ch in str(telefone or "") if ch.isdigit())
+    digitos = digitos.lstrip("0")
+    if not digitos:
+        return "", ""
+    if digitos.startswith("55") and len(digitos) >= 12:
+        whatsapp = digitos
+        nacional = digitos[2:]
+    else:
+        whatsapp = "55" + digitos
+        nacional = digitos
+    if len(nacional) == 11:
+        formatado = f"({nacional[:2]}) {nacional[2:7]}-{nacional[7:]}"
+    elif len(nacional) == 10:
+        formatado = f"({nacional[:2]}) {nacional[2:6]}-{nacional[6:]}"
+    else:
+        formatado = nacional
+    return whatsapp, formatado
+
+
+def _morador_contato(pessoa):
+    """Payload da guarita. Telefone só entra com consentimento LGPD."""
+    item = {
+        "nome": pessoa.nome_completo,
+        "vinculo": _ROTULOS_VINCULO.get(pessoa.vinculo, pessoa.vinculo or "Morador"),
+        "parentesco": (pessoa.parentesco or "").strip(),
+        "responsavel": bool(pessoa.is_responsavel),
+        "autoriza_interfone": bool(pessoa.autoriza_interfone),
+    }
+    nome_foto = nome_foto_facial_seguro(pessoa.foto_facial)
+    if nome_foto:
+        item["foto_url"] = url_for("static", filename=f"uploads/faciais/{nome_foto}")
+    if not pessoa.autoriza_interfone:
+        return item
+    whatsapp, formatado = _telefones_interfone(pessoa.telefone)
+    if whatsapp:
+        item["telefone"] = whatsapp
+        item["telefone_formatado"] = formatado
+    return item
+
+
+def _moradores_residentes(unidade):
+    pessoas = (
+        Pessoa.query.filter(
+            Pessoa.unidade_id == unidade.id,
+            Pessoa.eh_morador.is_(True),
+        )
+        .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
+        .all()
+    )
+    return [_morador_contato(pessoa) for pessoa in pessoas]
+
+
+def _autorizacoes_ativas_unidade(unidade):
+    """Pré-autorizações pendentes cuja data prevista é hoje (fuso de São Paulo)."""
+    if not unidade.condominio_id:
+        return []
+    registros = (
+        AutorizacaoAcesso.query.filter(
+            AutorizacaoAcesso.unidade_id == unidade.id,
+            AutorizacaoAcesso.condominio_id == unidade.condominio_id,
+            AutorizacaoAcesso.status == StatusAutorizacaoAcesso.PENDENTE,
+            AutorizacaoAcesso.data_prevista == _hoje_sao_paulo(),
+        )
+        .order_by(AutorizacaoAcesso.nome_visitante.asc())
+        .all()
+    )
+    itens = []
+    for registro in registros:
+        itens.append(
+            {
+                "nome": registro.nome_visitante,
+                "tipo": registro.tipo or "",
+                "documento": (registro.documento or "").strip(),
+                "placa": (registro.placa_veiculo or "").strip(),
+                "validade": registro.data_prevista.strftime("%d/%m/%Y"),
+            }
+        )
+    return itens
+
+
+def _card_unidade(unidade, nome=""):
+    moradores = _moradores_residentes(unidade)
+    if nome:
+        termo = nome.casefold()
+        moradores = [item for item in moradores if termo in item["nome"].casefold()]
+    return {
+        "bloco": unidade.bloco,
+        "apartamento": unidade.apartamento,
+        "eh_setor_interno": bool(unidade.eh_setor_interno),
+        "moradores": moradores,
+        "autorizacoes_ativas": _autorizacoes_ativas_unidade(unidade),
+    }
+
+
+def _unidades_interfone(condominio_id, bloco, apartamento, consulta, permitidos):
+    from app.routes import _buscar_unidade
+
+    bloco_q, apto_q, nome = _interpretar_busca_rapida(consulta)
+    bloco = normalizar_bloco_codigo(bloco) if bloco else bloco_q
+    apartamento = str(apartamento or "").strip() or apto_q
+    atalho = _atalho_setor(consulta) if consulta else None
+    if atalho and not apartamento and (not bloco or bloco == "ADM"):
+        return (
+            [_card_unidade(unidade) for unidade in _setores_por_atalho(condominio_id, atalho)],
+            False,
+        )
+
+    if bloco == "ADM" and not apartamento:
+        return (
+            [_card_unidade(unidade) for unidade in _setores_internos(condominio_id)],
+            False,
+        )
+
+    if bloco and not _bloco_permitido(bloco, permitidos):
+        return [], False
+
+    if bloco and apartamento:
+        unidade = _buscar_unidade(bloco, apartamento, condominio_id=condominio_id)
+        if not unidade or not _bloco_permitido(unidade.bloco, permitidos):
+            return [], False
+        return [_card_unidade(unidade, nome)], False
+
+    # Bloco sozinho não lista o prédio inteiro: a guarita informa o apto ou o nome.
+    if not apartamento and not nome:
+        return [], False
+
+    consulta_unidades = Unidade.query.filter(Unidade.condominio_id == condominio_id)
+    if bloco:
+        consulta_unidades = consulta_unidades.filter(Unidade.bloco == bloco)
+    if apartamento:
+        consulta_unidades = consulta_unidades.filter(Unidade.apartamento == apartamento)
+    if nome:
+        termo = nome.replace("%", "").replace("_", "").strip()
+        if len(termo) < 2:
+            return [], False
+        consulta_unidades = consulta_unidades.join(Pessoa).filter(
+            Pessoa.eh_morador.is_(True),
+            Pessoa.nome_completo.ilike(f"%{termo}%"),
+        )
+
+    if permitidos is not None:
+        if not permitidos:
+            return [], False
+        consulta_unidades = consulta_unidades.filter(Unidade.bloco.in_(list(permitidos)))
+
+    brutas = (
+        consulta_unidades.order_by(Unidade.bloco.asc(), Unidade.apartamento.asc())
+        .limit(40)
+        .all()
+    )
+    vistas = []
+    ids = set()
+    for unidade in brutas:
+        if unidade.id in ids or not _bloco_permitido(unidade.bloco, permitidos):
+            continue
+        ids.add(unidade.id)
+        vistas.append(unidade)
+    truncado = len(vistas) > _LIMITE_UNIDADES_INTERFONE
+    cards = [
+        _card_unidade(unidade, nome)
+        for unidade in vistas[:_LIMITE_UNIDADES_INTERFONE]
+    ]
+    return cards, truncado
+
+
+@interfone_required
+def portaria_contatos():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    layout = "portaria_base.html"
+    setores = _setores_internos(condominio_id) if condominio_id else []
+    return render_template(
+        "portaria/contatos.html",
+        layout=layout,
+        current_user=usuario,
+        condominio_estrutura=get_condominio_estrutura(),
+        setores_internos=[setor.apartamento for setor in setores],
+        sem_condominio=not condominio_id,
+    )
+
+
+def _payload_visitante_historico(visitante):
+    """Nome, tipo e última placa. Sem telefone e sem dados de outro condomínio."""
+    registro = (
+        RegistroAcesso.query.filter(
+            RegistroAcesso.condominio_id == visitante.condominio_id,
+            RegistroAcesso.visitante_id == visitante.id,
+            RegistroAcesso.placa_veiculo.isnot(None),
+            RegistroAcesso.placa_veiculo != "",
+        )
+        .order_by(RegistroAcesso.data_entrada.desc())
+        .first()
+    )
+    tipo = (
+        visitante.tipo
+        if visitante.tipo in TipoVisitante.CHOICES
+        else TipoVisitante.VISITANTE
+    )
+    return {
+        "documento": visitante.documento,
+        "nome": visitante.nome,
+        "tipo": tipo,
+        "placa": (registro.placa_veiculo if registro else "") or "",
+    }
+
+
+@portaria_required
+def api_portaria_visitante_historico():
+    """Autopreenche o check-in com quem já entrou neste condomínio."""
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "visitantes": []})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    documento = _normalizar_documento_visitante(request.args.get("doc", ""))
+    nome = (request.args.get("nome") or "").replace("%", "").replace("_", "").strip()
+    encontrados = []
+    if len(documento) >= 3:
+        visitante = Visitante.query.filter_by(
+            condominio_id=condominio_id,
+            documento=documento,
+        ).first()
+        if visitante:
+            encontrados = [visitante]
+    elif len(nome) >= 3:
+        encontrados = (
+            Visitante.query.filter(
+                Visitante.condominio_id == condominio_id,
+                Visitante.nome.ilike(f"%{nome}%"),
+            )
+            .order_by(Visitante.nome.asc())
+            .limit(8)
+            .all()
+        )
+
+    resposta = jsonify(
+        {
+            "ok": True,
+            "visitantes": [
+                _payload_visitante_historico(item) for item in encontrados
+            ],
+        }
+    )
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+@interfone_required
+def api_portaria_buscar_unidade():
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    condominio_id = _condominio_id_portaria(usuario)
+    if not condominio_id:
+        resposta = jsonify({"ok": False, "unidades": [], "truncado": False})
+        resposta.status_code = 403
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
+    bloco, apartamento = normalizar_bloco_apartamento(
+        request.args.get("bloco", ""),
+        request.args.get("apartamento", ""),
+    )
+    unidades, truncado = _unidades_interfone(
+        condominio_id,
+        bloco,
+        apartamento,
+        request.args.get("q", ""),
+        _blocos_permitidos_interfone(usuario),
+    )
+    resposta = jsonify({"ok": True, "unidades": unidades, "truncado": truncado})
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+def _reserva_evento_hoje(reserva_id, condominio_id):
+    from app.models import AreaComum, ReservaArea, StatusReservaArea
+
+    if not condominio_id:
+        return None
+    reserva = (
+        ReservaArea.query.join(AreaComum)
+        .filter(
+            ReservaArea.id == reserva_id,
+            AreaComum.condominio_id == condominio_id,
+            ReservaArea.status == StatusReservaArea.APROVADA,
+            ReservaArea.data_evento == _hoje_sao_paulo(),
+        )
+        .first()
+    )
+    return reserva
+
+
+def _contagem_convidados(reserva):
+    presentes = sum(1 for item in reserva.convidados if item.status_checkin)
+    total = reserva.convidados.count()
+    return presentes, total - presentes
+
+
+def _resposta_checkin(reserva, convidado, entrou):
+    from flask import jsonify
+
+    presentes, faltam = _contagem_convidados(reserva)
+    hora = convidado.checkin_em.strftime("%H:%M") if convidado.checkin_em else ""
+    if request.headers.get("X-Requested-With") == "fetch":
+        mensagem = "Entrada registrada." if entrou else "Check-in desfeito."
+        resposta = jsonify(
+            success=True,
+            message=mensagem,
+            ok=True,
+            entrou=entrou,
+            hora=hora,
+            presentes=presentes,
+            faltam=faltam,
+        )
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+    return redirect(url_for("portaria_evento", reserva_id=reserva.id))
+
+
+@portaria_required
+def portaria_evento(reserva_id):
+    from app.routes import _condominio_id_portaria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidados = sorted(reserva.convidados.all(), key=lambda item: (item.nome or "").casefold())
+    presentes, faltam = _contagem_convidados(reserva)
+    return render_template(
+        "portaria/evento.html",
+        current_user=usuario,
+        reserva=reserva,
+        convidados=convidados,
+        presentes=presentes,
+        faltam=faltam,
+    )
+
+
+@portaria_required
+def portaria_evento_checkin(reserva_id, convidado_id):
+    from app.models import ConvidadoReserva
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidado = ConvidadoReserva.query.filter_by(
+        id=convidado_id, reserva_id=reserva.id
+    ).first()
+    if convidado is None:
+        abort(404)
+    if not convidado.status_checkin:
+        agora = _agora_sao_paulo()
+        linhas = ConvidadoReserva.query.filter_by(
+            id=convidado.id,
+            reserva_id=reserva.id,
+            status_checkin=False,
+        ).update(
+            {
+                ConvidadoReserva.status_checkin: True,
+                ConvidadoReserva.checkin_em: agora,
+                ConvidadoReserva.checkin_por_usuario: (usuario.username or "")[:80],
+            },
+            synchronize_session=False,
+        )
+        if linhas:
+            db.session.expire(convidado)
+            _registrar_auditoria(
+                usuario,
+                f"Check-in do convidado #{convidado.id} na reserva de área #{reserva.id}.",
+            )
+            db.session.commit()
+    return _resposta_checkin(reserva, convidado, True)
+
+
+@portaria_required
+def portaria_evento_desfazer(reserva_id, convidado_id):
+    from app.models import ConvidadoReserva
+    from app.routes import _condominio_id_portaria, _registrar_auditoria
+
+    usuario = get_current_user()
+    reserva = _reserva_evento_hoje(reserva_id, _condominio_id_portaria(usuario))
+    if reserva is None:
+        abort(404)
+    convidado = ConvidadoReserva.query.filter_by(
+        id=convidado_id, reserva_id=reserva.id
+    ).first()
+    if convidado is None:
+        abort(404)
+    if convidado.status_checkin:
+        linhas = ConvidadoReserva.query.filter_by(
+            id=convidado.id,
+            reserva_id=reserva.id,
+            status_checkin=True,
+        ).update(
+            {
+                ConvidadoReserva.status_checkin: False,
+                ConvidadoReserva.checkin_em: None,
+                ConvidadoReserva.checkin_por_usuario: None,
+            },
+            synchronize_session=False,
+        )
+        if linhas:
+            db.session.expire(convidado)
+            _registrar_auditoria(
+                usuario,
+                f"Desfez o check-in do convidado #{convidado.id} na reserva de área #{reserva.id}.",
+            )
+            db.session.commit()
+    return _resposta_checkin(reserva, convidado, False)
 
 
 def register(app):
@@ -1408,6 +2566,24 @@ def register(app):
         "/portaria/dashboard",
         "portaria_dashboard",
         portaria_dashboard,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/contatos",
+        "portaria_contatos",
+        portaria_contatos,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/portaria/buscar-unidade",
+        "api_portaria_buscar_unidade",
+        api_portaria_buscar_unidade,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/portaria/visitante-historico",
+        "api_portaria_visitante_historico",
+        api_portaria_visitante_historico,
         methods=["GET"],
     )
     app.add_url_rule(
@@ -1465,6 +2641,24 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/portaria/encomendas/avisos-pendentes",
+        "portaria_encomendas_avisos_pendentes",
+        portaria_encomendas_avisos_pendentes,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/<int:id>/marcar_avisado",
+        "portaria_encomendas_marcar_avisado",
+        portaria_encomendas_marcar_avisado,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/encomendas/marcar_avisados",
+        "portaria_encomendas_marcar_avisados",
+        portaria_encomendas_marcar_avisados,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/portaria/encomendas/<int:id>/reenviar_notificacao",
         "portaria_encomendas_reenviar_notificacao",
         portaria_encomendas_notificar,
@@ -1477,10 +2671,28 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/portaria/mudanca/<int:agendamento_id>/finalizar",
+        "portaria_mudanca_finalizar",
+        portaria_mudanca_finalizar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/portaria/mudancas",
         "portaria_mudancas",
         portaria_mudancas,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/reservas",
+        "portaria_reservas",
+        portaria_reservas,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/reservas/<int:reserva_id>/chaves",
+        "portaria_reserva_chaves",
+        portaria_reserva_chaves,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/portaria/livro",
@@ -1510,5 +2722,23 @@ def register(app):
         "/portaria/plantao/evento",
         "portaria_plantao_evento",
         portaria_plantao_evento,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>",
+        "portaria_evento",
+        portaria_evento,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>/convidados/<int:convidado_id>/checkin",
+        "portaria_evento_checkin",
+        portaria_evento_checkin,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/portaria/eventos/<int:reserva_id>/convidados/<int:convidado_id>/desfazer",
+        "portaria_evento_desfazer",
+        portaria_evento_desfazer,
         methods=["POST"],
     )

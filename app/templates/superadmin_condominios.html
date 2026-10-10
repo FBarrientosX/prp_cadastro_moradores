@@ -101,6 +101,10 @@
                                     title="Editar">
                                 <i class="bi bi-pencil"></i>
                             </button>
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="{{ url_for('admin_condominio', id=condo.id) }}">
+                                <i class="bi bi-building-gear me-1"></i>Dados
+                            </a>
                             <button type="button" class="btn btn-sm btn-outline-secondary"
                                     data-bs-toggle="modal"
                                     data-bs-target="#modalWhitelabel{{ condo.id }}">
@@ -346,6 +350,39 @@
                                        {% if not cfg or cfg.tem_subsindicos %}checked{% endif %}>
                                 <label class="form-check-label" for="edit_tem_subsindicos_{{ condo.id }}">
                                     Tem subsíndicos
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="col-12">
+                            <hr class="my-1">
+                            <p class="small text-muted mb-0">Reservas e infrações</p>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_dias_defesa_{{ condo.id }}">Prazo de defesa da multa (dias)</label>
+                            <input type="number" class="form-control" id="edit_dias_defesa_{{ condo.id }}"
+                                   name="dias_padrao_defesa_multa" min="1" max="365" required
+                                   value="{{ condo.dias_padrao_defesa_multa if condo.dias_padrao_defesa_multa is not none else 15 }}">
+                        </div>
+                        <div class="col-md-8 d-flex flex-column justify-content-center gap-2">
+                            <input type="hidden" name="exigir_cpf_convidados" value="0">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       id="edit_cpf_convidados_{{ condo.id }}"
+                                       name="exigir_cpf_convidados" value="1"
+                                       {% if condo.exigir_cpf_convidados %}checked{% endif %}>
+                                <label class="form-check-label" for="edit_cpf_convidados_{{ condo.id }}">
+                                    Exigir CPF na lista de convidados
+                                </label>
+                            </div>
+                            <input type="hidden" name="aprovacao_automatica_reservas" value="0">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       id="edit_aprovacao_reservas_{{ condo.id }}"
+                                       name="aprovacao_automatica_reservas" value="1"
+                                       {% if condo.aprovacao_automatica_reservas %}checked{% endif %}>
+                                <label class="form-check-label" for="edit_aprovacao_reservas_{{ condo.id }}">
+                                    Aprovar automaticamente reservas de áreas gratuitas
                                 </label>
                             </div>
                         </div>

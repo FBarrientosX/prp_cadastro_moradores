@@ -1,0 +1,10 @@
+{% if blocos_opcoes is defined and blocos_opcoes|length > 1 %}
+<nav class="d-flex flex-wrap gap-1 mb-3" aria-label="Filtrar por bloco">
+    <a class="btn btn-sm {{ 'btn-primary' if not bloco_filtro else 'btn-outline-primary' }}"
+       href="{{ url_for(request.endpoint) }}">Todos os meus blocos</a>
+    {% for codigo in blocos_opcoes %}
+    <a class="btn btn-sm {{ 'btn-primary' if bloco_filtro == codigo else 'btn-outline-primary' }}"
+       href="{{ url_for(request.endpoint, bloco=codigo) }}">Bloco {{ codigo }}</a>
+    {% endfor %}
+</nav>
+{% endif %}

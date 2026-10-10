@@ -1,0 +1,113 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Check-in do evento{% endblock %}
+
+{% block content %}
+<p class="mb-3"><a href="{{ url_for('portaria_dashboard') }}">← Painel da Portaria</a></p>
+<div class="mb-3">
+    <h1 class="h4 mb-1">{{ reserva.area.nome }}</h1>
+    <p class="text-muted mb-0">
+        Unid. {{ reserva.unidade.bloco }}-{{ reserva.unidade.apartamento }}
+        · {{ reserva.horario_inicio.strftime('%H:%M') }} às {{ reserva.horario_fim.strftime('%H:%M') }}
+    </p>
+</div>
+
+<div class="card border-0 shadow-sm mb-3" id="painel-lotacao">
+    <div class="card-body fw-semibold">
+        Presentes: <span id="presentes">{{ presentes }}</span>
+        | Faltam chegar: <span id="faltam">{{ faltam }}</span>
+    </div>
+</div>
+
+<label class="form-label" for="busca-convidado">Busca rápida</label>
+<input type="search" class="form-control mb-3" id="busca-convidado" placeholder="Digite o nome do visitante" autocomplete="off">
+
+{% if convidados %}
+<ul class="list-group" id="lista-convidados">
+    {% for convidado in convidados %}
+    <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2" data-nome="{{ convidado.nome }}">
+        <div>
+            <div class="fw-semibold">{{ convidado.nome }}</div>
+            {% if convidado.documento_cpf %}
+            <div class="small text-muted">{{ convidado.documento_cpf[:3] }}.{{ convidado.documento_cpf[3:6] }}.{{ convidado.documento_cpf[6:9] }}-{{ convidado.documento_cpf[9:] }}</div>
+            {% endif %}
+        </div>
+        <div class="js-acao" data-id="{{ convidado.id }}">
+            {% if convidado.status_checkin %}
+            <span class="badge text-bg-success">🟢 Entrou às {{ convidado.checkin_em.strftime('%H:%M') if convidado.checkin_em else '' }}</span>
+            <form class="d-inline js-checkin" method="post" action="{{ url_for('portaria_evento_desfazer', reserva_id=reserva.id, convidado_id=convidado.id) }}">
+                <button type="submit" class="btn btn-link btn-sm text-muted">Desfazer</button>
+            </form>
+            {% else %}
+            <form class="js-checkin" method="post" action="{{ url_for('portaria_evento_checkin', reserva_id=reserva.id, convidado_id=convidado.id) }}">
+                <button type="submit" class="btn btn-success btn-lg">✅ Check-in</button>
+            </form>
+            {% endif %}
+        </div>
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p class="text-muted mb-0">Nenhum convidado nesta lista.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var busca = document.getElementById("busca-convidado");
+    var lista = document.getElementById("lista-convidados");
+    var presentes = document.getElementById("presentes");
+    var faltam = document.getElementById("faltam");
+    if (busca && lista) {
+        function semAcento(texto) {
+            return (texto || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+        }
+        busca.addEventListener("input", function () {
+            var termo = semAcento(busca.value.trim());
+            lista.querySelectorAll("[data-nome]").forEach(function (item) {
+                var nome = semAcento(item.getAttribute("data-nome") || "");
+                item.classList.toggle("d-none", termo && nome.indexOf(termo) === -1);
+            });
+        });
+    }
+    function desenhar(acao, dados, checkinUrl, desfazerUrl) {
+        if (dados.entrou) {
+            acao.innerHTML = '<span class="badge text-bg-success">🟢 Entrou às ' + dados.hora + '</span> ' +
+                '<form class="d-inline js-checkin" method="post" action="' + desfazerUrl + '">' +
+                '<button type="submit" class="btn btn-link btn-sm text-muted">Desfazer</button></form>';
+        } else {
+            acao.innerHTML = '<form class="js-checkin" method="post" action="' + checkinUrl + '">' +
+                '<button type="submit" class="btn btn-success btn-lg">✅ Check-in</button></form>';
+        }
+        presentes.textContent = dados.presentes;
+        faltam.textContent = dados.faltam;
+        ligar(acao);
+    }
+    function ligar(escopo) {
+        (escopo || document).querySelectorAll("form.js-checkin").forEach(function (form) {
+            if (form.dataset.ligado === "1") return;
+            form.dataset.ligado = "1";
+            form.addEventListener("submit", function (evento) {
+                evento.preventDefault();
+                var acao = form.closest(".js-acao");
+                var id = acao.getAttribute("data-id");
+                var base = "{{ url_for('portaria_evento', reserva_id=reserva.id) }}/convidados/" + id;
+                fetch(form.action, {
+                    method: "POST",
+                    headers: { "X-Requested-With": "fetch", "Accept": "application/json" }
+                }).then(function (resposta) {
+                    if (!resposta.ok) throw new Error("falha");
+                    return resposta.json();
+                }).then(function (dados) {
+                    desenhar(acao, dados, base + "/checkin", base + "/desfazer");
+                }).catch(function () {
+                    form.submit();
+                });
+            });
+        });
+    }
+    ligar(document);
+})();
+</script>
+{% endblock %}

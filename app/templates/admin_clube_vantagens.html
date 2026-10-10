@@ -7,19 +7,123 @@
     <div>
         <h1 class="h3 mb-1">Clube de Vantagens</h1>
         <p class="text-muted mb-0">
-            Relatórios e analytics de resgates das unidades deste condomínio.
-            A gestão de parceiros é feita pela plataforma (Super Admin).
+            Relatórios das unidades deste condomínio e parceiros visíveis para os moradores.
         </p>
     </div>
 </div>
 
 <ul class="nav nav-tabs mb-4" role="tablist">
     <li class="nav-item" role="presentation">
-        <a class="nav-link active" href="{{ url_for('admin_clube_vantagens') }}">
+        <a class="nav-link {% if aba != 'parceiros' %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
             Relatórios / Analytics
         </a>
     </li>
+    <li class="nav-item" role="presentation">
+        <a class="nav-link {% if aba == 'parceiros' %}active{% endif %}" href="{{ url_for('admin_clube_vantagens', aba='parceiros') }}">
+            🏪 Parceiros Ativos
+        </a>
+    </li>
 </ul>
+
+{% if aba == 'parceiros' %}
+<div class="d-flex justify-content-end mb-3">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalSugerirParceiro">
+        + Cadastrar / Sugerir Parceiro Local
+    </button>
+</div>
+{% if sugestoes %}
+<h2 class="h6">Sugestões aguardando a plataforma</h2>
+<div class="row g-3 mb-4">
+    {% for parceiro in sugestoes %}
+    {% set partes = parceiro.nome_empresa.split(' - ', 1) %}
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="fw-semibold text-truncate">{{ partes[0] }}</div>
+                {% if partes|length > 1 %}
+                <div class="small text-muted text-truncate" style="max-width: 18rem;">{{ partes[1] }}</div>
+                {% endif %}
+                <div class="small text-muted">{{ parceiro.categoria }}</div>
+                <span class="badge text-bg-warning mt-2">Pendente de aprovação</span>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+<h2 class="h6">Visíveis para os moradores</h2>
+{% if parceiros %}
+<div class="row g-3">
+    {% for parceiro in parceiros %}
+    {% set partes = parceiro.nome_empresa.split(' - ', 1) %}
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="fw-semibold text-truncate">{{ partes[0] }}</div>
+                {% if partes|length > 1 %}
+                <div class="small text-muted text-truncate" style="max-width: 18rem;">{{ partes[1] }}</div>
+                {% endif %}
+                <div class="small text-muted mb-2">{{ parceiro.categoria }}{% if parceiro.endereco %} · {{ parceiro.endereco }}{% endif %}</div>
+                {% if parceiro.cupons_ativos_vitrine %}
+                <ul class="small mb-0">
+                    {% for cupom in parceiro.cupons_ativos_vitrine %}
+                    <li>{{ cupom.titulo }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="small text-muted mb-0">Nenhum cupom ativo no momento.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-info">Nenhum parceiro ativo visível para este condomínio.</div>
+{% endif %}
+<div class="modal fade" id="modalSugerirParceiro" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="{{ url_for('admin_clube_sugerir_parceiro') }}" class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Sugerir parceiro local</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted">A sugestão fica restrita a este condomínio e só entra na vitrine depois que a plataforma aprovar.</p>
+                <div class="mb-3">
+                    <label class="form-label" for="nome_empresa">Nome do comércio</label>
+                    <input class="form-control" id="nome_empresa" name="nome_empresa" required maxlength="100">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="email">E-mail</label>
+                    <input class="form-control" id="email" name="email" type="email" required maxlength="120">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="telefone">Telefone</label>
+                    <input class="form-control" id="telefone" name="telefone" maxlength="20">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="categoria">Categoria</label>
+                    <input class="form-control" id="categoria" name="categoria" required maxlength="50" list="lista-categorias-parceiro">
+                    <datalist id="lista-categorias-parceiro">
+                        {% for categoria in categorias_parceiro %}
+                        <option value="{{ categoria }}"></option>
+                        {% endfor %}
+                    </datalist>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label" for="endereco">Endereço</label>
+                    <input class="form-control" id="endereco" name="endereco" maxlength="255">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Enviar sugestão</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
 
 <div class="row g-3 mb-4">
     <div class="col-12 col-md-6 col-xl-3">
@@ -145,7 +249,12 @@
                             {% for cupom in analytics.cupons_conversao %}
                             <tr>
                                 <td>{{ cupom.titulo }}</td>
-                                <td>{{ cupom.parceiro }}</td>
+                                <td style="max-width: 14rem;">
+                                    <div class="text-truncate">{{ cupom.parceiro }}</div>
+                                    {% if cupom.parceiro_detalhe %}
+                                    <div class="small text-muted text-truncate">{{ cupom.parceiro_detalhe }}</div>
+                                    {% endif %}
+                                </td>
                                 <td class="text-end">{{ cupom.resgates }}</td>
                                 <td class="text-end">{{ cupom.utilizados }}</td>
                                 <td class="text-end">
@@ -165,9 +274,11 @@
         </div>
     </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
+{% if aba != 'parceiros' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
     const chartData = {{ analytics.charts | tojson }};
@@ -187,7 +298,19 @@
         options: {
             responsive: true,
             plugins: { legend: { display: false } },
-            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+            scales: {
+                y: { beginAtZero: true, ticks: { precision: 0 } },
+                x: {
+                    ticks: {
+                        maxRotation: 0,
+                        autoSkip: true,
+                        callback: function (valor) {
+                            const rotulo = this.getLabelForValue(valor);
+                            return rotulo.length > 22 ? rotulo.slice(0, 22) + "…" : rotulo;
+                        },
+                    },
+                },
+            },
         },
     });
 
@@ -230,4 +353,5 @@
         },
     });
 </script>
+{% endif %}
 {% endblock %}

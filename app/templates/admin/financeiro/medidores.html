@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+{% block title %}Medidores & Consumo{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 no-print">
+    <div>
+        <h1 class="h4 mb-1">💧 Medidores &amp; Consumo</h1>
+        <p class="text-muted small mb-0">Água, gás e energia por unidade, por bloco ou da administração.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalMedidor">⚙️ Cadastrar / Configurar Medidor</button>
+        <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalCiclo" {% if not medidor %}disabled{% endif %}>+ Nova Leitura do Período</button>
+        {% if ciclo and ciclo.status == 'Em Aberto' %}
+        <button class="btn btn-outline-primary btn-sm" type="submit" form="formLeituras">🔄 Recalcular Leitura Atual</button>
+        {% endif %}
+        {% if ciclo %}
+        <a class="btn btn-outline-secondary btn-sm" target="_blank" href="{{ url_for('admin_financeiro_medidor_imprimir', ciclo=ciclo.id) }}">🖨️ Imprimir Relatório de Leituras</a>
+        {% endif %}
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalAjudaMedidor">❓ Como funciona</button>
+    </div>
+</div>
+
+<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for(endpoint_painel) }}">
+    <div class="col-md-6">
+        <label class="form-label" for="medidor">Medidor</label>
+        <select class="form-select" id="medidor" name="medidor" onchange="this.form.submit()">
+            {% for item in medidores %}
+            <option value="{{ item.id }}" {% if medidor and item.id == medidor.id %}selected{% endif %}>{{ item.titulo }}</option>
+            {% else %}
+            <option value="">Nenhum medidor cadastrado</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label" for="ciclo">Período</label>
+        <select class="form-select" id="ciclo" name="ciclo" onchange="this.form.submit()">
+            {% for item in ciclos %}
+            <option value="{{ item.id }}" {% if ciclo and item.id == ciclo.id %}selected{% endif %}>{{ item.competencia }} — {{ item.status }}</option>
+            {% else %}
+            <option value="">Sem leitura</option>
+            {% endfor %}
+        </select>
+    </div>
+</form>
+
+{% if ciclo %}
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Consumo Total ({{ medidor.unidade_medida }})</div>
+            <div class="h4 mb-0">{{ '%.3f'|format(ciclo.consumo_total or 0)|replace('.', ',') }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Valor Total Apurado (R$)</div>
+            <div class="h4 mb-0">{{ ciclo.valor_total_apurado|reais }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Valor da Fatura Concessionária</div>
+            <div class="h4 mb-0">{{ ciclo.valor_fatura_concessionaria|reais }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Unidades Lidas / Pendentes</div>
+            <div class="h4 mb-0">{{ lidas }} / {{ pendentes }}</div>
+        </div></div>
+    </div>
+</div>
+
+{% if ciclo.status == 'Em Aberto' %}
+<div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+    {% if medidor.embutido_taxa_ordinaria %}
+    <span class="badge text-bg-secondary py-2">🛡️ Custo coberto pela Taxa Ordinária (Previsão Orçamentária)</span>
+    <form method="post" action="{{ url_for('admin_financeiro_medidor_despesa') }}" onsubmit="return confirm('Lançar a fatura da concessionária em Pagamentos / Despesas, sem cobrar as unidades?');">
+        <input type="hidden" name="ciclo_id" value="{{ ciclo.id }}">
+        <button class="btn btn-success btn-sm" type="submit">💸 Lançar Fatura em Pagamentos / Despesas</button>
+    </form>
+    {% elif medidor.nivel_medicao == 'POR_UNIDADE' %}
+    <button class="btn btn-success btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalImpactoCobranca">➕ Incluir no Boleto Mensal da Competência</button>
+    <button class="btn btn-outline-success btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalImpactoCobranca">🧾 Gerar Cobranças Avulsas Separadas</button>
+    {% elif medidor.modo_calculo == 'MONITORAMENTO_DESPESA' %}
+    <form method="post" action="{{ url_for('admin_financeiro_medidor_despesa') }}" onsubmit="return confirm('Gerar a conta a pagar desta fatura em Despesas?');">
+        <input type="hidden" name="ciclo_id" value="{{ ciclo.id }}">
+        <button class="btn btn-success btn-sm" type="submit">💸 Gerar Conta a Pagar em Despesas</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+
+<form id="formLeituras" method="post" enctype="multipart/form-data" action="{{ url_for('admin_financeiro_medidor_recalcular') }}">
+    <input type="hidden" name="ciclo_id" value="{{ ciclo.id }}">
+    <div class="row g-2 mb-2">
+        <div class="col-md-3">
+            <label class="form-label" for="valorFaturaGrade">Fatura da concessionária (R$)</label>
+            <input class="form-control" id="valorFaturaGrade" name="valor_fatura" value="{{ '%.2f'|format(ciclo.valor_fatura_concessionaria or 0) }}">
+        </div>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle bg-white">
+            <thead>
+                <tr>
+                    <th>Unidade / Ponto</th>
+                    <th>Leitura Anterior</th>
+                    <th>Leitura Atual</th>
+                    <th>[R]</th>
+                    <th>Consumo</th>
+                    <th>Crédito (R$)</th>
+                    <th>Valor Final (R$)</th>
+                    <th>Foto</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens %}
+                <tr>
+                    <td>
+                        {{ item.participante.identificador_ponto }}
+                        {% if item.alerta_anomalia %}<span class="badge text-bg-warning">🚨 Alerta de Consumo Atípico</span>{% endif %}
+                        {% if item.enviado_pelo_morador %}<span class="badge text-bg-info">Morador</span>{% endif %}
+                    </td>
+                    <td><input class="form-control form-control-sm" name="item_{{ item.id }}_anterior" value="{{ '%.3f'|format(item.leitura_anterior or 0) }}" {% if ciclo.status != 'Em Aberto' or item.lancamento_gerado %}readonly{% endif %}></td>
+                    <td><input class="form-control form-control-sm" name="item_{{ item.id }}_atual" value="{% if item.leitura_atual is not none %}{{ '%.3f'|format(item.leitura_atual) }}{% endif %}" {% if ciclo.status != 'Em Aberto' or item.lancamento_gerado %}readonly{% endif %}></td>
+                    <td>
+                        <input type="hidden" name="item_{{ item.id }}_reiniciada" value="0">
+                        <input type="checkbox" name="item_{{ item.id }}_reiniciada" value="1" {% if item.reiniciada %}checked{% endif %} {% if ciclo.status != 'Em Aberto' or item.lancamento_gerado %}disabled{% endif %} aria-label="Relógio reiniciado">
+                    </td>
+                    <td>{{ '%.3f'|format(item.consumo_final or 0)|replace('.', ',') }}</td>
+                    <td><input class="form-control form-control-sm" name="item_{{ item.id }}_credito" value="{{ '%.2f'|format(item.participante.credito_acumulado or 0) }}" {% if ciclo.status != 'Em Aberto' or item.lancamento_gerado %}readonly{% endif %}></td>
+                    <td>{{ item.valor_calculado|reais }}</td>
+                    <td>
+                        {% if item.foto_relogio %}
+                        <a href="{{ url_for('admin_financeiro_medidor_foto', item_id=item.id) }}" target="_blank">📷 Ver</a>
+                        {% endif %}
+                        {% if ciclo.status == 'Em Aberto' and not item.lancamento_gerado %}
+                        <input class="form-control form-control-sm" type="file" name="item_{{ item.id }}_foto" accept="image/jpeg,image/png,image/webp">
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.lancamento_gerado and item.valor_calculado %}✅ Lançado
+                        {% elif item.lancamento_gerado %}Sem valor
+                        {% else %}Pendente{% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="9" class="text-muted">Nenhum ponto neste período.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</form>
+{% elif medidor %}
+<div class="alert alert-info">Abra a leitura do período para lançar os relógios.</div>
+{% else %}
+<div class="alert alert-info">Cadastre o primeiro medidor para começar.</div>
+{% endif %}
+
+<div class="modal fade" id="modalMedidor" tabindex="-1" aria-labelledby="tituloModalMedidor" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_medidor_salvar') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloModalMedidor">Cadastrar / configurar medidor</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="medidor_id" id="medidorId" value="{{ medidor.id if medidor else '' }}">
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="form-label" for="tituloMedidor">Título</label>
+                        <input class="form-control" id="tituloMedidor" name="titulo" maxlength="160" required value="{{ medidor.titulo if medidor else '' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="tipoRecurso">Recurso</label>
+                        <select class="form-select" id="tipoRecurso" name="tipo_recurso">
+                            {% for codigo, rotulo in [('AGUA','Água'),('GAS','Gás'),('ENERGIA','Energia'),('OUTRO','Outro')] %}
+                            <option value="{{ codigo }}" {% if medidor and medidor.tipo_recurso == codigo %}selected{% endif %}>{{ rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="nivelMedicao">Nível de medição</label>
+                        <select class="form-select" id="nivelMedicao" name="nivel_medicao">
+                            <option value="POR_UNIDADE" {% if not medidor or medidor.nivel_medicao == 'POR_UNIDADE' %}selected{% endif %}>Por unidade individual</option>
+                            <option value="POR_BLOCO" {% if medidor and medidor.nivel_medicao == 'POR_BLOCO' %}selected{% endif %}>Coletivo por bloco</option>
+                            {% if eh_admin %}
+                            <option value="ADM_SETOR" {% if medidor and medidor.nivel_medicao == 'ADM_SETOR' %}selected{% endif %}>Administração / portarias / áreas comuns</option>
+                            {% endif %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="blocoVinculado">Bloco vinculado</label>
+                        <select class="form-select" id="blocoVinculado" name="bloco_vinculado">
+                            {% if eh_admin %}
+                            <option value="GERAL" {% if not medidor or medidor.bloco_vinculado == 'GERAL' %}selected{% endif %}>Todos / Geral</option>
+                            {% endif %}
+                            {% for bloco in blocos %}
+                            <option value="{{ bloco }}" {% if medidor and medidor.bloco_vinculado == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="unidadeMedida">Unidade de medida</label>
+                        <select class="form-select" id="unidadeMedida" name="unidade_medida">
+                            {% for medida in ['m³','kWh','kg','L','unid'] %}
+                            <option value="{{ medida }}" {% if medidor and medidor.unidade_medida == medida %}selected{% elif not medidor and medida == 'm³' %}selected{% endif %}>{{ medida }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="modoCalculo">Modo de cálculo</label>
+                        <select class="form-select" id="modoCalculo" name="modo_calculo">
+                            <option value="METRAGEM" {% if not medidor or medidor.modo_calculo == 'METRAGEM' %}selected{% endif %}>Metragem linear</option>
+                            <option value="POR_FAIXA" {% if medidor and medidor.modo_calculo == 'POR_FAIXA' %}selected{% endif %}>Por faixas progressivas</option>
+                            <option value="RATEIO_FATURA" {% if medidor and medidor.modo_calculo == 'RATEIO_FATURA' %}selected{% endif %}>Rateio proporcional da fatura da concessionária</option>
+                            <option value="MONITORAMENTO_DESPESA" {% if medidor and medidor.modo_calculo == 'MONITORAMENTO_DESPESA' %}selected{% endif %}>Monitoramento de despesa ADM/bloco</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="tarifa">Tarifa por medida (R$)</label>
+                        <input class="form-control" id="tarifa" name="tarifa_unitaria" value="{{ '%.4f'|format(medidor.tarifa_unitaria if medidor else 0) }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="taxaMinima">Taxa fixa / mínima (R$)</label>
+                        <input class="form-control" id="taxaMinima" name="taxa_fixa_minima" value="{{ '%.2f'|format(medidor.taxa_fixa_minima if medidor else 0) }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="planoMedidor">Plano de contas</label>
+                        <select class="form-select" id="planoMedidor" name="plano_conta_id">
+                            <option value="">Não definido</option>
+                            {% for plano in planos %}
+                            <option value="{{ plano.id }}" {% if medidor and medidor.plano_conta_id == plano.id %}selected{% endif %}>{{ plano.codigo }} — {{ plano.nome }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="fundoMedidor">Fundo</label>
+                        <select class="form-select" id="fundoMedidor" name="fundo_id">
+                            <option value="">Não definido</option>
+                            {% for fundo in fundos %}
+                            <option value="{{ fundo.id }}" {% if medidor and medidor.fundo_id == fundo.id %}selected{% endif %}>{{ fundo.nome }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <p class="small text-muted mt-3 mb-2">Faixas progressivas (usadas no modo por faixa). Deixe em branco para ignorar.</p>
+                {% for indice in range(4) %}
+                {% set faixa = faixas[indice] if indice < faixas|length else none %}
+                <div class="row g-2 mb-2">
+                    <div class="col"><input class="form-control form-control-sm" name="faixa_{{ indice }}_de" placeholder="De" value="{{ faixa.de if faixa else '' }}" aria-label="Início da faixa {{ indice + 1 }}"></div>
+                    <div class="col"><input class="form-control form-control-sm" name="faixa_{{ indice }}_ate" placeholder="Até" value="{{ faixa.ate if faixa else '' }}" aria-label="Fim da faixa {{ indice + 1 }}"></div>
+                    <div class="col"><input class="form-control form-control-sm" name="faixa_{{ indice }}_valor" placeholder="R$ por medida" value="{{ faixa.valor_m3 if faixa else '' }}" aria-label="Preço da faixa {{ indice + 1 }}"></div>
+                    <div class="col"><input class="form-control form-control-sm" name="faixa_{{ indice }}_taxa" placeholder="Taxa fixa" value="{{ faixa.taxa_fixa if faixa else '' }}" aria-label="Taxa da faixa {{ indice + 1 }}"></div>
+                </div>
+                {% endfor %}
+                <div id="blocoUnidades" class="mt-3">
+                    <div class="d-flex gap-2 align-items-end mb-2">
+                        <div>
+                            <label class="form-label" for="filtroUnidades">Filtrar unidades</label>
+                            <select class="form-select form-select-sm" id="filtroUnidades">
+                                <option value="">Todos os blocos</option>
+                                {% for bloco in blocos %}<option value="{{ bloco }}">Bloco {{ bloco }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <button class="btn btn-outline-secondary btn-sm" type="button" id="marcarVisiveis">Marcar visíveis</button>
+                    </div>
+                    <div class="border rounded p-2" style="max-height: 220px; overflow: auto;">
+                        {% for unidade in unidades %}
+                        <label class="d-block small unidade-opcao" data-bloco="{{ unidade.bloco }}">
+                            <input type="checkbox" name="unidade_id" value="{{ unidade.id }}" {% if unidade.id in participantes_ativos %}checked{% endif %}>
+                            {{ unidade.bloco }} / {{ unidade.apartamento }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div id="hintBloco" class="alert alert-light mt-3 d-none">Será criado um ponto de leitura para cada bloco do escopo escolhido.</div>
+                <div id="pontosAdm" class="mt-3 d-none">
+                    <label class="form-label" for="pontos">Pontos da administração (um por linha)</label>
+                    <textarea class="form-control" id="pontos" name="pontos" rows="4" placeholder="Portaria 1&#10;Piscina&#10;Bombas">{{ pontos_texto }}</textarea>
+                </div>
+                <div class="alert alert-warning mt-3 mb-0">
+                    <div class="form-check">
+                        <input type="hidden" name="embutido_taxa_ordinaria" value="0">
+                        <input class="form-check-input" type="checkbox" id="embutidoTaxa" name="embutido_taxa_ordinaria" value="1" {% if not medidor or medidor.embutido_taxa_ordinaria %}checked{% endif %}>
+                        <label class="form-check-label fw-semibold" for="embutidoTaxa">🔒 Custo já embutido na Taxa Condominial / Previsão Orçamentária (Bloquear repasse/cobrança nos boletos dos moradores)</label>
+                    </div>
+                    <p class="small mb-0 mt-2">Marque esta opção quando a conta de água/luz/gás é paga pelo caixa do condomínio/bloco através da taxa fixa mensal. O medidor servirá para auditoria de consumo (m³/kWh), controle de vazamentos e lançamento da fatura em Contas a Pagar, proibindo qualquer cobrança extra nos boletos das unidades.</p>
+                </div>
+                <div class="form-check mt-3">
+                    <input type="hidden" name="permitir_leitura_morador" value="0">
+                    <input class="form-check-input" type="checkbox" id="autoLeitura" name="permitir_leitura_morador" value="1" {% if medidor and medidor.permitir_leitura_morador %}checked{% endif %}>
+                    <label class="form-check-label" for="autoLeitura">📱 Permitir autoleitura pelo morador com foto</label>
+                </div>
+                <div class="form-check">
+                    <input type="hidden" name="ativo" value="0">
+                    <input class="form-check-input" type="checkbox" id="medidorAtivo" name="ativo" value="1" {% if not medidor or medidor.ativo %}checked{% endif %}>
+                    <label class="form-check-label" for="medidorAtivo">Medidor ativo</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" type="button" id="limparMedidor">Limpar para novo</button>
+                <button class="btn btn-primary" type="submit">Salvar medidor</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalCiclo" tabindex="-1" aria-labelledby="tituloCiclo" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_medidor_ciclo') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloCiclo">Nova leitura do período</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="medidor_id" value="{{ medidor.id if medidor else '' }}">
+                <label class="form-label" for="competenciaLeitura">Competência</label>
+                <input class="form-control mb-2" id="competenciaLeitura" name="competencia" placeholder="10/2026" maxlength="7" required>
+                <label class="form-label" for="dataLeitura">Data da leitura</label>
+                <input class="form-control datepicker mb-2" id="dataLeitura" name="data_leitura" type="text" required>
+                <label class="form-label" for="faturaNova">Valor da fatura da concessionária (R$)</label>
+                <input class="form-control mb-2" id="faturaNova" name="valor_fatura" value="0,00">
+                <label class="form-label" for="obsLeitura">Observações</label>
+                <textarea class="form-control" id="obsLeitura" name="observacoes" rows="2"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Abrir período</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if impacto %}
+<div class="modal fade" id="modalImpactoCobranca" tabindex="-1" aria-labelledby="tituloImpactoCobranca" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloImpactoCobranca">Cobrar consumo fora da taxa ordinária</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p>Salvar ou recalcular a leitura não mexe em boleto. A cobrança só nasce se você confirmar aqui.</p>
+                {% if impacto.qtd %}
+                <ul class="mb-0">
+                    <li>{{ impacto.qtd }} unidade(s) com valor a cobrar</li>
+                    <li>Total de {{ impacto.total|reais }}</li>
+                    <li>{{ impacto.com_boleto }} entram em boleto da competência ainda não remetido ao banco</li>
+                    <li>{{ impacto.novas }} viram cobrança nova</li>
+                </ul>
+                {% else %}
+                <p class="mb-0">Não há leitura com valor a cobrar neste período.</p>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <form method="post" action="{{ url_for('admin_financeiro_medidor_boleto') }}">
+                    <input type="hidden" name="ciclo_id" value="{{ ciclo.id }}">
+                    <button class="btn btn-success btn-sm" type="submit" {% if not impacto.qtd %}disabled{% endif %}>➕ Incluir no Boleto Mensal da Competência</button>
+                </form>
+                <form method="post" action="{{ url_for('admin_financeiro_medidor_avulsas') }}">
+                    <input type="hidden" name="ciclo_id" value="{{ ciclo.id }}">
+                    <button class="btn btn-outline-success btn-sm" type="submit" {% if not impacto.qtd %}disabled{% endif %}>🧾 Gerar Cobranças Avulsas Separadas</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="modalAjudaMedidor" tabindex="-1" aria-labelledby="tituloAjudaMedidor" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloAjudaMedidor">Medidores e consumo</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <ul class="nav nav-tabs" role="tablist">
+                    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#ajudaComo" type="button">Como funciona</button></li>
+                    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ajudaGlossario" type="button">Glossário</button></li>
+                    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ajudaDuvidas" type="button">Dúvidas comuns</button></li>
+                </ul>
+                <div class="tab-content pt-3">
+                    <div class="tab-pane fade show active" id="ajudaComo">
+                        <p>Cada medidor tem um nível. <strong>Por unidade</strong> é o hidrômetro ou relógio do apartamento. <strong>Coletivo por bloco</strong> é o relógio tronco daquele bloco. <strong>Administração</strong> cobre portaria, bombas e áreas comuns.</p>
+                        <p>O síndico gerencia os medidores cujo bloco vinculado está no mandato dele. A administração geral fica com o admin.</p>
+                        <p>Abra a competência, lance a leitura anterior e a atual e recalcule. O consumo é a diferença. Marque <strong>[R] Reiniciada</strong> quando o relógio for trocado ou virar o contador: aí a leitura atual entra inteira e não fica negativa.</p>
+                        <p><strong>Metragem</strong> multiplica o consumo pela tarifa e soma a taxa mínima. <strong>Faixas</strong> cobram cada trecho pelo preço daquela faixa. <strong>Rateio da fatura</strong> divide o valor da concessionária na proporção do consumo. <strong>Monitoramento</strong> apura o relógio e gera uma conta a pagar em Despesas.</p>
+                        <p>Se o custo já está na taxa ordinária, a leitura não gera boleto. A fatura da concessionária vai para Contas a Pagar e aparece no Orçado vs. Realizado. Cobrança por fora da taxa só nasce depois de uma confirmação que mostra quantas unidades e qual valor serão lançados. Recalcular a leitura não altera boleto. Boleto já enviado ao banco não é alterado: nasce outro título.</p>
+                        <p>Com a autoleitura ligada, o morador informa a leitura atual e anexa a foto do relógio enquanto o período está em aberto.</p>
+                    </div>
+                    <div class="tab-pane fade" id="ajudaGlossario">
+                        <p><strong>Leitura inicial.</strong> Marco do relógio na primeira competência, para o consumo não nascer do zero absoluto.</p>
+                        <p><strong>Crédito.</strong> Saldo em reais abatido do valor calculado. O que sobra continua no participante.</p>
+                        <p><strong>Alerta de consumo atípico.</strong> Consumo mais de 50% acima do período anterior, ou leitura que andou para trás sem [R].</p>
+                        <p><strong>Lançado.</strong> A linha já virou boleto, cobrança avulsa ou despesa e não entra de novo.</p>
+                    </div>
+                    <div class="tab-pane fade" id="ajudaDuvidas">
+                        <p><strong>O morador pode mudar a leitura depois do boleto?</strong> Não. Depois do lançamento a linha fica travada.</p>
+                        <p><strong>Unidade sem leitura entra na conta?</strong> Não. Ela continua pendente e o período segue em aberto.</p>
+                        <p><strong>A fatura da concessionária não fecha com a soma dos relógios?</strong> O card comparativo mostra os dois valores. No rateio, o que se cobra é a fatura, não a tarifa local.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    var nivel = document.getElementById("nivelMedicao");
+    var unidades = document.getElementById("blocoUnidades");
+    var hint = document.getElementById("hintBloco");
+    var pontos = document.getElementById("pontosAdm");
+    function ajustar() {
+        var valor = nivel.value;
+        unidades.classList.toggle("d-none", valor !== "POR_UNIDADE");
+        hint.classList.toggle("d-none", valor !== "POR_BLOCO");
+        pontos.classList.toggle("d-none", valor !== "ADM_SETOR");
+    }
+    nivel.addEventListener("change", ajustar);
+    ajustar();
+    var filtro = document.getElementById("filtroUnidades");
+    filtro.addEventListener("change", function () {
+        document.querySelectorAll(".unidade-opcao").forEach(function (linha) {
+            linha.classList.toggle("d-none", filtro.value && linha.getAttribute("data-bloco") !== filtro.value);
+        });
+    });
+    document.getElementById("marcarVisiveis").addEventListener("click", function () {
+        document.querySelectorAll(".unidade-opcao").forEach(function (linha) {
+            if (!linha.classList.contains("d-none")) {
+                linha.querySelector("input").checked = true;
+            }
+        });
+    });
+    document.getElementById("limparMedidor").addEventListener("click", function () {
+        document.getElementById("medidorId").value = "";
+        document.getElementById("tituloMedidor").value = "";
+        document.getElementById("embutidoTaxa").checked = true;
+    });
+})();
+</script>
+{% endblock %}

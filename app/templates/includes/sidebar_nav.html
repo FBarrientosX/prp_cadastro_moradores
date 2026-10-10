@@ -1,0 +1,281 @@
+{% set ep = request.endpoint or '' %}
+{% set aba = request.args.get('tab', '') %}
+{% set menu_prefix = menu_prefix if menu_prefix is defined else 'menu' %}
+{% set equipe_ativo = (ep == 'admin_index' and aba == 'equipe') or ep in ['admin_criar_usuario', 'admin_excluir_usuario', 'admin_alterar_senha_usuario'] %}
+{% set cadastros_ativo = (ep == 'admin_index' and not equipe_ativo) or ep.startswith('admin_cadastros') %}
+{% set portaria_ativo = ep.startswith('portaria_') %}
+{% set ocorrencias_ativo = ep in ['admin_ocorrencias', 'sindico_ocorrencias', 'admin_ocorrencias_atualizar_status', 'admin_ocorrencias_responder', 'admin_ocorrencias_encaminhar', 'admin_ocorrencias_visualizar'] %}
+{% set infracoes_ativo = ep.startswith('admin_infracoes') or ep.startswith('sindico_infracoes') or ep.startswith('morador_infracoes') %}
+{% set areas_ativo = ep.startswith('admin_areas') or ep.startswith('sindico_areas') or ep.startswith('morador_areas') %}
+{% set selo_ocorrencias = qtd_ocorrencias_abertas if qtd_ocorrencias_abertas else qtd_ocorrencias_nao_lidas %}
+{% set clube_ativo = ep in ['admin_clube_vantagens', 'admin_clube_vantagens_analytics', 'admin_clube_sugerir_parceiro'] %}
+{% set acesso_ativo = ep in ['admin_controle_acesso', 'admin_controle_acesso_salvar', 'admin_controle_acesso_revogar', 'admin_controle_acesso_sincronizar_faciais'] %}
+{% set financeiro_ativo = ep.startswith('admin_financeiro') %}
+{% set config_portaria_ativo = ep in ['admin_portaria_configuracoes', 'admin_portaria_configuracoes_gerais', 'admin_portaria_guarita_salvar', 'admin_portaria_guarita_toggle', 'admin_portaria_checklist_salvar', 'admin_portaria_checklist_toggle'] %}
+{% set setores_ativo = ep.startswith('admin_setores') %}
+{% set dados_condominio_ativo = ep == 'admin_condominio' %}
+{% set mudancas_portaria_ativo = ep in ['portaria_mudancas', 'portaria_mudanca_chegar'] %}
+{% set reservas_portaria_ativo = ep == 'portaria_reservas' %}
+{% set encomendas_portaria_ativo = ep.startswith('portaria_encomendas') %}
+{% set autorizacoes_portaria_ativo = ep in ['portaria_acesso', 'portaria_acesso_autorizada', 'portaria_acesso_entrada', 'portaria_acesso_saida'] %}
+
+{% macro grupo(id, titulo, icone, aberto, prefix, badge=0) %}
+<button class="sidebar-grupo-toggle" type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#{{ prefix }}-{{ id }}"
+        aria-expanded="{{ 'true' if aberto else 'false' }}"
+        aria-controls="{{ prefix }}-{{ id }}">
+    <span class="d-flex align-items-center">
+        <i class="bi {{ icone }} me-2"></i>{{ titulo }}
+        {% if badge %}
+        <span class="badge bg-danger rounded-pill ms-2">{{ badge }}</span>
+        {% endif %}
+    </span>
+    <i class="bi bi-chevron-right sidebar-chevron" aria-hidden="true"></i>
+</button>
+<div class="collapse{% if aberto %} show{% endif %}" id="{{ prefix }}-{{ id }}">
+    <div class="sidebar-sub nav flex-column gap-1">
+        {{ caller() }}
+    </div>
+</div>
+{% endmacro %}
+
+{% if sidebar_unidade and not sidebar_user %}
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'morador_inicio' %}active{% endif %}" href="{{ url_for('morador_inicio') }}">
+        <i class="bi bi-house-door me-2"></i>Início
+    </a>
+    <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ep == 'morador_encomendas' %}active{% endif %}" href="{{ url_for('morador_encomendas') }}">
+        <span class="d-flex align-items-center"><i class="bi bi-box2 me-2"></i>Encomendas</span>
+        {% if encomendas_pendentes_count > 0 %}
+        <span class="badge bg-danger rounded-pill">{{ encomendas_pendentes_count }}</span>
+        {% endif %}
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_boletos', 'financeiro_boleto', 'financeiro_recibo'] %}active{% endif %}" href="{{ url_for('morador_boletos') }}">
+        🧾 Boletos / 2ª Via
+    </a>
+    {% if leituras_medidor_abertas %}
+    <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('morador_medidores') %}active{% endif %}" href="{{ url_for('morador_medidores') }}">
+        ⏱️ Enviar Leitura de Medidor (Água/Gás)
+    </a>
+    {% endif %}
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_clube_vantagens', 'clube_vantagens'] %}active{% endif %}" href="{{ url_for('morador_clube_vantagens') }}">
+        <i class="bi bi-gift me-2"></i>Clube de Vantagens
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('morador_areas') %}active{% endif %}" href="{{ url_for('morador_areas') }}">
+        📅 Reservas
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_autorizacoes', 'morador_autorizacoes_cancelar'] %}active{% endif %}" href="{{ url_for('morador_autorizacoes') }}">
+        <i class="bi bi-person-check me-2"></i>Autorizações
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['morador_ocorrencias', 'morador_ocorrencias_nova'] %}active{% endif %}" href="{{ url_for('morador_ocorrencias') }}">
+        <i class="bi bi-clipboard2-pulse me-2"></i>Ocorrências
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('morador_infracoes') %}active{% endif %}" href="{{ url_for('morador_infracoes') }}">
+        🚨 Minhas Infrações
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'mudancas_morador' %}active{% endif %}" href="{{ url_for('mudancas_morador') }}">
+        <i class="bi bi-box-seam me-2"></i>Mudanças
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'atualizar_dados' %}active{% endif %}" href="{{ url_for('atualizar_dados') }}">
+        <i class="bi bi-card-checklist me-2"></i>Meu Cadastro
+    </a>
+{% elif sidebar_user and sidebar_user.role == 'sindico' %}
+    {% set condominio_aberto = ep == 'sindico_dashboard' or ocorrencias_ativo or infracoes_ativo or areas_ativo or ep == 'sindico_mudancas' or ep == 'sindico_financeiro' or ep == 'sindico_financeiro_balancete' or ep.startswith('financeiro_repasse') or ep.startswith('admin_cadastros') or ep == 'sindico_medidores' %}
+    {% set portaria_aberto = portaria_ativo %}
+    {% set config_aberto = setores_ativo or dados_condominio_ativo %}
+    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix, qtd_pendencias_condominio) %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_dashboard' %}active{% endif %}" href="{{ url_for('sindico_dashboard') }}">
+            <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_cadastros') %}active{% endif %}" href="{{ url_for('admin_cadastros') }}">
+            🏠 Planta de Unidades &amp; Pagadores
+        </a>
+        <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('sindico_ocorrencias') }}">
+            <span class="d-flex align-items-center"><i class="bi bi-kanban me-2"></i>Ocorrências</span>
+            {% if selo_ocorrencias %}
+            <span class="badge bg-danger rounded-pill">{{ selo_ocorrencias }}</span>
+            {% endif %}
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('sindico_infracoes') %}active{% endif %}" href="{{ url_for('sindico_infracoes') }}">
+            🚨 Infrações
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_mudancas' %}active{% endif %}" href="{{ url_for('sindico_mudancas') }}">
+            <i class="bi bi-box-seam me-2"></i>Mudanças
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('sindico_areas') %}active{% endif %}" href="{{ url_for('sindico_areas') }}">
+            📅 Áreas Comuns
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_financeiro' or ep == 'sindico_financeiro_balancete' or ep.startswith('financeiro_repasse') %}active{% endif %}" href="{{ url_for('sindico_financeiro') }}">
+            💰 Prestação de Contas / Bloco
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_medidores' %}active{% endif %}" href="{{ url_for('sindico_medidores') }}">
+            💧 Medidores do Bloco
+        </a>
+    {% endcall %}
+    {% if sidebar_user.perm_portaria %}
+    {% call grupo('portaria', 'Portaria & Acesso', 'bi-shield-check', portaria_aberto, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_acesso') }}">
+            <i class="bi bi-shield-check me-2"></i>Portaria &amp; Interfone
+        </a>
+    {% endcall %}
+    {% endif %}
+    {% if sidebar_user.perm_configuracoes %}
+    {% call grupo('config', 'Configurações', 'bi-gear', config_aberto, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if setores_ativo %}active{% endif %}" href="{{ url_for('admin_setores') }}">
+            <i class="bi bi-building me-2"></i>Setores / Contatos ADM
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if dados_condominio_ativo %}active{% endif %}" href="{{ url_for('admin_condominio') }}">
+            <i class="bi bi-building-gear me-2"></i>Dados do Condomínio
+        </a>
+    {% endcall %}
+    {% endif %}
+{% elif sidebar_user and sidebar_user.role == 'porteiro' %}
+    <a class="nav-link text-white d-flex align-items-center {% if autorizacoes_portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_acesso') }}">
+        <i class="bi bi-person-vcard me-2"></i>Visitantes &amp; Acesso
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'portaria_contatos' %}active{% endif %}" href="{{ url_for('portaria_contatos') }}">
+        <i class="bi bi-telephone me-2"></i>Interfone / Contatos
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if encomendas_portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_encomendas') }}">
+        <i class="bi bi-box-seam me-2"></i>Encomendas
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if mudancas_portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_mudancas') }}">
+        <i class="bi bi-truck me-2"></i>Mudanças
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if reservas_portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_reservas') }}">
+        <i class="bi bi-calendar-event me-2"></i>Reservas
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep in ['portaria_livro', 'portaria_plantao_abrir', 'portaria_plantao_fechar', 'portaria_plantao_ocorrencia', 'portaria_plantao_evento'] %}active{% endif %}" href="{{ url_for('portaria_livro') }}">
+        <i class="bi bi-journal-text me-2"></i>Livro de Serviço
+    </a>
+{% elif sidebar_user and sidebar_user.role in ['admin', 'assistente'] %}
+    {% set condominio_aberto = cadastros_ativo or ocorrencias_ativo or infracoes_ativo or areas_ativo or ep == 'admin_mudancas' or clube_ativo %}
+    {% set portaria_aberto = portaria_ativo or acesso_ativo %}
+    {% set config_aberto = equipe_ativo or setores_ativo or config_portaria_ativo or dados_condominio_ativo %}
+    {% if sidebar_user.role == 'admin' %}
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
+        <i class="bi bi-speedometer2 me-2"></i>Dashboard
+    </a>
+    {% endif %}
+    {% call grupo('condominio', 'Condomínio', 'bi-buildings', condominio_aberto, menu_prefix, qtd_pendencias_condominio if sidebar_user.role == 'admin' else 0) %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_index' and not equipe_ativo %}active{% endif %}" href="{{ url_for('admin_index') }}">
+            <i class="bi bi-people me-2"></i>Gestão de Cadastros
+        </a>
+        {% if sidebar_user.role == 'admin' %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_cadastros') %}active{% endif %}" href="{{ url_for('admin_cadastros') }}">
+            🏠 Planta de Unidades &amp; Pagadores
+        </a>
+        {% endif %}
+        {% if sidebar_user.role == 'admin' %}
+        <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('admin_ocorrencias') }}">
+            <span class="d-flex align-items-center"><i class="bi bi-kanban me-2"></i>Ocorrências</span>
+            {% if selo_ocorrencias %}
+            <span class="badge bg-danger rounded-pill">{{ selo_ocorrencias }}</span>
+            {% endif %}
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_infracoes') %}active{% endif %}" href="{{ url_for('admin_infracoes') }}">
+            🚨 Infrações
+        </a>
+        {% endif %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_mudancas' %}active{% endif %}" href="{{ url_for('admin_mudancas') }}">
+            <i class="bi bi-box-seam me-2"></i>Mudanças
+        </a>
+        {% if sidebar_user.role == 'admin' %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_areas') %}active{% endif %}" href="{{ url_for('admin_areas') }}">
+            📅 Áreas Comuns
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if clube_ativo %}active{% endif %}" href="{{ url_for('admin_clube_vantagens') }}">
+            <i class="bi bi-shop me-2"></i>Clube de Vantagens
+        </a>
+        {% endif %}
+    {% endcall %}
+    {% if sidebar_user.role == 'admin' %}
+    {% call grupo('portaria', 'Portaria & Acesso', 'bi-shield-check', portaria_aberto, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if portaria_ativo %}active{% endif %}" href="{{ url_for('portaria_acesso') }}">
+            <i class="bi bi-shield-check me-2"></i>Portaria &amp; Interfone
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if acesso_ativo %}active{% endif %}" href="{{ url_for('admin_controle_acesso') }}">
+            <i class="bi bi-key me-2"></i>Controle de Acesso
+        </a>
+    {% endcall %}
+    {% call grupo('financeiro', '💰 Financeiro', 'bi-cash-coin', financeiro_ativo, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro' %}active{% endif %}" href="{{ url_for('admin_financeiro') }}">
+            📊 Dashboard Financeiro
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_bancos' %}active{% endif %}" href="{{ url_for('admin_financeiro_bancos') }}">
+            🏦 Banco / Caixa e Plano de Contas
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_orcamento') %}active{% endif %}" href="{{ url_for('admin_financeiro_orcamento') }}">
+            📊 Previsão Orçamentária
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_pagadores' %}active{% endif %}" href="{{ url_for('admin_financeiro_pagadores') }}">
+            🏠 Planta de Unidades &amp; Pagadores
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_frac') %}active{% endif %}" href="{{ url_for('admin_financeiro_fracoes') }}">
+            📐 Frações
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_medidor') %}active{% endif %}" href="{{ url_for('admin_financeiro_medidores') }}">
+            💧 Medidores &amp; Consumo
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_rateios' %}active{% endif %}" href="{{ url_for('admin_financeiro_rateios') }}">
+            <i class="bi bi-pie-chart me-2"></i>Rateios / Taxa Condomínio
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_cobrancas' %}active{% endif %}" href="{{ url_for('admin_financeiro_cobrancas') }}">
+            🧾 Cobranças / Boletos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_acordo') %}active{% endif %}" href="{{ url_for('admin_financeiro_acordos') }}">
+            🤝 Acordos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_concil') %}active{% endif %}" href="{{ url_for('admin_financeiro_conciliacao') }}">
+            🔄 Conciliação &amp; CNAB (Remessa/Retorno)
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_pagamento') %}active{% endif %}" href="{{ url_for('admin_financeiro_pagamentos') }}">
+            💸 Pagamentos / Despesas
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_lancamento') %}active{% endif %}" href="{{ url_for('admin_financeiro_lancamentos') }}">
+            ⇄ Lançamentos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_fechamento') or ep == 'admin_financeiro_balancete' %}active{% endif %}" href="{{ url_for('admin_financeiro_fechamento') }}">
+            🔒 Fechamento do Mês
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_repasse') or ep.startswith('financeiro_repasse') %}active{% endif %}" href="{{ url_for('admin_financeiro_repasses') }}">
+            🤝 Repasses
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_correcao') %}active{% endif %}" href="{{ url_for('admin_financeiro_correcao') }}">
+            📈 Correção Monetária
+        </a>
+    {% endcall %}
+    {% call grupo('config', 'Configurações', 'bi-gear', config_aberto, menu_prefix) %}
+        <a class="nav-link text-white d-flex align-items-center {% if equipe_ativo %}active{% endif %}" href="{{ url_for('admin_index', tab='equipe') }}">
+            <i class="bi bi-shield-lock me-2"></i>Equipe e Acessos
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if setores_ativo %}active{% endif %}" href="{{ url_for('admin_setores') }}">
+            <i class="bi bi-building me-2"></i>Setores / Contatos ADM
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if config_portaria_ativo %}active{% endif %}" href="{{ url_for('admin_portaria_configuracoes') }}">
+            <i class="bi bi-journal-check me-2"></i>Config. Portaria
+        </a>
+        <a class="nav-link text-white d-flex align-items-center {% if dados_condominio_ativo %}active{% endif %}" href="{{ url_for('admin_condominio') }}">
+            <i class="bi bi-building-gear me-2"></i>Dados do Condomínio
+        </a>
+    {% endcall %}
+    {% endif %}
+{% elif sidebar_user and sidebar_user.role == 'superadmin' %}
+    <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('superadmin_dashboard') }}">
+        <i class="bi bi-shield-lock me-2"></i>Ir para Plataforma
+    </a>
+{% else %}
+    {% set tenant_slug = slug if slug is defined and slug else 'prp' %}
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'tenant_login' and aba != 'equipe' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug) }}">
+        <i class="bi bi-house-door me-2"></i>Início
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'sindico_login' %}active{% endif %}" href="{{ url_for('sindico_login', slug=tenant_slug) }}">
+        <i class="bi bi-building me-2"></i>Síndico
+    </a>
+    <a class="nav-link text-white d-flex align-items-center" href="{{ url_for('tenant_login', slug=tenant_slug) }}">
+        <i class="bi bi-briefcase me-2"></i>Administração
+    </a>
+    <a class="nav-link text-white d-flex align-items-center {% if ep == 'tenant_login' and aba == 'equipe' %}active{% endif %}" href="{{ url_for('tenant_login', slug=tenant_slug, tab='equipe') }}">
+        <i class="bi bi-shield-check me-2"></i>Portaria
+    </a>
+{% endif %}

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Repasses — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Repasses por bloco</h1>
+        <p class="text-muted mb-0">Separa a taxa da administração do que foi arrecadado para cada bloco.</p>
+    </div>
+    {% if condominio_fin and condominio_fin.fin_repasses_ativos %}
+    <div class="btn-group" role="group" aria-label="Competência">
+        <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_repasses', competencia=competencia_anterior) }}">&lt;</a>
+        <span class="btn btn-outline-secondary disabled">{{ competencia_rotulo }}</span>
+        <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_repasses', competencia=competencia_proxima) }}">&gt;</a>
+    </div>
+    {% endif %}
+</div>
+
+{% if condominio_fin and not condominio_fin.fin_repasses_ativos %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-4">
+        <h2 class="h5">Caixa Único (Sem divisão por blocos)</h2>
+        <p class="mb-3">Este condomínio está configurado para concentrar toda a arrecadação em um único caixa. A taxa do bloco e a taxa da administração não são separadas no repasse.</p>
+        <a class="btn btn-outline-primary" href="{{ url_for('admin_financeiro_bancos') }}">Ativar repasse por blocos</a>
+    </div>
+</div>
+{% elif apuracao %}
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Total Arrecadado nos Boletos Pagos</div>
+                <div class="fs-5 fw-semibold">{{ apuracao.total_arrecadado|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Retido Taxa ADM Geral</div>
+                <div class="fs-5 fw-semibold">{{ apuracao.retido_adm|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Total Destinado aos Blocos</div>
+                <div class="fs-5 fw-semibold">{{ apuracao.destinado_blocos|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Saldo Pendente de Repasse</div>
+                <div class="fs-5 fw-semibold">{{ apuracao.saldo_pendente|reais }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    {% for linha in apuracao.blocos %}
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h6">Bloco {{ linha.bloco }}</h2>
+                <ul class="list-unstyled mb-3">
+                    <li>Boletos Pagos (Unid.): {{ linha.boletos_pagos }}</li>
+                    <li>(+) Taxa do Bloco Arrecadada: {{ linha.arrecadado|reais }}</li>
+                    <li>(-) Despesas/Adiantamentos do Bloco: {{ linha.despesas|reais }}</li>
+                    <li>(-) Já Repassado: {{ linha.repassado|reais }}</li>
+                    <li class="fw-semibold">(=) Saldo a Repassar: {{ linha.saldo|reais }}</li>
+                </ul>
+                {% if linha.saldo > 0 and conta %}
+                <button class="btn btn-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#repasse-{{ linha.bloco }}">💸 Registrar Repasse ao Bloco</button>
+                <form class="collapse mt-3" id="repasse-{{ linha.bloco }}" method="post" action="{{ url_for('admin_financeiro_repasse_salvar') }}" enctype="multipart/form-data">
+                    <input type="hidden" name="bloco" value="{{ linha.bloco }}">
+                    <input type="hidden" name="competencia" value="{{ filtro_competencia }}">
+                    <div class="row g-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Valor</label>
+                            <input class="form-control" name="valor_repassado" value="{{ '%.2f'|format(linha.saldo) }}" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Data</label>
+                            <input class="form-control datepicker" type="text" name="data_repasse" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Forma</label>
+                            <select class="form-select" name="forma_transferencia">
+                                <option>PIX</option>
+                                <option>TED</option>
+                                <option>Boleto - Título</option>
+                                <option>Débito Automático</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Favorecido</label>
+                            <input class="form-control" name="favorecido_descricao" maxlength="200">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Comprovante</label>
+                            <input class="form-control" type="file" name="comprovante_anexo" accept=".pdf,.png,.jpg,.jpeg">
+                        </div>
+                        <div class="col-12">
+                            <button class="btn btn-success" type="submit">Confirmar repasse</button>
+                        </div>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if historico %}
+<h2 class="h6 mt-4">Repasses desta competência</h2>
+<div class="table-responsive card border-0 shadow-sm">
+    <table class="table mb-0">
+        <thead>
+            <tr>
+                <th>Bloco</th>
+                <th>Data</th>
+                <th>Forma</th>
+                <th class="text-end">Valor</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in historico %}
+            <tr>
+                <td>Bloco {{ item.bloco }}</td>
+                <td>{{ item.data_repasse.strftime('%d/%m/%Y') if item.data_repasse else '—' }}</td>
+                <td>{{ item.forma_transferencia }}</td>
+                <td class="text-end">{{ item.valor_repassado|reais }}</td>
+                <td class="text-end">
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('financeiro_repasse_demonstrativo', repasse_id=item.id) }}" target="_blank" rel="noopener">Demonstrativo</a>
+                    {% if item.comprovante_anexo %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('financeiro_repasse_comprovante', repasse_id=item.id) }}">Comprovante</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr(".datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+})();
+</script>
+{% endblock %}

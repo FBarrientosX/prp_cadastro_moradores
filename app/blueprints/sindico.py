@@ -98,11 +98,11 @@ def sindico_logout():
 
 @sindico_required
 def sindico_dashboard():
-    from app.routes import _blocos_codigo_sindico, _label_agrupamentos_sindico
+    from app.routes import _label_agrupamentos_sindico, _recorte_blocos_consulta
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
+    blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
 
     unidades_cadastradas = (
         Unidade.query.filter(
@@ -145,6 +145,12 @@ def sindico_dashboard():
         )
     ]
 
+    encomendas_setores = []
+    if usuario.perm_configuracoes:
+        from app.blueprints.admin import encomendas_pendentes_setores
+
+        encomendas_setores = encomendas_pendentes_setores(condominio_id)
+
     return render_template(
         "dashboard_sindico.html",
         mapa_bloco=mapa_bloco,
@@ -153,6 +159,9 @@ def sindico_dashboard():
         unidades_pendentes=unidades_pendentes,
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
+        encomendas_setores=encomendas_setores,
+        blocos_opcoes=blocos_opcoes,
+        bloco_filtro=bloco_filtro,
     )
 
 
@@ -281,6 +290,7 @@ def sindico_validar_unidade(unidade_id):
         _registrar_auditoria,
         _sindico_gerencia_bloco,
         _unidade_do_tenant,
+        sincronizar_credencial_facial,
     )
 
     usuario = get_current_user()
@@ -352,6 +362,7 @@ def sindico_validar_unidade(unidade_id):
         status_anterior = unidade.status
         for pessoa in moradores_aprovados:
             pessoa.status = StatusPessoa.APROVADO
+            sincronizar_credencial_facial(pessoa)
         unidade.atualizacao_pendente = False
         if status_anterior == StatusUnidade.PENDENTE:
             unidade.status = StatusUnidade.APROVADA
@@ -378,12 +389,14 @@ def sindico_validar_unidade(unidade_id):
             "Aguarde novo cadastro de moradores.",
         )
     else:
-        db.session.delete(unidade)
+        from app.planta_unidades import reabrir_primeiro_acesso
+
+        reabrir_primeiro_acesso(unidade, limpar_moradores=True)
         _registrar_auditoria(
             usuario,
             f"O síndico {usuario.username} reprovou todos os moradores da unidade "
-            f"'{unidade_identificador}'. Cadastro removido e unidade voltou para "
-            "Aguardando Morador.",
+            f"'{unidade_identificador}'. O 1º acesso foi liberado e a unidade "
+            "permanece na planta.",
         )
 
     db.session.commit()
@@ -419,7 +432,7 @@ def sindico_validar_unidade(unidade_id):
     else:
         flash(
             f"Todos os moradores da unidade {unidade_identificador} foram reprovados. "
-            "A unidade voltou para Aguardando Morador.",
+            "A unidade permanece na planta e o 1º acesso foi liberado.",
             "info",
         )
 
@@ -430,15 +443,15 @@ def sindico_validar_unidade(unidade_id):
 def sindico_mudancas():
     from app.routes import (
         _agendamento_do_tenant,
-        _blocos_codigo_sindico,
         _label_agrupamentos_sindico,
+        _recorte_blocos_consulta,
         _registrar_auditoria,
         _sindico_gerencia_bloco,
     )
 
     usuario = get_current_user()
     condominio_id = condominio_id_obrigatorio(usuario)
-    blocos_sindico = _blocos_codigo_sindico(usuario)
+    blocos_opcoes, blocos_sindico, bloco_filtro = _recorte_blocos_consulta(usuario)
 
     if request.method == "POST":
         agendamento_id = request.form.get("agendamento_id", type=int)
@@ -546,6 +559,8 @@ def sindico_mudancas():
         current_user=usuario,
         agrupamentos_label=_label_agrupamentos_sindico(usuario),
         status_pendente_sindico=StatusAgendamentoMudanca.PENDENTE_SINDICO,
+        blocos_opcoes=blocos_opcoes,
+        bloco_filtro=bloco_filtro,
     )
 
 

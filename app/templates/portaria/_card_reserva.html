@@ -1,0 +1,72 @@
+<div class="card border-0 shadow-sm">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between gap-2 mb-1">
+            <div class="fw-semibold">{{ reserva.espaco.nome }}</div>
+            <div>{{ reserva.data_reserva.strftime('%d/%m/%Y') }}</div>
+        </div>
+        {% if reserva.unidade %}
+        <div>Bloco {{ reserva.unidade.bloco }} · Apto {{ reserva.unidade.apartamento }}</div>
+        <div class="text-muted">{{ nome_responsavel(reserva.unidade) }}</div>
+        {% else %}
+        <div class="text-muted">Condomínio{% if reserva.motivo_reserva %} — {{ reserva.motivo_reserva }}{% endif %}</div>
+        {% endif %}
+
+        <div class="d-flex flex-wrap gap-2 mt-3">
+            {% set href = href_whatsapp_reserva(reserva) %}
+            {% if href %}
+            <a class="btn btn-success btn-sm" href="{{ href }}" target="_blank" rel="noopener noreferrer">
+                📲 WhatsApp do Morador
+            </a>
+            {% endif %}
+            <button type="button" class="btn btn-outline-secondary btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#modalConvidados{{ reserva.id }}">
+                📋 Ver Lista de Convidados
+            </button>
+            {% if not reserva.chaves_entregue_em %}
+            <form method="post" action="{{ url_for('portaria_reserva_chaves', reserva_id=reserva.id) }}">
+                <input type="hidden" name="acao" value="entrega">
+                <button type="submit" class="btn btn-primary btn-sm">🔑 Registrar Entrega de Chaves</button>
+            </form>
+            {% elif not reserva.chaves_devolvida_em %}
+            <form method="post" action="{{ url_for('portaria_reserva_chaves', reserva_id=reserva.id) }}">
+                <input type="hidden" name="acao" value="devolucao">
+                <button type="submit" class="btn btn-outline-primary btn-sm">🔑 Registrar Devolução de Chaves</button>
+            </form>
+            {% endif %}
+        </div>
+        {% if reserva.chaves_entregue_em %}
+        <div class="small text-success mt-2">
+            Chaves entregues às {{ reserva.chaves_entregue_em.strftime('%d/%m %H:%M') }}
+        </div>
+        {% endif %}
+        {% if reserva.chaves_devolvida_em %}
+        <div class="small text-success">
+            Chaves devolvidas às {{ reserva.chaves_devolvida_em.strftime('%d/%m %H:%M') }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="modal fade" id="modalConvidados{{ reserva.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Convidados — {{ reserva.espaco.nome }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% if reserva.lista_convidados %}
+                <ol class="mb-0">
+                    {% for nome in reserva.lista_convidados.splitlines() %}
+                    {% if nome.strip() %}
+                    <li>{{ nome }}</li>
+                    {% endif %}
+                    {% endfor %}
+                </ol>
+                {% else %}
+                <p class="text-muted mb-0">O morador ainda não enviou a lista de convidados.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>

@@ -3,56 +3,47 @@
 {% block title %}Dashboard do Administrador{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+{% include "includes/alerta_ocorrencias.html" %}
+{% set aba = aba_ativa if aba_ativa is defined else 'aguardando' %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
     <div>
+        {% if aba == 'equipe' %}
+        <h1 class="h3 mb-1">Equipe e Acessos</h1>
+        <p class="text-muted mb-0">Síndicos, assistentes e porteiros deste condomínio</p>
+        {% else %}
         <h1 class="h3 mb-1">Gestão de Cadastros</h1>
-        <p class="text-muted mb-0">Aprovações, registros e gestão de acessos</p>
-    </div>
-    <div class="d-flex gap-2">
-        {% if current_user and current_user.role == 'admin' %}
-        <a href="{{ url_for('admin_criar_usuario') }}" class="btn btn-outline-primary">
-            Criar Usuário
-        </a>
+        <p class="text-muted mb-0">Unidades, moradores e registros do condomínio</p>
         {% endif %}
-        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">Sair</a>
     </div>
+    {% if aba == 'equipe' and current_user and current_user.role == 'admin' %}
+    <a href="{{ url_for('admin_criar_usuario') }}" class="btn btn-outline-primary">
+        Criar Usuário
+    </a>
+    {% endif %}
 </div>
 
-{% set aba = aba_ativa if aba_ativa is defined else 'aguardando' %}
+{% if aba != 'equipe' %}
 <ul class="nav nav-tabs" id="adminTabs" role="tablist">
     <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'aguardando' %}active{% endif %}" id="aguardando-tab" data-bs-toggle="tab"
-                data-bs-target="#aguardando" type="button" role="tab">
+        <a class="nav-link {% if aba == 'aguardando' %}active{% endif %}" href="{{ url_for('admin_index', tab='aguardando') }}">
             Aguardando Registro
             <span class="badge bg-warning text-dark ms-1">{{ aguardando_registro|length }}</span>
-        </button>
+        </a>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'finalizados' %}active{% endif %}" id="finalizados-tab" data-bs-toggle="tab"
-                data-bs-target="#finalizados" type="button" role="tab">
+        <a class="nav-link {% if aba == 'finalizados' %}active{% endif %}" href="{{ url_for('admin_index', tab='finalizados') }}">
             Cadastros Finalizados
             <span class="badge bg-primary ms-1">{{ finalizados|length }}</span>
-        </button>
+        </a>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'sindicos' %}active{% endif %}" id="sindicos-tab" data-bs-toggle="tab"
-                data-bs-target="#sindicos" type="button" role="tab">
-            Gestão de Síndicos
-            <span class="badge bg-secondary ms-1">{{ sindicos|length }}</span>
-        </button>
+        <a class="nav-link" href="{{ url_for('admin_cadastros') }}">🏠 Planta de Unidades &amp; Pagadores</a>
     </li>
-    {% if current_user and current_user.role == 'admin' %}
-    <li class="nav-item" role="presentation">
-        <button class="nav-link {% if aba == 'equipe' %}active{% endif %}" id="equipe-tab" data-bs-toggle="tab"
-                data-bs-target="#equipe" type="button" role="tab">
-            Equipe e Acessos
-            <span class="badge bg-dark ms-1">{{ equipe_acessos|length }}</span>
-        </button>
-    </li>
-    {% endif %}
 </ul>
+{% endif %}
 
 <div class="tab-content pt-3" id="adminTabsContent">
+{% if aba != 'equipe' %}
     <!-- Aba 1: Aguardando Registro -->
     <div class="tab-pane fade {% if aba == 'aguardando' %}show active{% endif %}" id="aguardando" role="tabpanel">
         {% if aguardando_registro %}
@@ -228,6 +219,7 @@
         <div class="alert alert-info">Nenhum síndico cadastrado.</div>
         {% endif %}
     </div>
+{% endif %}
 
     {% if current_user and current_user.role == 'admin' %}
     <div class="tab-pane fade {% if aba == 'equipe' %}show active{% endif %}" id="equipe" role="tabpanel">
@@ -238,7 +230,7 @@
                     <tr>
                         <th>Login</th>
                         <th>Tipo de Acesso</th>
-                        <th>Bloco Responsável</th>
+                        <th>Escopo</th>
                         <th class="text-end">Ações</th>
                     </tr>
                 </thead>
@@ -261,11 +253,22 @@
                         </td>
                         <td>
                             {% if usuario.role == 'sindico' %}
-                                {% for agrup in usuario.agrupamentos.filter_by(condominio_id=current_user.condominio_id) %}
-                                    {{ agrup.nome_agrupamento }}{% if not loop.last %}, {% endif %}
+                                {% set permitidos = usuario.get_blocos_permitidos() %}
+                                {% if permitidos is none %}
+                                    Todos os blocos
+                                {% elif permitidos %}
+                                    {% for codigo in permitidos %}Bloco {{ codigo }}{% if not loop.last %}, {% endif %}{% endfor %}
                                 {% else %}
                                     —
-                                {% endfor %}
+                                {% endif %}
+                                <div class="small text-muted">
+                                    {% if usuario.perm_portaria %}Portaria{% endif %}
+                                    {% if usuario.perm_reservas_geral %}{% if usuario.perm_portaria %} · {% endif %}Espaços gerais{% endif %}
+                                    {% if usuario.perm_configuracoes %}{% if usuario.perm_portaria or usuario.perm_reservas_geral %} · {% endif %}Configurações{% endif %}
+                                    {% if not usuario.perm_portaria and not usuario.perm_reservas_geral and not usuario.perm_configuracoes %}
+                                    Só o próprio escopo
+                                    {% endif %}
+                                </div>
                             {% else %}
                                 —
                             {% endif %}
@@ -273,6 +276,13 @@
                         <td class="text-end">
                             {% if usuario.id != current_user.id and usuario.role != 'admin' %}
                             <div class="d-inline-flex flex-wrap gap-2 justify-content-end">
+                                {% if usuario.role == 'sindico' %}
+                                <button type="button" class="btn btn-sm btn-outline-primary"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalEscopoSindico{{ usuario.id }}">
+                                    Escopo e permissões
+                                </button>
+                                {% endif %}
                                 <button type="button" class="btn btn-sm btn-outline-warning"
                                         data-bs-toggle="modal"
                                         data-bs-target="#modalSenhaUsuario{{ usuario.id }}">
@@ -296,6 +306,38 @@
                 </tbody>
             </table>
         </div>
+        {% for usuario in equipe_acessos %}
+        {% if usuario.role == 'sindico' and usuario.id != current_user.id %}
+        {% set permitidos = usuario.get_blocos_permitidos() %}
+        <div class="modal fade" id="modalEscopoSindico{{ usuario.id }}" tabindex="-1"
+             aria-labelledby="modalEscopoSindicoLabel{{ usuario.id }}" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <form method="post"
+                          action="{{ url_for('admin_editar_escopo_sindico', usuario_id=usuario.id) }}">
+                        <div class="modal-header">
+                            <h2 class="modal-title h5" id="modalEscopoSindicoLabel{{ usuario.id }}">
+                                Escopo de {{ usuario.username }}
+                            </h2>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                        </div>
+                        <div class="modal-body">
+                            {% with id_prefix="escopo-" ~ usuario.id, blocos=blocos_residenciais, escopo_todos=(permitidos is none), escopo_codigos=(permitidos or []), perm_portaria=usuario.perm_portaria, perm_reservas_geral=usuario.perm_reservas_geral, perm_configuracoes=usuario.perm_configuracoes %}
+                            {% include "includes/escopo_sindico_campos.html" %}
+                            {% endwith %}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                                Cancelar
+                            </button>
+                            <button type="submit" class="btn btn-primary">Salvar escopo</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
         {% for usuario in equipe_acessos %}
         {% if usuario.id != current_user.id and usuario.role != 'admin' %}
         <div class="modal fade" id="modalSenhaUsuario{{ usuario.id }}" tabindex="-1"
@@ -341,10 +383,15 @@
     {% endif %}
 </div>
 
+{% if aba != 'equipe' %}
 <!-- Modais de Detalhes -->
 {% set todas_unidades = aguardando_registro + finalizados %}
 {% for unidade in todas_unidades %}
 {% set pessoas = unidade.pessoas.all() %}
+{% set proprietarios = pessoas|selectattr('eh_proprietario')|list %}
+{% set moradores = pessoas|selectattr('eh_morador')|list %}
+{% set nomes_proprietarios = proprietarios|map(attribute='nome_completo')|list %}
+{% set interfone = moradores|selectattr('autoriza_interfone')|list %}
 {% set veiculos = unidade.veiculos.all() %}
 {% set responsavel = unidade.pessoas.filter_by(is_responsavel=True).first() %}
 {% set contrato_aplicavel = responsavel and responsavel.vinculo == 'Locatário' %}
@@ -385,49 +432,93 @@
                 </section>
 
                 <section class="mb-4">
-                    <h3 class="h6 text-uppercase text-muted">Moradores ({{ pessoas|length }})</h3>
-                    {% if pessoas %}
+                    <h3 class="h6 text-uppercase text-muted">Proprietários ({{ proprietarios|length }})</h3>
+                    <p class="small text-muted">Donos legais do imóvel, para conferência do RGI e da documentação.</p>
+                    {% if proprietarios %}
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
                                     <th>Nome</th>
                                     <th>CPF</th>
-                                    <th>Vínculo</th>
-                                    <th>Parentesco</th>
                                     <th>Telefone</th>
                                     <th>E-mail</th>
-                                    <th>Interfone</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for pessoa in proprietarios %}
+                                <tr>
+                                    <td>
+                                        {{ pessoa.nome_completo }}
+                                        {% if pessoa.eh_morador %}
+                                        <span class="badge text-bg-info ms-1">Proprietário e Morador</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ pessoa.cpf }}</td>
+                                    <td>{{ pessoa.telefone or '—' }}</td>
+                                    <td>{{ pessoa.email or '—' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhum proprietário vinculado a esta unidade.</p>
+                    {% endif %}
+                </section>
+
+                <section class="mb-4">
+                    <h3 class="h6 text-uppercase text-muted">Moradores / Ocupantes ({{ moradores|length }})</h3>
+                    <p class="small text-muted">Quem reside de fato na unidade.</p>
+                    {% if moradores %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>CPF</th>
+                                    <th>Telefone</th>
+                                    <th>E-mail</th>
                                     <th>Nascimento</th>
-                                    <th>Responsável</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for pessoa in pessoas %}
+                                {% for pessoa in moradores %}
+                                {% set vinculo_exibido = 'Inquilino' if pessoa.vinculo == 'Locatário' else ('Familiar/Morador' if pessoa.vinculo == 'Morador' else pessoa.vinculo) %}
                                 <tr {% if pessoa.status == 'Pendente' %}class="table-warning"{% endif %}>
-                                    <td>{{ pessoa.nome_completo }}</td>
+                                    <td>
+                                        <div class="d-flex align-items-center gap-2">
+                                            {% include "includes/miniatura_facial.html" %}
+                                            <span>{{ pessoa.nome_completo }}</span>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-1 mt-1">
+                                            {% if pessoa.eh_proprietario %}
+                                            <span class="badge text-bg-info">Proprietário e Morador</span>
+                                            {% endif %}
+                                            {% if vinculo_exibido %}
+                                            <span class="badge text-bg-light border">{{ vinculo_exibido }}</span>
+                                            {% endif %}
+                                            {% if pessoa.parentesco %}
+                                            <span class="badge text-bg-light border">{{ pessoa.parentesco }}</span>
+                                            {% endif %}
+                                            {% if pessoa.is_responsavel %}
+                                            <span class="badge text-bg-primary">Responsável</span>
+                                            {% endif %}
+                                            {% if pessoa.autoriza_interfone %}
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle">Interfone Ativo</span>
+                                            {% else %}
+                                            <span class="badge text-bg-light border">Sem interfone</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
                                     <td>{{ pessoa.cpf }}</td>
-                                    <td>{{ pessoa.vinculo }}</td>
-                                    <td>{{ pessoa.parentesco or '—' }}</td>
                                     <td>{{ pessoa.telefone }}</td>
                                     <td>{{ pessoa.email or '—' }}</td>
-                                    <td>
-                                        {% if pessoa.autoriza_interfone %}
-                                        <span class="badge bg-success">Interfone: Autorizado</span>
-                                        {% else %}
-                                        <span class="badge bg-danger">Interfone: NÃO Autorizado</span>
-                                        {% endif %}
-                                    </td>
                                     <td>
                                         {% if pessoa.data_nascimento %}
                                         {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
                                         {% else %}—{% endif %}
-                                    </td>
-                                    <td>
-                                        {% if pessoa.is_responsavel %}
-                                        <span class="badge bg-primary">Sim</span>
-                                        {% else %}Não{% endif %}
                                     </td>
                                     <td>
                                         {% if pessoa.status == 'Pendente' %}
@@ -442,8 +533,26 @@
                         </table>
                     </div>
                     {% else %}
-                    <p class="text-muted mb-0">Nenhuma pessoa cadastrada.</p>
+                    <p class="text-muted mb-0">Nenhum morador cadastrado nesta unidade.</p>
                     {% endif %}
+                    <div class="mt-3">
+                        <h4 class="h6 text-uppercase text-muted">Interfone</h4>
+                        {% if interfone %}
+                        <ul class="list-group list-group-flush border rounded">
+                            {% for pessoa in interfone %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+                                <span class="d-inline-flex align-items-center gap-2">
+                                    {% include "includes/miniatura_facial.html" %}
+                                    {{ pessoa.nome_completo }}
+                                </span>
+                                <span class="font-monospace">{{ pessoa.telefone }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="text-muted small mb-0">Nenhum morador autorizou o uso do telefone no interfone.</p>
+                        {% endif %}
+                    </div>
                 </section>
 
                 {% if contrato_aplicavel %}
@@ -668,18 +777,21 @@
     </div>
 </div>
 {% endfor %}
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/escopo-sindico.js') }}"></script>
 <script>
     (function () {
         const hash = (window.location.hash || "").replace("#", "");
-        if (!hash) {
+        const abas = ["aguardando", "finalizados", "sindicos", "equipe"];
+        if (abas.indexOf(hash) === -1) {
             return;
         }
-        const trigger = document.querySelector('[data-bs-target="#' + hash + '"]');
-        if (trigger) {
-            bootstrap.Tab.getOrCreateInstance(trigger).show();
+        const destino = window.location.pathname + "?tab=" + encodeURIComponent(hash);
+        if (window.location.search.indexOf("tab=" + hash) === -1) {
+            window.location.replace(destino);
         }
     })();
 </script>

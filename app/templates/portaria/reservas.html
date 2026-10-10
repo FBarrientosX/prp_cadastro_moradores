@@ -1,0 +1,36 @@
+{% extends "portaria_base.html" %}
+
+{% block title %}Reservas — Portaria{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Reservas</h1>
+    <p class="text-muted mb-0">Eventos aprovados, contato do morador e controle de chaves.</p>
+</div>
+
+<section class="mb-5">
+    <h2 class="h5 mb-3">🎉 Eventos de Hoje</h2>
+    {% if reservas_hoje %}
+    <div class="vstack gap-3">
+        {% for reserva in reservas_hoje %}
+        {% include "portaria/_card_reserva.html" %}
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-secondary mb-0">Nenhum evento aprovado para hoje.</div>
+    {% endif %}
+</section>
+
+<section>
+    <h2 class="h5 mb-3">📅 Próximas Reservas Aprovadas</h2>
+    {% if reservas_proximas %}
+    <div class="vstack gap-3">
+        {% for reserva in reservas_proximas %}
+        {% include "portaria/_card_reserva.html" %}
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-light border mb-0">Nenhuma reserva aprovada nos próximos dias.</div>
+    {% endif %}
+</section>
+{% endblock %}

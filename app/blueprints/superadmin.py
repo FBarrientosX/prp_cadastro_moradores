@@ -193,6 +193,9 @@ def superadmin_condominios():
                 logo_filename=logo_filename,
             )
         )
+        from app import garantir_setor_administracao
+
+        garantir_setor_administracao(condominio)
         db.session.commit()
         flash(
             f"Condomínio '{nome}' cadastrado. Porta de entrada: /c/{slug}/login",
@@ -322,6 +325,14 @@ def superadmin_condominio_editar(condominio_id):
     cfg.usa_agrupamentos = usa_agrupamentos
     cfg.tem_subsindicos = tem_subsindicos
     cfg.fluxo_aprovacao_mudanca = fluxo_aprovacao_mudanca
+
+    from app.blueprints.admin import _aplicar_config_reservas_infracoes
+
+    erro_config = _aplicar_config_reservas_infracoes(condominio)
+    if erro_config:
+        db.session.rollback()
+        flash(erro_config, "danger")
+        return redirect(url_for("superadmin_condominios"))
 
     db.session.commit()
     flash(f"Condomínio '{condominio.nome}' atualizado com sucesso.", "success")

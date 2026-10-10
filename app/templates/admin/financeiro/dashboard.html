@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard Financeiro — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
+    <div>
+        <h1 class="h4 mb-1">Dashboard Financeiro</h1>
+        <p class="text-muted mb-0">Caixa, inadimplência e o que entra no mês.</p>
+    </div>
+    {% if condominio_fin and condominio_fin.fin_repasses_ativos %}
+    <span class="badge text-bg-primary">ADM + repasse por bloco</span>
+    {% else %}
+    <span class="badge text-bg-secondary">Caixa único</span>
+    {% endif %}
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-primary">
+            <div class="card-body">
+                <div class="text-muted small">Saldo Consolidado</div>
+                <div class="fs-4 fw-semibold">{{ saldo|reais }}</div>
+                <div class="small text-muted">Soma das contas ativas</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-danger">
+            <div class="card-body">
+                <div class="text-muted small">Inadimplência (%)</div>
+                <div class="fs-4 fw-semibold">{{ "%.1f"|format(inadimplencia)|replace(".", ",") }}%</div>
+                <div class="small text-muted">Vencido sobre o total em cobrança</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-warning">
+            <div class="card-body">
+                <div class="text-muted small">A Receber no Mês</div>
+                <div class="fs-4 fw-semibold">{{ a_receber_mes|reais }}</div>
+                <div class="small text-muted">{{ mes_rotulo }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-secondary">
+            <div class="card-body">
+                <div class="text-muted small">A Pagar (30 dias)</div>
+                <div class="fs-4 fw-semibold">{{ a_pagar|reais }}</div>
+                <div class="small text-muted">{{ a_pagar_qtd }} títulos · vencidas e a vencer</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+            <div class="card-body">
+                <div class="text-muted small">Conciliação Automática (%)</div>
+                <div class="fs-4 fw-semibold">{{ "%.1f"|format(conciliacao)|replace(".", ",") }}%</div>
+                <div class="small text-muted">Pagos pelo retorno CNAB no mês</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Fluxo de caixa previsto</h2>
+                <p class="text-muted small mb-0">Entradas e saídas do mês, por dia. A linha segue o saldo a partir de hoje.</p>
+            </div>
+            <div class="card-body">
+                <canvas id="chartFluxo" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Top despesas do mês</h2>
+            </div>
+            <div class="card-body">
+                {% for item in top_despesas %}
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between small">
+                        <span>{{ item.nome }}</span>
+                        <span>{{ item.valor|reais }}</span>
+                    </div>
+                    <div class="progress" role="progressbar" aria-valuenow="{{ item.percentual }}" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-bar" style="width: {{ item.percentual }}%"></div>
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">Nenhuma despesa neste mês.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h2 class="h6 mb-0">Próximos pagamentos</h2>
+            </div>
+            <div class="card-body">
+                {% for item in proximos %}
+                <div class="d-flex align-items-center gap-3 mb-3">
+                    <div class="text-center border rounded px-2 py-1" style="min-width: 3.2rem;">
+                        <div class="fw-semibold">{{ item.dia }}</div>
+                        <div class="small text-muted">{{ item.mes }}</div>
+                    </div>
+                    <div class="flex-grow-1">
+                        <div>{{ item.titulo }}</div>
+                        <div class="small text-muted">{{ item.fornecedor or "Sem fornecedor" }}</div>
+                    </div>
+                    <strong>{{ item.valor|reais }}</strong>
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">Nenhum pagamento em aberto.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    const fluxo = {{ fluxo|tojson }};
+    const canvas = document.getElementById("chartFluxo");
+    if (!canvas || !window.Chart) return;
+    new Chart(canvas, {
+        type: "bar",
+        data: {
+            labels: fluxo.map(function (item) { return item.rotulo; }),
+            datasets: [
+                {
+                    type: "bar",
+                    label: "Entradas",
+                    data: fluxo.map(function (item) { return item.entrada; }),
+                    backgroundColor: "#198754"
+                },
+                {
+                    type: "bar",
+                    label: "Saídas",
+                    data: fluxo.map(function (item) { return item.saida; }),
+                    backgroundColor: "#dc3545"
+                },
+                {
+                    type: "line",
+                    label: "Saldo",
+                    data: fluxo.map(function (item) { return item.saldo; }),
+                    borderColor: "#0d6efd",
+                    backgroundColor: "#0d6efd",
+                    spanGaps: false,
+                    tension: 0.2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: { y: { beginAtZero: false } }
+        }
+    });
+})();
+</script>
+{% endblock %}

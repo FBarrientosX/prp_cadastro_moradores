@@ -189,13 +189,20 @@
 
             <form method="post" action="{{ url_for('portaria_plantao_evento') }}" class="mt-4">
                 <input type="hidden" name="plantao_id" value="{{ plantao_aberto.id }}">
-                <label class="form-label" for="evento_plantao">Registrar ocorrência</label>
+                <label class="form-label">Registrar ocorrência / anotação no turno atual</label>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    {% for pilula in pilulas_livro %}
+                    <button type="submit" class="btn btn-sm btn-outline-primary" name="pilula" value="{{ pilula }}">
+                        {{ pilula }}
+                    </button>
+                    {% endfor %}
+                </div>
                 <textarea id="evento_plantao" name="evento" class="form-control mb-2" rows="3"
-                          required maxlength="2000"
-                          placeholder="Descreva a ocorrência em detalhes..."></textarea>
+                          maxlength="2000"
+                          placeholder="Detalhe opcional, ou escreva uma anotação livre..."></textarea>
                 <div class="d-flex justify-content-end">
                     <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-pencil-square me-1"></i>Registrar Ocorrência
+                        <i class="bi bi-pencil-square me-1"></i>Registrar anotação
                     </button>
                 </div>
             </form>
