@@ -77,12 +77,53 @@ def _parse_valor(texto):
 
 
 def _dias_defesa(condominio):
-    dias = getattr(condominio, "dias_padrao_defesa_multa", None)
+    dias = getattr(condominio, "prazo_defesa_dias", None)
+    if dias is None:
+        dias = getattr(condominio, "dias_padrao_defesa_multa", None)
     try:
         dias = int(dias)
     except (TypeError, ValueError):
         dias = 15
     return min(365, max(1, dias))
+
+
+def _tipo_contagem_defesa(condominio):
+    tipo = (getattr(condominio, "prazo_defesa_tipo_contagem", None) or "corridos").strip()
+    if tipo not in ("corridos", "uteis"):
+        return "corridos"
+    return tipo
+
+
+def _calcular_prazo_defesa(inicio, dias, tipo):
+    """Soma os dias a partir de hoje. Úteis pulam sábado e domingo."""
+    quantidade = min(365, max(1, int(dias)))
+    if tipo != "uteis":
+        return inicio + timedelta(days=quantidade)
+    atual = inicio
+    restantes = quantidade
+    while restantes > 0:
+        atual += timedelta(days=1)
+        if atual.weekday() < 5:
+            restantes -= 1
+    return atual
+
+
+def _prazo_informado(hoje, condominio):
+    """Recalcula o prazo com os dias e a contagem enviados neste registro."""
+    if "prazo_defesa_dias" not in request.form and "prazo_defesa_tipo_contagem" not in request.form:
+        return (
+            _calcular_prazo_defesa(
+                hoje, _dias_defesa(condominio), _tipo_contagem_defesa(condominio)
+            ),
+            None,
+        )
+    bruto = (request.form.get("prazo_defesa_dias") or "").strip()
+    if not bruto.isdigit() or not 1 <= int(bruto) <= 365:
+        return None, "Informe o prazo de defesa entre 1 e 365 dias."
+    tipo = (request.form.get("prazo_defesa_tipo_contagem") or "").strip()
+    if tipo not in ("corridos", "uteis"):
+        return None, "Escolha dias corridos ou dias úteis."
+    return _calcular_prazo_defesa(hoje, int(bruto), tipo), None
 
 
 def _anexos(infracao):
@@ -415,8 +456,11 @@ def infracoes_lista():
         status_cancelada=StatusInfracao.CANCELADA,
         tipo_multa=TipoInfracao.MULTA,
         hoje=_hoje(),
-        prazo_sugerido=_hoje() + timedelta(days=_dias_defesa(condominio)),
+        prazo_sugerido=_calcular_prazo_defesa(
+            _hoje(), _dias_defesa(condominio), _tipo_contagem_defesa(condominio)
+        ),
         dias_defesa=_dias_defesa(condominio),
+        prazo_defesa_tipo=_tipo_contagem_defesa(condominio),
         eh_sindico=usuario.role == Role.SINDICO,
         foco=request.args.get("foco", type=int),
         anexos_por_id={item.id: _anexos(item) for item in infracoes},
@@ -460,9 +504,10 @@ def infracoes_criar():
     if data_ocorrencia > hoje:
         flash("A data da ocorrência não pode ser futura.", "danger")
         return _redirecionar_lista()
-    prazo = _parse_data(request.form.get("prazo_defesa"))
-    if prazo is None:
-        prazo = hoje + timedelta(days=_dias_defesa(condominio))
+    prazo, erro_prazo = _prazo_informado(hoje, condominio)
+    if erro_prazo:
+        flash(erro_prazo, "danger")
+        return _redirecionar_lista()
     if prazo < data_ocorrencia:
         flash("O prazo de defesa não pode ser anterior à ocorrência.", "danger")
         return _redirecionar_lista()

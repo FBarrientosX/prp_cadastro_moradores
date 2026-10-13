@@ -2777,11 +2777,23 @@ def _aplicar_dados_condominio(condominio, usuario):
 
 def _aplicar_config_reservas_infracoes(condominio):
     """Grava as chaves de reservas e infrações só quando o formulário as envia."""
-    if "dias_padrao_defesa_multa" in request.form:
-        bruto = (request.form.get("dias_padrao_defesa_multa") or "").strip()
+    if "prazo_defesa_dias" in request.form or "dias_padrao_defesa_multa" in request.form:
+        bruto = (
+            request.form.get("prazo_defesa_dias")
+            if "prazo_defesa_dias" in request.form
+            else request.form.get("dias_padrao_defesa_multa")
+        )
+        bruto = (bruto or "").strip()
         if not bruto.isdigit() or not 1 <= int(bruto) <= 365:
             return "Informe o prazo de defesa entre 1 e 365 dias."
-        condominio.dias_padrao_defesa_multa = int(bruto)
+        dias = int(bruto)
+        condominio.prazo_defesa_dias = dias
+        condominio.dias_padrao_defesa_multa = dias
+    if "prazo_defesa_tipo_contagem" in request.form:
+        tipo = (request.form.get("prazo_defesa_tipo_contagem") or "").strip()
+        if tipo not in ("corridos", "uteis"):
+            return "Escolha dias corridos ou dias úteis."
+        condominio.prazo_defesa_tipo_contagem = tipo
     if "exigir_cpf_convidados" in request.form:
         condominio.exigir_cpf_convidados = (
             "1" in request.form.getlist("exigir_cpf_convidados")

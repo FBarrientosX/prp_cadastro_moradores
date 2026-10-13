@@ -9,7 +9,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from flask import Response, abort, flash, redirect, render_template, request, url_for
-from sqlalchemy import String, and_, cast, func, or_
+from sqlalchemy import String, and_, case, cast, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app import db
@@ -1041,10 +1041,19 @@ def admin_financeiro_parametros():
     if len(indice) > 20:
         flash("A sigla do índice passa do tamanho aceito.", "danger")
         return redirect(url_for("admin_financeiro_bancos", aba="contas"))
+    if "taxa_segunda_via_boleto" in request.form:
+        try:
+            taxa_segunda_via = _parse_valor(request.form.get("taxa_segunda_via_boleto") or "0")
+        except (TypeError, ValueError):
+            flash("Informe a taxa de 2ª via válida.", "danger")
+            return redirect(url_for("admin_financeiro_bancos", aba="contas"))
+    else:
+        taxa_segunda_via = float(condominio.taxa_segunda_via_boleto or 5.99)
     condominio.fin_repasses_ativos = _marcado("fin_repasses_ativos")
     condominio.fin_multa_percentual = multa
     condominio.fin_juros_mensal = juros
     condominio.fin_indice_correcao = indice
+    condominio.taxa_segunda_via_boleto = taxa_segunda_via
     db.session.commit()
     flash("Parâmetros financeiros salvos.", "success")
     return redirect(url_for("admin_financeiro_bancos", aba="contas"))
@@ -1711,6 +1720,97 @@ def _gravar_lista_json(cobranca, campo, lista):
     setattr(cobranca, campo, json.dumps(lista, ensure_ascii=False))
 
 
+_SORTS_COBRANCA = {
+    "unidade",
+    "pagador",
+    "titulo",
+    "competencia",
+    "vencimento",
+    "nosso_numero",
+    "valor",
+    "status",
+}
+_CHAVES_LISTA_COBRANCA = {
+    "competencia",
+    "bloco",
+    "q",
+    "status",
+    "tipo_data",
+    "de",
+    "ate",
+    "forma",
+    "origem",
+    "totalizar",
+    "sort",
+    "order",
+    "abrir",
+}
+_NOME_PLANO_SEGUNDA_VIA = "Receitas Financeiras/Taxas Bancárias"
+_NOME_PLANO_MULTA_JUROS = "Receitas Financeiras / Multas e Juros"
+
+
+def _expressoes_competencia():
+    """Ano e mês ordenáveis, aceite MM/AAAA e AAAA-MM."""
+    com_barra = CobrancaUnidade.competencia.like("%/%")
+    ano = case(
+        (com_barra, func.substr(CobrancaUnidade.competencia, 4, 4)),
+        else_=func.substr(CobrancaUnidade.competencia, 1, 4),
+    )
+    mes = case(
+        (com_barra, func.substr(CobrancaUnidade.competencia, 1, 2)),
+        else_=func.substr(CobrancaUnidade.competencia, 6, 2),
+    )
+    return ano, mes
+
+
+def _ordenar_cobrancas(consulta, sort, ordem):
+    ano, mes = _expressoes_competencia()
+    inverso = ordem == "desc"
+
+    def sentido(coluna):
+        return coluna.desc() if inverso else coluna.asc()
+
+    if sort == "pagador":
+        colunas = [sentido(CobrancaUnidade.pagador_nome)]
+    elif sort == "titulo":
+        colunas = [sentido(CobrancaUnidade.titulo)]
+    elif sort == "competencia":
+        colunas = [sentido(ano), sentido(mes)]
+    elif sort == "vencimento":
+        colunas = [sentido(CobrancaUnidade.vencimento)]
+    elif sort == "nosso_numero":
+        colunas = [sentido(CobrancaUnidade.nosso_numero)]
+    elif sort == "valor":
+        colunas = [sentido(CobrancaUnidade.valor_original)]
+    elif sort == "status":
+        colunas = [sentido(CobrancaUnidade.status)]
+    elif sort == "unidade":
+        colunas = [sentido(Unidade.bloco), sentido(Unidade.apartamento)]
+    else:
+        colunas = [
+            ano.asc(),
+            mes.asc(),
+            CobrancaUnidade.vencimento.asc(),
+            Unidade.bloco.asc(),
+            Unidade.apartamento.asc(),
+        ]
+    colunas.append(CobrancaUnidade.id.asc())
+    return consulta.order_by(*colunas)
+
+
+def _busca_une_unidade(busca):
+    bruto = (busca or "").strip()
+    if not bruto:
+        return False
+    if bruto.startswith("#") and bruto[1:].isdigit():
+        return False
+    if bruto.startswith("@") and bruto[1:].strip():
+        return False
+    if bruto.startswith("*") and bruto[1:].strip().isdigit():
+        return False
+    return True
+
+
 def _parametros_cobranca():
     hoje = _hoje()
     status = _normalizar_status_lista(request.values.get("status"))
@@ -1737,6 +1837,12 @@ def _parametros_cobranca():
     inicio = _parse_data(request.values.get("de"))
     fim = _parse_data(request.values.get("ate"))
     totalizar = "1" in request.values.getlist("totalizar")
+    sort = (request.values.get("sort") or "").strip()
+    if sort not in _SORTS_COBRANCA:
+        sort = ""
+    ordem = (request.values.get("order") or "").strip().lower()
+    if ordem not in ("asc", "desc"):
+        ordem = "asc"
     return {
         "status": status,
         "competencia": competencia,
@@ -1750,6 +1856,8 @@ def _parametros_cobranca():
         "forma": forma,
         "origem": origem,
         "totalizar": totalizar,
+        "sort": sort,
+        "order": ordem,
     }
 
 
@@ -1768,6 +1876,9 @@ def _manter_cobranca(parametros, competencia=None):
         manter["status"] = "exceto"
     if parametros.get("totalizar"):
         manter["totalizar"] = "1"
+    if parametros.get("sort"):
+        manter["sort"] = parametros["sort"]
+        manter["order"] = parametros.get("order") or "asc"
     return manter
 
 
@@ -1785,6 +1896,8 @@ def _carregar_cobrancas(limite=200):
     consulta, ignora_competencia = _filtrar_busca(
         consulta, parametros["q"], condominio_id, ja_uniu
     )
+    if _busca_une_unidade(parametros["q"]):
+        ja_uniu = True
     if parametros["competencia"] and not ignora_competencia:
         consulta = consulta.filter(CobrancaUnidade.competencia == parametros["competencia"])
     consulta = _filtrar_periodo(
@@ -1793,11 +1906,10 @@ def _carregar_cobrancas(limite=200):
     consulta = _filtrar_forma(consulta, parametros["forma"])
     consulta = _filtrar_origem(consulta, parametros["origem"])
     base = consulta
-    cobrancas = (
-        _filtrar_status(base, parametros["status"])
-        .order_by(CobrancaUnidade.vencimento.desc(), CobrancaUnidade.id.desc())
-        .all()
-    )
+    listagem = _filtrar_status(base, parametros["status"])
+    if not ja_uniu and (not parametros["sort"] or parametros["sort"] == "unidade"):
+        listagem = _unir_unidade(listagem, condominio_id)
+    cobrancas = _ordenar_cobrancas(listagem, parametros["sort"], parametros["order"]).all()
     recebido = 0.0
     a_receber = 0.0
     canceladas_valor = 0.0
@@ -1843,9 +1955,24 @@ def _carregar_cobrancas(limite=200):
         ativos += 1
     manter = _manter_cobranca(parametros)
     nav = {chave: valor for chave, valor in manter.items() if chave != "competencia"}
+    ordenacao_base = {
+        chave: valor for chave, valor in manter.items() if chave not in ("sort", "order")
+    }
+    if parametros["sort"] == "valor":
+        linhas = _enriquecer_cobrancas(cobrancas, condominio, planos, indices)
+        linhas.sort(
+            key=lambda linha: (
+                float(linha["encargos"]["total_atualizado"] or 0),
+                linha["cobranca"].id,
+            ),
+            reverse=parametros["order"] == "desc",
+        )
+        linhas = linhas[:limite]
+    else:
+        linhas = _enriquecer_cobrancas(cobrancas[:limite], condominio, planos, indices)
     return {
         "condominio_fin": condominio,
-        "linhas": _enriquecer_cobrancas(cobrancas[:limite], condominio, planos, indices),
+        "linhas": linhas,
         "total_lista": len(cobrancas),
         "recebido": recebido,
         "a_receber": a_receber,
@@ -1860,6 +1987,12 @@ def _carregar_cobrancas(limite=200):
         "filtro_forma": parametros["forma"],
         "filtro_origem": parametros["origem"],
         "filtro_totalizar": parametros["totalizar"],
+        "filtro_sort": parametros["sort"],
+        "filtro_order": parametros["order"] if parametros["sort"] else "",
+        "ordenacao_base": ordenacao_base,
+        "taxa_segunda_via": round(
+            float(getattr(condominio, "taxa_segunda_via_boleto", None) or 5.99), 2
+        ),
         "filtros_ativos": ativos,
         "manter": manter,
         "nav": nav,
@@ -1968,6 +2101,330 @@ def admin_financeiro_cobranca_avulsa():
     db.session.commit()
     flash("Cobrança avulsa lançada.", "success")
     return redirect(url_for("admin_financeiro_cobrancas", competencia=competencia))
+
+
+def _ids_selecionados():
+    if request.is_json:
+        corpo = request.get_json(silent=True) or {}
+        bruto = corpo.get("ids") or []
+    else:
+        bruto = request.form.getlist("ids")
+    ids = []
+    vistos = set()
+    for item in bruto:
+        texto = str(item).strip()
+        partes = texto.strip("[]").split(",") if texto.startswith("[") else [texto]
+        for parte in partes:
+            parte = parte.strip().strip('"').strip("'")
+            if not parte.isdigit():
+                continue
+            numero = int(parte)
+            if numero in vistos:
+                continue
+            vistos.add(numero)
+            ids.append(numero)
+            if len(ids) >= 300:
+                return ids
+    return ids
+
+
+def _cobrancas_dos_ids(condominio_id, ids):
+    if not ids:
+        return []
+    encontradas = CobrancaUnidade.query.filter(
+        CobrancaUnidade.condominio_id == condominio_id,
+        CobrancaUnidade.id.in_(ids),
+    ).all()
+    por_id = {cobranca.id: cobranca for cobranca in encontradas}
+    return [por_id[numero] for numero in ids if numero in por_id]
+
+
+def _redirect_lista_cobrancas():
+    from urllib.parse import parse_qsl
+
+    bruto = (request.form.get("retorno") or request.args.get("retorno") or "").lstrip("?")
+    pares = {}
+    for chave, valor in parse_qsl(bruto, keep_blank_values=False):
+        if chave in _CHAVES_LISTA_COBRANCA and len(valor) <= 80:
+            pares[chave] = valor
+    return redirect(url_for("admin_financeiro_cobrancas", **pares))
+
+
+def _boleto_itau(cobranca):
+    conta = cobranca.conta_bancaria
+    return conta is not None and str(conta.codigo_banco or "").strip() == "341"
+
+
+def _plano_receita(condominio_id, nome, codigo_base):
+    plano = PlanoConta.query.filter_by(condominio_id=condominio_id, nome=nome).first()
+    if plano is not None:
+        return plano
+    fundo = (
+        FundoFinanceiro.query.filter_by(condominio_id=condominio_id)
+        .order_by(FundoFinanceiro.codigo.asc(), FundoFinanceiro.id.asc())
+        .first()
+    )
+    if fundo is None:
+        return None
+    usados = {
+        item.codigo
+        for item in PlanoConta.query.filter_by(condominio_id=condominio_id).all()
+    }
+    codigo = codigo_base
+    sufixo = 0
+    while codigo in usados:
+        sufixo += 1
+        codigo = f"{codigo_base}.{sufixo}"[:20]
+    plano = PlanoConta(
+        condominio_id=condominio_id,
+        codigo=codigo,
+        nome=nome,
+        tipo=TipoPlanoConta.RECEITA,
+        fundo_id=fundo.id,
+        escopo_repasse=EscopoRepasse.ADM_GERAL,
+    )
+    db.session.add(plano)
+    db.session.flush()
+    return plano
+
+
+def _plano_taxa_segunda_via(condominio_id):
+    return _plano_receita(condominio_id, _NOME_PLANO_SEGUNDA_VIA, "1.2.9")
+
+
+def _plano_multa_juros(condominio_id):
+    return _plano_receita(condominio_id, _NOME_PLANO_MULTA_JUROS, "1.2.8")
+
+
+def _linha_e_encargo_anterior(descricao):
+    """Multa ou juros já lançados. Não trata a penalidade da infração como encargo."""
+    texto = " ".join((descricao or "").casefold().split())
+    if texto in {"multa", "juros"}:
+        return True
+    return texto.startswith("multa por ") or texto.startswith("juros ")
+
+
+def _base_encargos_segunda_via(itens, valor_original):
+    """Principal da nova conta. Com multa ou juros antigos, eles ficam fora da base."""
+    linhas = [item for item in itens if isinstance(item, dict)]
+    if not any(_linha_e_encargo_anterior(item.get("descricao")) for item in linhas):
+        return round(float(valor_original or 0), 2)
+    principal = sum(
+        float(item.get("valor") or 0)
+        for item in linhas
+        if not _linha_e_encargo_anterior(item.get("descricao"))
+    )
+    return round(principal, 2)
+
+
+def _encargos_para_segunda_via(cobranca, nova_data, condominio, base):
+    """Mesma regra do boleto, do vencimento original até a nova data, sobre a base."""
+    from types import SimpleNamespace
+
+    from app.financeiro_boleto import calcular_encargos_atraso
+
+    provisoria = SimpleNamespace(
+        valor_original=base,
+        valor_outros_acrescimos=0.0,
+        valor_desconto=0.0,
+        valor_correcao=0.0,
+        valor_multa=0.0,
+        valor_juros=0.0,
+        valor_pago=None,
+        status=StatusCobranca.VENCIDA,
+        vencimento=cobranca.vencimento,
+        condominio_id=cobranca.condominio_id,
+    )
+    return calcular_encargos_atraso(
+        provisoria,
+        nova_data,
+        condominio=condominio,
+        indices_por_mes=_indices_do_condominio(condominio),
+    )
+
+
+def _linha_receita(plano, descricao, valor):
+    return {
+        "plano_conta_id": plano.id,
+        "descricao": descricao,
+        "fundo_nome": plano.fundo.nome if plano.fundo else "",
+        "valor": round(float(valor), 2),
+        "parcela_atual": 1,
+        "total_parcelas": 1,
+    }
+
+
+@admin_required
+def admin_financeiro_cobrancas_imprimir_selecionados():
+    condominio_id, condominio = _condominio_atual()
+    ids = _ids_selecionados()
+    cobrancas = [
+        cobranca
+        for cobranca in _cobrancas_dos_ids(condominio_id, ids)
+        if cobranca.status != StatusCobranca.CANCELADA
+    ]
+    if not cobrancas:
+        flash("Selecione ao menos uma cobrança que possa ser impressa.", "warning")
+        return _redirect_lista_cobrancas()
+    pacotes = [_preparar_documento(cobranca, condominio) for cobranca in cobrancas]
+    return render_template(
+        "financeiro/boletos_lote.html",
+        pacotes=pacotes,
+        endereco=_endereco_condominio(condominio),
+    )
+
+
+@admin_required
+def admin_financeiro_cobrancas_remessa_selecionados():
+    condominio_id, condominio = _condominio_atual()
+    ids = _ids_selecionados()
+    cobrancas = _cobrancas_dos_ids(condominio_id, ids)
+    if not cobrancas or len(cobrancas) != len(ids):
+        flash("Selecione cobranças deste condomínio para a remessa.", "warning")
+        return _redirect_lista_cobrancas()
+    if any(
+        cobranca.status not in StatusCobranca.ABERTAS or not _boleto_itau(cobranca)
+        for cobranca in cobrancas
+    ):
+        flash(
+            "A remessa dos selecionados aceita só boletos Itaú a vencer ou vencidos.",
+            "warning",
+        )
+        return _redirect_lista_cobrancas()
+    contas = {cobranca.conta_bancaria_id for cobranca in cobrancas}
+    if len(contas) != 1:
+        flash("Selecione boletos da mesma conta bancária.", "warning")
+        return _redirect_lista_cobrancas()
+    try:
+        return _emitir_remessa(
+            condominio_id, condominio, cobrancas[0].conta_bancaria, cobrancas
+        )
+    except ValueError as erro:
+        flash(str(erro), "danger")
+        return _redirect_lista_cobrancas()
+
+
+@admin_required
+def admin_financeiro_cobranca_remessa(cobranca_id):
+    condominio_id, condominio = _condominio_atual()
+    cobranca = CobrancaUnidade.query.filter_by(
+        id=cobranca_id, condominio_id=condominio_id
+    ).first()
+    if cobranca is None:
+        flash("Cobrança não encontrada neste condomínio.", "warning")
+        return redirect(url_for("admin_financeiro_cobrancas"))
+    if cobranca.status not in StatusCobranca.ABERTAS:
+        flash("A remessa individual vale para cobranças a vencer ou vencidas.", "warning")
+        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+    conta = cobranca.conta_bancaria
+    if conta is None or str(conta.codigo_banco or "").strip() != "341":
+        flash("A remessa CNAB 400 desta cobrança é do boleto Itaú 341.", "warning")
+        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+    try:
+        return _emitir_remessa(condominio_id, condominio, conta, [cobranca])
+    except ValueError as erro:
+        flash(str(erro), "danger")
+        return redirect(url_for("admin_financeiro_cobrancas", abrir=cobranca.id))
+
+
+@admin_required
+def admin_financeiro_cobranca_segunda_via(cobranca_id):
+    from app.financeiro_fechamento import competencia_esta_fechada, mensagem_competencia_fechada
+    from app.routes import _registrar_auditoria
+
+    condominio_id, condominio = _condominio_atual()
+    cobranca = CobrancaUnidade.query.filter_by(
+        id=cobranca_id, condominio_id=condominio_id
+    ).first()
+    if cobranca is None:
+        flash("Cobrança não encontrada neste condomínio.", "warning")
+        return redirect(url_for("admin_financeiro_cobrancas"))
+    if cobranca.status != StatusCobranca.VENCIDA or not _boleto_itau(cobranca):
+        flash("A 2ª via vale para boletos Itaú vencidos.", "warning")
+        return _voltar_cobranca(cobranca)
+    vencimento = _parse_data(request.form.get("vencimento"))
+    hoje = _hoje()
+    if vencimento is None:
+        flash("Informe a nova data de vencimento.", "danger")
+        return _voltar_cobranca(cobranca)
+    if vencimento < hoje:
+        flash("A nova data de vencimento precisa ser hoje ou uma data futura.", "warning")
+        return _voltar_cobranca(cobranca)
+    if competencia_esta_fechada(condominio_id, cobranca.competencia):
+        flash(mensagem_competencia_fechada(cobranca.competencia), "warning")
+        return _voltar_cobranca(cobranca)
+    plano_taxa = _plano_taxa_segunda_via(condominio_id)
+    plano_encargos = _plano_multa_juros(condominio_id)
+    if plano_taxa is None or plano_encargos is None:
+        flash("Cadastre um fundo financeiro antes de lançar a taxa de 2ª via.", "danger")
+        return _voltar_cobranca(cobranca)
+    taxa = round(float(getattr(condominio, "taxa_segunda_via_boleto", None) or 5.99), 2)
+    nota = (cobranca.observacoes or "").strip()
+    itens = copy.deepcopy(_como_lista(cobranca.composicao_json))
+    base = _base_encargos_segunda_via(itens, cobranca.valor_original)
+    encargos = _encargos_para_segunda_via(cobranca, vencimento, condominio, base)
+    if encargos["correcao"] > 0:
+        itens.append(_linha_receita(plano_encargos, "Correção monetária", encargos["correcao"]))
+    if encargos["multa"] > 0:
+        itens.append(_linha_receita(plano_encargos, "Multa por Atraso", encargos["multa"]))
+    if encargos["juros"] > 0:
+        itens.append(
+            _linha_receita(plano_encargos, "Juros de Mora atualizados", encargos["juros"])
+        )
+    itens.append(_linha_receita(plano_taxa, "Taxa de 2ª Via / Atualização", taxa))
+    soma = round(sum(float(item.get("valor") or 0) for item in itens), 2)
+    numero = _reservar_nossos_numeros(condominio_id, 1)[0]
+    nova = CobrancaUnidade(
+        condominio_id=condominio_id,
+        unidade_id=cobranca.unidade_id,
+        conta_bancaria_id=cobranca.conta_bancaria_id,
+        rateio_id=cobranca.rateio_id,
+        competencia=cobranca.competencia,
+        titulo=(cobranca.titulo or "")[:200],
+        nosso_numero=numero,
+        vencimento=vencimento,
+        pagador_nome=cobranca.pagador_nome,
+        pagador_documento=cobranca.pagador_documento,
+        pagador_email=cobranca.pagador_email,
+        pagador_telefone=cobranca.pagador_telefone,
+        composicao_json=itens,
+        valor_original=soma,
+        status=StatusCobranca.A_VENCER if vencimento >= hoje else StatusCobranca.VENCIDA,
+        destinatario_tipo=cobranca.destinatario_tipo or "Proprietário",
+        situacao_juridica=cobranca.situacao_juridica or "Normal",
+        remessa_gerada=False,
+        observacoes=f"2ª via da cobrança #{cobranca.id}.",
+    )
+    db.session.add(nova)
+    cobranca.status = StatusCobranca.CANCELADA
+    try:
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        flash("Não foi possível reservar o nosso número. Tente novamente.", "danger")
+        return _voltar_cobranca(cobranca)
+    texto_novo = f"2ª via da cobrança #{cobranca.id}."
+    if nota:
+        texto_novo = f"{texto_novo}\n{nota}"
+    nova.observacoes = texto_novo
+    cobranca.observacoes = (
+        f"{nota}\nSubstituída pela 2ª via #{nova.id}." if nota else f"Substituída pela 2ª via #{nova.id}."
+    )
+    usuario = get_current_user()
+    if usuario is not None:
+        _registrar_auditoria(
+            usuario,
+            f"2ª via da cobrança #{cobranca.id} gerada como #{nova.id}.",
+        )
+    db.session.commit()
+    flash("2ª via emitida. O boleto anterior foi cancelado.", "success")
+    return redirect(
+        url_for(
+            "admin_financeiro_cobrancas",
+            competencia=nova.competencia,
+            abrir=nova.id,
+        )
+    )
 
 
 @admin_required
@@ -2648,6 +3105,44 @@ def _anexo_cnab(nome, conteudo):
     )
 
 
+def _emitir_remessa(condominio_id, condominio, conta, cobrancas):
+    """Gera o CNAB 400 só com os títulos recebidos, grava o lote e devolve o arquivo."""
+    from app.routes import _registrar_auditoria
+
+    hoje = _hoje()
+    texto, total = montar_remessa_itau(
+        conta,
+        condominio,
+        cobrancas,
+        hoje,
+        juros_mensal=float(condominio.fin_juros_mensal or 1.0) if condominio else 1.0,
+    )
+    nome = nome_remessa(hoje)
+    log = ArquivoCnabLog(
+        condominio_id=condominio_id,
+        conta_bancaria_id=conta.id,
+        tipo="REMESSA",
+        layout="CNAB400_ITAU",
+        nome_arquivo=nome,
+        sequencial=_proximo_sequencial_cnab(condominio_id, conta.id, "REMESSA"),
+        qtd_titulos=len(cobrancas),
+        valor_total=total,
+        conteudo_texto=texto,
+        usuario_nome=_usuario_nome(),
+    )
+    db.session.add(log)
+    db.session.flush()
+    for cobranca in cobrancas:
+        cobranca.remessa_gerada = True
+        cobranca.status_banco = StatusBanco.REMESSA_GERADA
+        cobranca.remessa_lote_id = log.id
+    usuario = get_current_user()
+    if usuario is not None:
+        _registrar_auditoria(usuario, f"Remessa CNAB #{log.id} com {len(cobrancas)} títulos.")
+    db.session.commit()
+    return _anexo_cnab(nome, texto)
+
+
 def _usuario_nome():
     usuario = get_current_user()
     if usuario is None or not usuario.username:
@@ -2750,8 +3245,6 @@ def admin_financeiro_conciliacao():
 
 @admin_required
 def admin_financeiro_conciliacao_remessa():
-    from app.routes import _registrar_auditoria
-
     condominio_id, condominio = _condominio_atual()
     conta = _conta_itau(condominio_id)
     if conta is None:
@@ -2779,42 +3272,11 @@ def admin_financeiro_conciliacao_remessa():
     if not cobrancas:
         flash("Selecione cobranças em aberto que ainda não entraram numa remessa.", "warning")
         return redirect(url_for("admin_financeiro_conciliacao"))
-    hoje = _hoje()
     try:
-        texto, total = montar_remessa_itau(
-            conta,
-            condominio,
-            cobrancas,
-            hoje,
-            juros_mensal=float(condominio.fin_juros_mensal or 1.0) if condominio else 1.0,
-        )
+        return _emitir_remessa(condominio_id, condominio, conta, cobrancas)
     except ValueError as erro:
         flash(str(erro), "danger")
         return redirect(url_for("admin_financeiro_conciliacao"))
-    nome = nome_remessa(hoje)
-    log = ArquivoCnabLog(
-        condominio_id=condominio_id,
-        conta_bancaria_id=conta.id,
-        tipo="REMESSA",
-        layout="CNAB400_ITAU",
-        nome_arquivo=nome,
-        sequencial=_proximo_sequencial_cnab(condominio_id, conta.id, "REMESSA"),
-        qtd_titulos=len(cobrancas),
-        valor_total=total,
-        conteudo_texto=texto,
-        usuario_nome=_usuario_nome(),
-    )
-    db.session.add(log)
-    db.session.flush()
-    for cobranca in cobrancas:
-        cobranca.remessa_gerada = True
-        cobranca.status_banco = StatusBanco.REMESSA_GERADA
-        cobranca.remessa_lote_id = log.id
-    usuario = get_current_user()
-    if usuario is not None:
-        _registrar_auditoria(usuario, f"Remessa CNAB #{log.id} com {len(cobrancas)} títulos.")
-    db.session.commit()
-    return _anexo_cnab(nome, texto)
 
 
 @admin_required
@@ -3022,10 +3484,34 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/remessa_individual",
+        "admin_financeiro_cobranca_remessa",
+        admin_financeiro_cobranca_remessa,
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/admin/financeiro/cobrancas/imprimir",
         "admin_financeiro_cobrancas_imprimir",
         admin_financeiro_cobrancas_imprimir,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/imprimir-selecionados",
+        "admin_financeiro_cobrancas_imprimir_selecionados",
+        admin_financeiro_cobrancas_imprimir_selecionados,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/remessa-selecionados",
+        "admin_financeiro_cobrancas_remessa_selecionados",
+        admin_financeiro_cobrancas_remessa_selecionados,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/financeiro/cobrancas/<int:cobranca_id>/segunda-via",
+        "admin_financeiro_cobranca_segunda_via",
+        admin_financeiro_cobranca_segunda_via,
+        methods=["POST"],
     )
     app.add_url_rule(
         "/admin/financeiro/cobrancas/<int:cobranca_id>/email",

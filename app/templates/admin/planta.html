@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Planta de Unidades & Pagadores{% endblock %}
+{% block title %}Unidades & Pagadores{% endblock %}
 
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
     <div>
-        <h1 class="h4 mb-1">🏠 Planta de Unidades &amp; Pagadores</h1>
-        <p class="text-muted mb-0">Unidades da planta oficial, com ou sem o morador ter feito o 1º acesso.</p>
+        <h1 class="h4 mb-1">🏠 Unidades &amp; Pagadores</h1>
+        <p class="text-muted mb-0">Relação de unidades oficiais, responsáveis financeiros e status de acesso.</p>
     </div>
     {% if pode_editar %}
     <div class="d-flex flex-wrap gap-2">
@@ -27,7 +27,7 @@
     <input type="hidden" name="filtro" value="{{ filtro }}">
     <div class="col-md-3">
         <label class="form-label" for="bloco">Bloco</label>
-        <select class="form-select" id="bloco" name="bloco">
+        <select class="form-select" id="bloco" name="bloco" onchange="this.form.submit()">
             <option value="">Todos</option>
             {% for bloco in blocos %}
             <option value="{{ bloco }}" {% if bloco_atual == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
@@ -53,15 +53,15 @@
                 <th>Pagador</th>
                 <th>CPF/CNPJ</th>
                 <th>Situação</th>
-                <th></th>
+                <th class="text-end">Ações</th>
             </tr>
         </thead>
         <tbody>
             {% for linha in linhas %}
-            <tr>
+            <tr id="linha-unidade-{{ linha.unidade.id }}">
                 <td class="text-nowrap">{{ linha.unidade.bloco }} / {{ linha.unidade.apartamento }}</td>
-                <td>{{ linha.nome }}</td>
-                <td>{{ linha.documento or '—' }}</td>
+                <td class="js-celula-nome">{{ linha.nome }}</td>
+                <td class="js-celula-documento">{{ linha.documento or '—' }}</td>
                 <td>
                     {% if linha.situacao == 'pre' %}
                     <span class="badge bg-secondary">Pré-cadastro</span>
@@ -73,6 +73,17 @@
                 </td>
                 <td class="text-end text-nowrap">
                     {% if pode_editar %}
+                    <button type="button"
+                            class="btn btn-sm js-definir-pagador {% if linha.tem_pagador %}btn-outline-secondary{% else %}btn-warning{% endif %}"
+                            data-bs-toggle="modal" data-bs-target="#modalDefinirPagador"
+                            data-url="{{ url_for('admin_definir_pagador', unidade_id=linha.unidade.id) }}"
+                            data-apto="{{ linha.unidade.apartamento }}"
+                            data-bloco="{{ linha.unidade.bloco }}"
+                            data-nome="{{ linha.unidade.proprietario_nome or '' }}"
+                            data-documento="{{ linha.documento_bruto }}"
+                            data-email="{{ linha.email }}"
+                            data-telefone="{{ linha.telefone }}"
+                            data-vinculo="{{ linha.vinculo }}">{% if linha.tem_pagador %}✏️ Editar Pagador{% else %}✏️ Definir Pagador{% endif %}</button>
                     <button type="button" class="btn btn-sm btn-outline-primary js-editar"
                             data-bs-toggle="modal" data-bs-target="#modalPagador"
                             data-bloco="{{ linha.unidade.bloco }}"
@@ -163,7 +174,59 @@
         </form>
     </div>
 </div>
+
+<div class="modal fade" id="modalDefinirPagador" tabindex="-1" aria-labelledby="modalDefinirPagadorTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" id="formDefinirPagador" method="post" action="">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalDefinirPagadorTitulo">Definir Responsável Financeiro</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger d-none py-2" id="pagadorErro" role="alert"></div>
+                <div class="alert alert-warning py-2" role="note">💡 Esses dados são obrigatórios para a emissão e registro de boletos no banco.</div>
+                <div class="mb-3">
+                    <label class="form-label" for="definirNome">Nome completo ou razão social</label>
+                    <input class="form-control" id="definirNome" name="nome" maxlength="200" required autocomplete="name">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="definirDocumento">CPF ou CNPJ</label>
+                    <input class="form-control" id="definirDocumento" name="documento" inputmode="numeric" required autocomplete="off" placeholder="000.000.000-00">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="definirEmail">E-mail <span class="text-muted">(opcional, recomendado para o envio do boleto)</span></label>
+                    <input class="form-control" id="definirEmail" name="email" type="email" maxlength="120" autocomplete="email">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="definirTelefone">Telefone / WhatsApp <span class="text-muted">(opcional)</span></label>
+                    <input class="form-control" id="definirTelefone" name="telefone" inputmode="tel" autocomplete="tel" placeholder="(00) 00000-0000">
+                </div>
+                <div class="mb-0">
+                    <label class="form-label" for="definirVinculo">Vínculo</label>
+                    <select class="form-select" id="definirVinculo" name="vinculo" required>
+                        {% for vinculo in vinculos_pagador %}
+                        <option value="{{ vinculo }}">{{ vinculo }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancelar</button>
+                <button class="btn btn-primary" type="submit" id="definirPagadorSalvar">Salvar pagador</button>
+            </div>
+        </form>
+    </div>
+</div>
 {% endif %}
+
+<div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1090">
+    <div id="toastPagador" class="toast align-items-center text-bg-success border-0" role="status" aria-live="polite" aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body" id="toastPagadorTexto"></div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Fechar"></button>
+        </div>
+    </div>
+</div>
 
 <div class="modal fade" id="modalSenha" tabindex="-1" aria-labelledby="modalSenhaTitulo" aria-hidden="true">
     <div class="modal-dialog">
@@ -200,6 +263,148 @@
             document.getElementById("pagadorDocumento").value = editar ? origem.getAttribute("data-documento") : "";
             document.getElementById("pagadorEmail").value = editar ? origem.getAttribute("data-email") : "";
             document.getElementById("pagadorTelefone").value = editar ? origem.getAttribute("data-telefone") : "";
+        });
+    }
+    function apenasDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+    function mascaraDocumento(valor) {
+        var digitos = apenasDigitos(valor).slice(0, 14);
+        if (digitos.length <= 11) {
+            return digitos
+                .replace(/(\d{3})(\d)/, "$1.$2")
+                .replace(/(\d{3})(\d)/, "$1.$2")
+                .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+        }
+        return digitos
+            .replace(/^(\d{2})(\d)/, "$1.$2")
+            .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+            .replace(/\.(\d{3})(\d)/, ".$1/$2")
+            .replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+    }
+    function mascaraTelefone(valor) {
+        var digitos = apenasDigitos(valor);
+        if (digitos.indexOf("55") === 0 && (digitos.length === 12 || digitos.length === 13)) {
+            digitos = digitos.slice(2);
+        }
+        digitos = digitos.slice(0, 11);
+        if (digitos.length < 3) {
+            return digitos.length ? "(" + digitos : "";
+        }
+        var ddd = digitos.slice(0, 2);
+        var resto = digitos.slice(2);
+        if (digitos.length <= 10) {
+            var fixo = resto.slice(0, 4);
+            var fimFixo = resto.slice(4);
+            return "(" + ddd + ") " + fixo + (fimFixo ? "-" + fimFixo : "");
+        }
+        return "(" + ddd + ") " + resto.slice(0, 5) + (resto.length > 5 ? "-" + resto.slice(5) : "");
+    }
+    function mostrarToast(mensagem, sucesso) {
+        var toast = document.getElementById("toastPagador");
+        var texto = document.getElementById("toastPagadorTexto");
+        if (!toast || !texto || !window.bootstrap) return;
+        texto.textContent = mensagem;
+        toast.classList.toggle("text-bg-success", sucesso);
+        toast.classList.toggle("text-bg-danger", !sucesso);
+        bootstrap.Toast.getOrCreateInstance(toast, { delay: 4000 }).show();
+    }
+    var formDefinir = document.getElementById("formDefinirPagador");
+    var modalDefinir = document.getElementById("modalDefinirPagador");
+    var campoDocumento = document.getElementById("definirDocumento");
+    var campoTelefone = document.getElementById("definirTelefone");
+    if (campoDocumento) {
+        campoDocumento.addEventListener("input", function () {
+            campoDocumento.value = mascaraDocumento(campoDocumento.value);
+        });
+    }
+    if (campoTelefone) {
+        campoTelefone.addEventListener("input", function () {
+            campoTelefone.value = mascaraTelefone(campoTelefone.value);
+        });
+    }
+    if (modalDefinir) {
+        modalDefinir.addEventListener("show.bs.modal", function (evento) {
+            var origem = evento.relatedTarget;
+            if (!origem || !origem.classList.contains("js-definir-pagador")) return;
+            var erro = document.getElementById("pagadorErro");
+            if (erro) {
+                erro.textContent = "";
+                erro.classList.add("d-none");
+            }
+            formDefinir.action = origem.getAttribute("data-url") || "";
+            formDefinir.dataset.linha = origem.closest("tr") ? origem.closest("tr").id : "";
+            document.getElementById("modalDefinirPagadorTitulo").textContent =
+                "Definir Responsável Financeiro - Apto " + (origem.getAttribute("data-apto") || "");
+            document.getElementById("definirNome").value = origem.getAttribute("data-nome") || "";
+            campoDocumento.value = mascaraDocumento(origem.getAttribute("data-documento") || "");
+            document.getElementById("definirEmail").value = origem.getAttribute("data-email") || "";
+            campoTelefone.value = mascaraTelefone(origem.getAttribute("data-telefone") || "");
+            var vinculo = origem.getAttribute("data-vinculo") || "Proprietário";
+            var select = document.getElementById("definirVinculo");
+            select.value = Array.prototype.some.call(select.options, function (opcao) { return opcao.value === vinculo; })
+                ? vinculo
+                : "Proprietário";
+        });
+    }
+    if (formDefinir) {
+        formDefinir.addEventListener("submit", function (evento) {
+            evento.preventDefault();
+            var botao = document.getElementById("definirPagadorSalvar");
+            var erro = document.getElementById("pagadorErro");
+            botao.disabled = true;
+            fetch(formDefinir.action, {
+                method: "POST",
+                headers: { "Accept": "application/json", "X-Requested-With": "fetch" },
+                body: new FormData(formDefinir)
+            }).then(function (resposta) {
+                return resposta.json().then(function (corpo) {
+                    return { ok: resposta.ok, corpo: corpo || {} };
+                });
+            }).then(function (resultado) {
+                botao.disabled = false;
+                if (!resultado.ok || !resultado.corpo.success) {
+                    var mensagem = resultado.corpo.message || "Não foi possível salvar o pagador.";
+                    if (erro) {
+                        erro.textContent = mensagem;
+                        erro.classList.remove("d-none");
+                    }
+                    mostrarToast(mensagem, false);
+                    return;
+                }
+                var linha = document.getElementById(formDefinir.dataset.linha || "");
+                if (linha) {
+                    var celulaNome = linha.querySelector(".js-celula-nome");
+                    var celulaDocumento = linha.querySelector(".js-celula-documento");
+                    if (celulaNome) celulaNome.textContent = resultado.corpo.nome || "";
+                    if (celulaDocumento) celulaDocumento.textContent = resultado.corpo.documento || "—";
+                    linha.querySelectorAll(".js-definir-pagador, .js-editar").forEach(function (campo) {
+                        campo.setAttribute("data-nome", resultado.corpo.nome || "");
+                        campo.setAttribute("data-documento", resultado.corpo.documento_formatado || "");
+                        campo.setAttribute("data-email", resultado.corpo.email || "");
+                        campo.setAttribute("data-telefone", resultado.corpo.telefone || "");
+                        if (campo.classList.contains("js-definir-pagador")) {
+                            campo.setAttribute("data-vinculo", resultado.corpo.vinculo || "Proprietário");
+                            campo.classList.remove("btn-warning", "btn-outline-warning");
+                            campo.classList.add("btn-outline-secondary");
+                            campo.textContent = "✏️ Editar Pagador";
+                        }
+                    });
+                }
+                if (window.bootstrap) {
+                    var instancia = bootstrap.Modal.getInstance(modalDefinir);
+                    if (instancia) instancia.hide();
+                }
+                mostrarToast(resultado.corpo.message || "Pagador definido.", true);
+            }).catch(function () {
+                botao.disabled = false;
+                var mensagem = "Não foi possível salvar o pagador.";
+                if (erro) {
+                    erro.textContent = mensagem;
+                    erro.classList.remove("d-none");
+                }
+                mostrarToast(mensagem, false);
+            });
         });
     }
     var formSenha = document.getElementById("formSenha");

@@ -163,6 +163,54 @@
         font-size: 1.6rem;
     }
 
+    .foto-facial-box {
+        border: 1px solid #e9ecef;
+        border-radius: 0.75rem;
+        background: #f8f9fa;
+        padding: 0.85rem;
+        height: 100%;
+    }
+
+    .avatar-upload-circulo {
+        width: 112px;
+        height: 112px;
+        border-radius: 50%;
+        background: #e9ecef;
+        border: 2px solid #0d6efd;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .avatar-upload-icone {
+        font-size: 1.4rem;
+        color: #6c757d;
+    }
+
+    .avatar-upload-preview,
+    .avatar-upload-circulo .js-camera-video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 50%;
+    }
+
+    .avatar-upload-circulo .js-camera-video {
+        transform: scaleX(-1);
+    }
+
+    .foto-dicas {
+        font-size: 0.8rem;
+        color: #495057;
+        background: #fff;
+        border-radius: 0.5rem;
+        padding: 0.55rem 0.7rem;
+    }
+
     .foto-facial-visor {
         position: relative;
         width: min(100%, 320px);
@@ -404,6 +452,33 @@
                         </div>
                         <div class="card-corpo card-body pt-2">
                             <div class="row g-3">
+                                <div class="col-12 col-lg-4">
+                                    <div class="foto-facial-box">
+                                        <div class="fw-semibold mb-2">Foto para Reconhecimento Facial</div>
+                                        <div class="d-flex flex-column align-items-center text-center">
+                                            <div class="avatar-upload-circulo mb-2" aria-hidden="true">
+                                                <img class="avatar-upload-preview d-none" alt="">
+                                                <i class="bi bi-camera avatar-upload-icone"></i>
+                                            </div>
+                                            <button type="button" class="btn btn-primary btn-sm w-100 js-tirar-foto">📸 Tirar Foto (Abrir Câmera)</button>
+                                            <button type="button" class="btn btn-link btn-sm text-secondary text-decoration-none js-escolher-galeria">📁 Escolher da Galeria/Arquivos</button>
+                                            <p class="small text-muted d-none js-foto-aviso mb-0">A câmera não pôde ser ativada, selecione uma foto existente</p>
+                                        </div>
+                                        <input type="file" id="camera_input_0" name="morador_0_foto" accept="image/*" capture="user" class="d-none js-camera-input">
+                                        <input type="file" accept="image/*" class="d-none js-galeria-input">
+                                        <input type="hidden" name="morador_0_foto_reaproveitar" class="js-foto-reaproveitar" value="">
+                                        <div class="foto-dicas mt-2 text-start">
+                                            <div class="fw-semibold mb-1">💡 Para um bom funcionamento da portaria:</div>
+                                            <ul class="mb-0 ps-3">
+                                                <li>Evite boné, óculos escuros, máscaras ou cabelo cobrindo o rosto.</li>
+                                                <li>Procure um ambiente bem iluminado (evite contra a luz).</li>
+                                                <li>Olhe diretamente para a câmera, enquadrando o rosto no centro.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-lg-8">
+                                    <div class="row g-3">
                                 <div class="col-12 position-relative">
                                     <label class="form-label">Nome completo</label>
                                     <input class="form-control js-autocomplete" name="morador_0_nome"
@@ -483,6 +558,8 @@
                                         </label>
         </div>
     </div>
+                                    </div>
+                                </div>
 </div>
                         </div>
                     </div>
@@ -659,7 +736,11 @@
                         {% for pessoa in lista_prop %}
                         {% set i = loop.index0 %}
                         {% set tem_dados = pessoa and pessoa.nome_completo and pessoa.cpf %}
-                        <div class="card shadow-sm mb-3 pessoa-card proprietario-item">
+                        <div class="card shadow-sm mb-3 pessoa-card proprietario-item"
+                             {% if pessoa and foto_facial_url(pessoa) %}
+                             data-foto-url="{{ foto_facial_url(pessoa) }}"
+                             data-foto-nome="{{ pessoa.foto_facial }}"
+                             {% endif %}>
                             {% if pessoa and pessoa.id %}
                             <input type="hidden" name="proprietario_{{ i }}_id" value="{{ pessoa.id }}">
                 {% endif %}
@@ -845,6 +926,7 @@
                             {% if pessoa and pessoa.id %}
                             <input type="hidden" name="morador_{{ i }}_id" value="{{ pessoa.id }}">
                             {% endif %}
+                            <input type="hidden" name="morador_{{ i }}_foto_reaproveitar" class="js-foto-reaproveitar" value="">
                             <div class="card-header border-bottom-0 pb-2">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                     <div class="d-flex align-items-center gap-2 min-w-0">
@@ -1598,6 +1680,8 @@
         campo.value = valor || "";
     }
 
+    const fotosPorCpf = {{ fotos_por_cpf|default({}, true)|tojson }};
+
     function dadosDoCard(card) {
         return {
             nome: valorCampo(card, "nome"),
@@ -1606,6 +1690,259 @@
             email: valorCampo(card, "email"),
             data_nascimento: valorCampo(card, "data_nascimento"),
         };
+    }
+
+    let estadoCamera = "prompt";
+    if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({ name: "camera" }).then((status) => {
+            estadoCamera = status.state;
+            status.onchange = () => {
+                estadoCamera = status.state;
+            };
+        }).catch(() => {});
+    }
+
+    function mostrarPreviewAvatar(card, url) {
+        const preview = card.querySelector(".avatar-upload-preview");
+        const icone = card.querySelector(".avatar-upload-icone");
+        if (!preview) {
+            return;
+        }
+        if (url) {
+            preview.src = url;
+            preview.classList.remove("d-none");
+            if (icone) {
+                icone.classList.add("d-none");
+            }
+            const aviso = card.querySelector(".js-foto-aviso");
+            if (aviso) {
+                aviso.classList.add("d-none");
+            }
+            return;
+        }
+        preview.removeAttribute("src");
+        preview.classList.add("d-none");
+        if (icone) {
+            icone.classList.remove("d-none");
+        }
+    }
+
+    function mostrarAvisoCamera(card) {
+        const aviso = card.querySelector(".js-foto-aviso");
+        if (aviso) {
+            aviso.textContent = "A câmera não pôde ser ativada, selecione uma foto existente";
+            aviso.classList.remove("d-none");
+        }
+    }
+
+    function cameraDisponivel() {
+        return Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    }
+
+    function pararCameraAoVivo(card) {
+        const video = card.querySelector(".js-camera-video");
+        if (video && video.srcObject) {
+            video.srcObject.getTracks().forEach((trilha) => trilha.stop());
+            video.srcObject = null;
+        }
+        if (video) {
+            video.remove();
+        }
+        const botao = card.querySelector(".js-tirar-foto");
+        if (botao) {
+            botao.textContent = "📸 Tirar Foto (Abrir Câmera)";
+        }
+    }
+
+    function capturarQuadro(card, video) {
+        const largura = video.videoWidth || 0;
+        const altura = video.videoHeight || 0;
+        if (!largura || !altura) {
+            return;
+        }
+        const lado = Math.min(largura, altura);
+        const quadro = document.createElement("canvas");
+        quadro.width = 600;
+        quadro.height = 600;
+        const contexto = quadro.getContext("2d");
+        contexto.drawImage(
+            video,
+            (largura - lado) / 2,
+            (altura - lado) / 2,
+            lado,
+            lado,
+            0,
+            0,
+            600,
+            600
+        );
+        pararCameraAoVivo(card);
+        quadro.toBlob((blob) => {
+            if (!blob) {
+                return;
+            }
+            publicarArquivo(card, new File([blob], "facial.jpg", { type: "image/jpeg" }));
+        }, "image/jpeg", 0.92);
+    }
+
+    function publicarArquivo(card, arquivo) {
+        pararCameraAoVivo(card);
+        const destino = card.querySelector(".js-camera-input");
+        const reaproveitar = card.querySelector(".js-foto-reaproveitar");
+        if (reaproveitar) {
+            reaproveitar.value = "";
+        }
+        if (destino && arquivo && destino.files[0] !== arquivo) {
+            const transferencia = new DataTransfer();
+            transferencia.items.add(arquivo);
+            destino.dataset.sincronizando = "1";
+            destino.files = transferencia.files;
+            delete destino.dataset.sincronizando;
+        }
+        if (!arquivo) {
+            mostrarPreviewAvatar(card, "");
+            return;
+        }
+        const leitor = new FileReader();
+        leitor.onload = () => mostrarPreviewAvatar(card, String(leitor.result || ""));
+        leitor.readAsDataURL(arquivo);
+    }
+
+    function abrirGaleria(card) {
+        pararCameraAoVivo(card);
+        const galeria = card.querySelector(".js-galeria-input");
+        if (galeria) {
+            galeria.click();
+        }
+    }
+
+    function abrirCamera(card) {
+        const camera = card.querySelector(".js-camera-input");
+        const aoVivo = card.querySelector(".js-camera-video");
+        if (aoVivo && aoVivo.srcObject) {
+            capturarQuadro(card, aoVivo);
+            return;
+        }
+        if (!camera || !cameraDisponivel() || estadoCamera === "denied") {
+            mostrarAvisoCamera(card);
+            abrirGaleria(card);
+            return;
+        }
+        const aparelho = window.matchMedia("(pointer: coarse)").matches;
+        if (aparelho) {
+            camera.click();
+            return;
+        }
+        navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: "user" },
+        }).then((stream) => {
+            estadoCamera = "granted";
+            const circulo = card.querySelector(".avatar-upload-circulo");
+            if (!circulo) {
+                stream.getTracks().forEach((trilha) => trilha.stop());
+                camera.click();
+                return;
+            }
+            const video = document.createElement("video");
+            video.className = "js-camera-video";
+            video.autoplay = true;
+            video.muted = true;
+            video.playsInline = true;
+            video.srcObject = stream;
+            circulo.appendChild(video);
+            const icone = card.querySelector(".avatar-upload-icone");
+            if (icone) {
+                icone.classList.add("d-none");
+            }
+            const botao = card.querySelector(".js-tirar-foto");
+            if (botao) {
+                botao.textContent = "📸 Capturar foto";
+            }
+        }).catch(() => {
+            estadoCamera = "denied";
+            mostrarAvisoCamera(card);
+            abrirGaleria(card);
+        });
+    }
+
+    function ligarAvatar(escopo) {
+        escopo.querySelectorAll(".js-camera-input").forEach((input) => {
+            if (input.dataset.ligado === "1") {
+                return;
+            }
+            input.dataset.ligado = "1";
+            input.addEventListener("change", () => {
+                if (input.dataset.sincronizando === "1") {
+                    return;
+                }
+                const arquivo = input.files && input.files[0];
+                const card = input.closest(".morador-item");
+                if (!arquivo || !card) {
+                    return;
+                }
+                publicarArquivo(card, arquivo);
+            });
+        });
+        escopo.querySelectorAll(".js-galeria-input").forEach((input) => {
+            if (input.dataset.ligado === "1") {
+                return;
+            }
+            input.dataset.ligado = "1";
+            input.addEventListener("change", () => {
+                const arquivo = input.files && input.files[0];
+                const card = input.closest(".morador-item");
+                if (!arquivo || !card) {
+                    return;
+                }
+                publicarArquivo(card, arquivo);
+            });
+        });
+        escopo.querySelectorAll(".js-tirar-foto").forEach((botao) => {
+            if (botao.dataset.ligado === "1") {
+                return;
+            }
+            botao.dataset.ligado = "1";
+            botao.addEventListener("click", () => {
+                const card = botao.closest(".morador-item");
+                if (card) {
+                    abrirCamera(card);
+                }
+            });
+        });
+        escopo.querySelectorAll(".js-escolher-galeria").forEach((botao) => {
+            if (botao.dataset.ligado === "1") {
+                return;
+            }
+            botao.dataset.ligado = "1";
+            botao.addEventListener("click", () => {
+                const card = botao.closest(".morador-item");
+                if (card) {
+                    abrirGaleria(card);
+                }
+            });
+        });
+    }
+
+    function aplicarFotoImportada(card, dados) {
+        pararCameraAoVivo(card);
+        const digitos = cpfDigitos(dados.cpf);
+        const conhecida = digitos ? fotosPorCpf[digitos] : null;
+        card.querySelectorAll(".js-camera-input, .js-galeria-input").forEach((campo) => {
+            campo.value = "";
+        });
+        const reaproveitar = card.querySelector(".js-foto-reaproveitar");
+        if (conhecida && conhecida.url) {
+            mostrarPreviewAvatar(card, conhecida.url);
+            if (reaproveitar) {
+                reaproveitar.value = conhecida.nome || "";
+            }
+            return;
+        }
+        mostrarPreviewAvatar(card, "");
+        if (reaproveitar) {
+            reaproveitar.value = "";
+        }
     }
 
     function htmlCabecalhoCard(titulo, classeRemover) {
@@ -1666,6 +2003,33 @@
                 ${htmlCabecalhoCard("Novo Morador", "remover-morador")}
                 <div class="card-corpo card-body pt-2">
                 <div class="row g-3">
+                    <div class="col-12 col-lg-4">
+                        <div class="foto-facial-box">
+                            <div class="fw-semibold mb-2">Foto para Reconhecimento Facial</div>
+                            <div class="d-flex flex-column align-items-center text-center">
+                                <div class="avatar-upload-circulo mb-2" aria-hidden="true">
+                                    <img class="avatar-upload-preview d-none" alt="">
+                                    <i class="bi bi-camera avatar-upload-icone"></i>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm w-100 js-tirar-foto">📸 Tirar Foto (Abrir Câmera)</button>
+                                <button type="button" class="btn btn-link btn-sm text-secondary text-decoration-none js-escolher-galeria">📁 Escolher da Galeria/Arquivos</button>
+                                <p class="small text-muted d-none js-foto-aviso mb-0">A câmera não pôde ser ativada, selecione uma foto existente</p>
+                            </div>
+                            <input type="file" id="camera_input_${index}" name="morador_${index}_foto" accept="image/*" capture="user" class="d-none js-camera-input">
+                            <input type="file" accept="image/*" class="d-none js-galeria-input">
+                            <input type="hidden" name="morador_${index}_foto_reaproveitar" class="js-foto-reaproveitar" value="">
+                            <div class="foto-dicas mt-2 text-start">
+                                <div class="fw-semibold mb-1">💡 Para um bom funcionamento da portaria:</div>
+                                <ul class="mb-0 ps-3">
+                                    <li>Evite boné, óculos escuros, máscaras ou cabelo cobrindo o rosto.</li>
+                                    <li>Procure um ambiente bem iluminado (evite contra a luz).</li>
+                                    <li>Olhe diretamente para a câmera, enquadrando o rosto no centro.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-8">
+                        <div class="row g-3">
                     <div class="col-12 position-relative">
                         <label class="form-label">Nome completo</label>
                         <input class="form-control js-autocomplete" name="morador_${index}_nome" autocomplete="off" required>
@@ -1720,6 +2084,8 @@
                             <label class="form-check-label" for="resp_morador_${index}">Responsável pela unidade</label>
                         </div>
                     </div>
+                        </div>
+                    </div>
                 </div>
                 </div>
             </div>`;
@@ -1759,6 +2125,7 @@
         if (card.classList.contains("morador-item")) {
             atualizarObrigatoriedadeMorador(card);
             ligarAutocomplete(card);
+            ligarAvatar(card);
             sincronizarVinculoMoradores();
         }
         if (card.classList.contains("proprietario-item") || card.classList.contains("morador-item")) {
@@ -1911,6 +2278,7 @@
                 return;
             }
         }
+        document.querySelectorAll(".morador-item").forEach((card) => pararCameraAoVivo(card));
     });
 
     document.getElementById("possui-veiculo").addEventListener("change", toggleVeiculos);
@@ -1944,6 +2312,7 @@
         }
         atualizarObrigatoriedadeMorador(card);
         sincronizarVinculoMoradores();
+        aplicarFotoImportada(card, dados);
         atualizarResumo(card);
         const nome = card.querySelector('input[name$="_nome"]');
         if (nome) {
@@ -2075,6 +2444,7 @@
 
     ativarNascimento(document);
     ligarAutocomplete(document);
+    ligarAvatar(document);
     document.querySelectorAll(".morador-item").forEach(atualizarObrigatoriedadeMorador);
     document.querySelectorAll(".proprietario-item, .morador-item").forEach(atualizarResumo);
     sincronizarVinculoMoradores();
@@ -2166,6 +2536,8 @@
             email: valor("email"),
             data_nascimento: valor("data_nascimento"),
             vinculo: valor("vinculo"),
+            fotoUrl: bloco.dataset.fotoUrl || "",
+            fotoNome: bloco.dataset.fotoNome || "",
         };
     }
 
@@ -2345,6 +2717,7 @@
         const idOculto = info.id
             ? `<input type="hidden" name="morador_${index}_id" value="${esc(info.id)}">`
             : "";
+        const fotoOculta = `<input type="hidden" name="morador_${index}_foto_reaproveitar" class="js-foto-reaproveitar" value="">`;
         const opcoes = opcoesVinculo.map((opcao) => {
             const selecionado = opcao === (info.vinculo || "Familiar/Morador") ? " selected" : "";
             const bloqueado = opcao === "Proprietário" ? " disabled" : "";
@@ -2352,6 +2725,7 @@
         }).join("");
         return `
             ${idOculto}
+            ${fotoOculta}
             ${htmlCabecalho(info.nome || "Novo Morador", "remover-morador", true)}
             ${window.htmlPainelFotoFacial ? window.htmlPainelFotoFacial(index) : ""}
             <div class="card-corpo card-body pt-2">
@@ -2675,9 +3049,33 @@
         }
         if (bloco.classList.contains("morador-item")) {
             atualizarObrigatoriedadePessoa(bloco);
+            aplicarFotoConhecida(bloco, dados);
         }
         sincronizarVinculoMoradores();
         atualizarResumo(bloco);
+    }
+
+    function aplicarFotoConhecida(bloco, dados) {
+        if (!dados.fotoUrl) {
+            return;
+        }
+        let campo = bloco.querySelector(".js-foto-reaproveitar");
+        if (!campo) {
+            campo = document.createElement("input");
+            campo.type = "hidden";
+            campo.className = "js-foto-reaproveitar";
+            const nomeCampo = bloco.querySelector("[name]")?.name || "";
+            const indice = (nomeCampo.match(/_(\d+)_/) || ["", "0"])[1];
+            campo.name = "morador_" + indice + "_foto_reaproveitar";
+            bloco.prepend(campo);
+        }
+        campo.value = dados.fotoNome || "";
+        const wrap = bloco.querySelector(".avatar-facial-wrap");
+        if (wrap) {
+            wrap.innerHTML = '<img class="avatar-facial rounded-circle" alt="" width="64" height="64" src="' + esc(dados.fotoUrl) + '">';
+        }
+        bloco.dataset.foto = "1";
+        bloco.dataset.fotoPreview = "1";
     }
 
     document.getElementById("importar-proprietario").addEventListener("show.bs.dropdown", () => {

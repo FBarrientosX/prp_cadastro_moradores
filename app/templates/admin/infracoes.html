@@ -110,7 +110,7 @@
 <div class="modal fade" id="modalRegistrarInfracao" tabindex="-1" aria-labelledby="modalRegistrarInfracaoTitulo" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <form class="modal-content" method="post" action="{{ url_for(acao_nova) }}" enctype="multipart/form-data" id="form-infracao"
-              data-dias="{{ dias_defesa }}">
+              data-hoje="{{ hoje.strftime('%Y-%m-%d') }}" data-dias="{{ dias_defesa }}" data-contagem="{{ prazo_defesa_tipo }}">
             <div class="modal-header">
                 <h2 class="modal-title h5" id="modalRegistrarInfracaoTitulo">Registrar infração</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
@@ -140,13 +140,29 @@
                     <div class="col-md-6">
                         <label class="form-label" for="data_ocorrencia">Data da ocorrência</label>
                         <input type="text" class="form-control datepicker" id="data_ocorrencia" name="data_ocorrencia"
-                               value="{{ hoje.strftime('%Y-%m-%d') }}" required autocomplete="off" placeholder="DD/MM/AAAA">
+                               value="{{ hoje.strftime('%Y-%m-%d') }}" max="{{ hoje.strftime('%Y-%m-%d') }}"
+                               required autocomplete="off" placeholder="DD/MM/AAAA">
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label" for="prazo_defesa">Prazo de defesa</label>
-                        <input type="text" class="form-control datepicker" id="prazo_defesa" name="prazo_defesa"
-                               value="{{ prazo_sugerido.strftime('%Y-%m-%d') }}" required autocomplete="off" placeholder="DD/MM/AAAA">
-                        <div class="form-text">Sugestão: hoje + {{ dias_defesa }} dias. Pode ajustar.</div>
+                        <span class="form-label d-block">Prazo de defesa</span>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label small mb-1" for="prazo_defesa_dias">Quantidade de dias</label>
+                                <input type="number" class="form-control" id="prazo_defesa_dias" name="prazo_defesa_dias"
+                                       min="1" max="365" required value="{{ dias_defesa }}">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small mb-1" for="prazo_defesa_tipo_contagem">Tipo de contagem</label>
+                                <select class="form-select" id="prazo_defesa_tipo_contagem" name="prazo_defesa_tipo_contagem">
+                                    <option value="corridos" {% if prazo_defesa_tipo != 'uteis' %}selected{% endif %}>Dias corridos</option>
+                                    <option value="uteis" {% if prazo_defesa_tipo == 'uteis' %}selected{% endif %}>Dias úteis</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="mb-0 mt-2">
+                            <span class="badge text-bg-primary" id="data-limite-defesa">Data limite para defesa: {{ prazo_sugerido.strftime('%d/%m/%Y') }}</span>
+                        </p>
+                        <input type="hidden" name="data_limite_defesa" id="data_limite_defesa" value="{{ prazo_sugerido.strftime('%Y-%m-%d') }}">
                     </div>
                     <div class="col-12">
                         <label class="form-label" for="descricao">Descrição</label>
@@ -231,15 +247,73 @@
 {% block scripts %}
 <script>
 (function () {
-    if (window.flatpickr) {
-        flatpickr(".datepicker", {
+    var formulario = document.getElementById("form-infracao");
+    var hojeIso = formulario ? formulario.getAttribute("data-hoje") : "";
+    var diasDefesa = formulario ? parseInt(formulario.getAttribute("data-dias") || "15", 10) : 15;
+    var contagem = formulario ? (formulario.getAttribute("data-contagem") || "corridos") : "corridos";
+    var campoOcorrencia = document.getElementById("data_ocorrencia");
+    if (campoOcorrencia && hojeIso) {
+        campoOcorrencia.max = hojeIso;
+    }
+    if (window.flatpickr && campoOcorrencia) {
+        flatpickr(campoOcorrencia, {
             locale: "pt",
             dateFormat: "Y-m-d",
             altInput: true,
             altFormat: "d/m/Y",
-            allowInput: true
+            allowInput: true,
+            maxDate: hojeIso || "today"
         });
     }
+    function prazoDefesa(isoHoje, dias, tipo) {
+        var partes = (isoHoje || "").split("-");
+        if (partes.length !== 3) return "";
+        var data = new Date(Number(partes[0]), Number(partes[1]) - 1, Number(partes[2]));
+        var quantidade = Math.min(365, Math.max(1, dias || 15));
+        if (tipo === "uteis") {
+            var restantes = quantidade;
+            while (restantes > 0) {
+                data.setDate(data.getDate() + 1);
+                var semana = data.getDay();
+                if (semana !== 0 && semana !== 6) restantes -= 1;
+            }
+        } else {
+            data.setDate(data.getDate() + quantidade);
+        }
+        var mes = String(data.getMonth() + 1).padStart(2, "0");
+        var dia = String(data.getDate()).padStart(2, "0");
+        return data.getFullYear() + "-" + mes + "-" + dia;
+    }
+    function exibirData(iso) {
+        var partes = (iso || "").split("-");
+        if (partes.length !== 3) return "";
+        return partes[2] + "/" + partes[1] + "/" + partes[0];
+    }
+    var campoDias = document.getElementById("prazo_defesa_dias");
+    var campoContagem = document.getElementById("prazo_defesa_tipo_contagem");
+    var seloPrazo = document.getElementById("data-limite-defesa");
+    var prazoOculto = document.getElementById("data_limite_defesa");
+    function atualizarPrazo() {
+        var dias = campoDias ? parseInt(campoDias.value, 10) : diasDefesa;
+        var tipoContagem = campoContagem ? campoContagem.value : contagem;
+        if (!dias || dias < 1 || dias > 365) {
+            if (seloPrazo) seloPrazo.textContent = "Informe de 1 a 365 dias.";
+            if (prazoOculto) prazoOculto.value = "";
+            return;
+        }
+        var prazoIso = prazoDefesa(hojeIso, dias, tipoContagem);
+        if (prazoOculto) prazoOculto.value = prazoIso;
+        if (seloPrazo) seloPrazo.textContent = "Data limite para defesa: " + exibirData(prazoIso);
+    }
+    if (campoDias) {
+        campoDias.addEventListener("input", atualizarPrazo);
+        campoDias.addEventListener("change", atualizarPrazo);
+    }
+    if (campoContagem) {
+        campoContagem.addEventListener("input", atualizarPrazo);
+        campoContagem.addEventListener("change", atualizarPrazo);
+    }
+    atualizarPrazo();
     var tipo = document.getElementById("tipo");
     var campoValor = document.getElementById("campo-valor");
     function atualizarValor() {

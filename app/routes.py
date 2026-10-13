@@ -335,8 +335,21 @@ def _snapshot_acesso_pessoa(pessoa):
     }
 
 
-def _aplicar_fotos_faciais_moradores(pessoas, fotos_novas):
+def _fotos_faciais_da_unidade(unidade):
+    """Nomes de arquivo já gravados nas pessoas desta unidade."""
+    nomes = set()
+    if unidade is None:
+        return nomes
+    for pessoa in unidade.pessoas.all():
+        nome = nome_foto_facial_seguro(pessoa.foto_facial)
+        if nome:
+            nomes.add(nome)
+    return nomes
+
+
+def _aplicar_fotos_faciais_moradores(pessoas, fotos_novas, fotos_permitidas=None):
     """Grava fotos enviadas no formulário e sincroniza a credencial se já aprovado."""
+    permitidas = fotos_permitidas or set()
     substituidos = []
     for indice, pessoa in enumerate(pessoas):
         if not getattr(pessoa, "eh_morador", False):
@@ -345,6 +358,15 @@ def _aplicar_fotos_faciais_moradores(pessoas, fotos_novas):
         base64_texto = request.form.get(f"morador_{indice}_foto_base64", "")
         tem_envio = bool(arquivo and arquivo.filename) or bool((base64_texto or "").strip())
         if not tem_envio:
+            reaproveitar = nome_foto_facial_seguro(
+                request.form.get(f"morador_{indice}_foto_reaproveitar")
+            )
+            if reaproveitar and reaproveitar in permitidas:
+                if pessoa.foto_facial != reaproveitar:
+                    pessoa.foto_facial = reaproveitar
+                    pessoa.foto_atualizada_em = _agora_foto_facial()
+                sincronizar_credencial_facial(pessoa)
+                continue
             if pessoa.foto_facial and pessoa.status == StatusPessoa.APROVADO:
                 sincronizar_credencial_facial(pessoa)
             continue
@@ -1877,6 +1899,15 @@ def cadastro_inicial(slug):
         return redirect(url_for("tenant_login", slug=condominio.slug))
 
     documento = documento_pre_autorizado(unidade)
+    fotos_por_cpf = {}
+    for pessoa in unidade.pessoas.all():
+        nome_foto = nome_foto_facial_seguro(pessoa.foto_facial)
+        digitos = _somente_digitos(pessoa.cpf)
+        if nome_foto and digitos:
+            fotos_por_cpf[digitos] = {
+                "url": url_for("static", filename=f"uploads/faciais/{nome_foto}"),
+                "nome": nome_foto,
+            }
     return render_template(
         "cadastro_morador.html",
         bloco=bloco,
@@ -1887,6 +1918,7 @@ def cadastro_inicial(slug):
         slug=condominio.slug,
         pre_cadastro=True,
         exige_cpf=bool(documento),
+        fotos_por_cpf=fotos_por_cpf,
         mascara={
             "nome": mascarar_nome(unidade.proprietario_nome),
             "documento": mascarar_documento(documento),
@@ -2522,6 +2554,7 @@ def salvar_cadastro():
             if not listas_separadas:
                 _anexar_proprietarios_nao_ocupantes(unidade, pessoas_data)
 
+        fotos_permitidas = _fotos_faciais_da_unidade(unidade)
         pessoas_criadas = _salvar_pessoas_veiculos(
             unidade,
             pessoas_data,
@@ -2534,6 +2567,7 @@ def salvar_cadastro():
             fotos_antigas = _aplicar_fotos_faciais_moradores(
                 pessoas_criadas[: len(moradores_lista)],
                 fotos_novas,
+                fotos_permitidas,
             )
 
         avisos_upload = []

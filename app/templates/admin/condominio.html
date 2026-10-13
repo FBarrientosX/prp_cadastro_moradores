@@ -319,11 +319,19 @@
             <h2 class="h5 mb-3">Reservas e infrações</h2>
             <div class="row g-3">
                 <div class="col-md-4">
-                    <label class="form-label" for="dias_padrao_defesa_multa">Prazo de defesa da multa (dias)</label>
-                    <input type="number" class="form-control" id="dias_padrao_defesa_multa"
-                           name="dias_padrao_defesa_multa" min="1" max="365" required
-                           value="{{ condominio.dias_padrao_defesa_multa if condominio.dias_padrao_defesa_multa is not none else 15 }}">
-                    <div class="form-text">Prazo padrão do contraditório.</div>
+                    <label class="form-label" for="prazo_defesa_dias">Prazo de defesa da multa (dias)</label>
+                    <input type="number" class="form-control" id="prazo_defesa_dias"
+                           name="prazo_defesa_dias" min="1" max="365" required
+                           value="{{ condominio.prazo_defesa_dias if condominio.prazo_defesa_dias is not none else (condominio.dias_padrao_defesa_multa if condominio.dias_padrao_defesa_multa is not none else 15) }}">
+                    <div class="form-text">Contado a partir de hoje, na data do registro.</div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="prazo_defesa_tipo_contagem">Contagem do prazo</label>
+                    <select class="form-select" id="prazo_defesa_tipo_contagem" name="prazo_defesa_tipo_contagem">
+                        <option value="corridos" {% if (condominio.prazo_defesa_tipo_contagem or 'corridos') != 'uteis' %}selected{% endif %}>Dias corridos</option>
+                        <option value="uteis" {% if condominio.prazo_defesa_tipo_contagem == 'uteis' %}selected{% endif %}>Dias úteis</option>
+                    </select>
+                    <div class="form-text">Dias úteis pulam sábado e domingo.</div>
                 </div>
                 <div class="col-12">
                     <input type="hidden" name="exigir_cpf_convidados" value="0">

@@ -1217,13 +1217,24 @@ def _garantir_colunas_dados_condominio():
         ("convencao_filename", "VARCHAR(255)"),
         ("exigir_cpf_convidados", "BOOLEAN NOT NULL DEFAULT 0"),
         ("dias_padrao_defesa_multa", "INTEGER NOT NULL DEFAULT 15"),
+        ("prazo_defesa_dias", "INTEGER NOT NULL DEFAULT 15"),
+        ("prazo_defesa_tipo_contagem", "VARCHAR(10) NOT NULL DEFAULT 'corridos'"),
         ("aprovacao_automatica_reservas", "BOOLEAN NOT NULL DEFAULT 0"),
     )
+    faltava_prazo_defesa = "prazo_defesa_dias" not in colunas
     for nome, tipo in definicoes:
         if nome in colunas:
             continue
         db.session.execute(text(f"ALTER TABLE condominio ADD COLUMN {nome} {tipo}"))
     db.session.commit()
+    if faltava_prazo_defesa:
+        db.session.execute(
+            text(
+                "UPDATE condominio SET prazo_defesa_dias = dias_padrao_defesa_multa "
+                "WHERE dias_padrao_defesa_multa IS NOT NULL"
+            )
+        )
+        db.session.commit()
     db.session.execute(
         text(
             "UPDATE condominio SET criado_em = data_cadastro "
@@ -1274,6 +1285,7 @@ def _garantir_colunas_financeiro():
         ("fin_multa_percentual", "FLOAT NOT NULL DEFAULT 2.0"),
         ("fin_juros_mensal", "FLOAT NOT NULL DEFAULT 1.0"),
         ("fin_indice_correcao", "VARCHAR(20) NOT NULL DEFAULT 'UFIR-RJ'"),
+        ("taxa_segunda_via_boleto", "FLOAT NOT NULL DEFAULT 5.99"),
     )
     alterou = False
     for nome, tipo in definicoes:

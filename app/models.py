@@ -193,10 +193,13 @@ class Condominio(db.Model):
     fin_multa_percentual = db.Column(db.Float, nullable=False, default=2.0)
     fin_juros_mensal = db.Column(db.Float, nullable=False, default=1.0)
     fin_indice_correcao = db.Column(db.String(20), nullable=False, default="UFIR-RJ")
+    taxa_segunda_via_boleto = db.Column(db.Float, nullable=False, default=5.99)
     # Lista de convidados da reserva exige CPF quando ligado.
     exigir_cpf_convidados = db.Column(db.Boolean, nullable=False, default=False)
-    # Prazo do contraditório da multa, em dias.
+    # Prazo do contraditório da multa, em dias. Espelha prazo_defesa_dias.
     dias_padrao_defesa_multa = db.Column(db.Integer, nullable=False, default=15)
+    prazo_defesa_dias = db.Column(db.Integer, nullable=False, default=15)
+    prazo_defesa_tipo_contagem = db.Column(db.String(10), nullable=False, default="corridos")
     # Área gratuita nasce aprovada, sem passar pelo síndico.
     aprovacao_automatica_reservas = db.Column(
         db.Boolean, nullable=False, default=False

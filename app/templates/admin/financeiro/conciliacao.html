@@ -80,7 +80,7 @@
                     </div>
                     <div class="col-md-4">
                         <label class="form-label" for="filtroBlocoRemessa">Bloco</label>
-                        <select class="form-select" id="filtroBlocoRemessa" name="bloco">
+                        <select class="form-select" id="filtroBlocoRemessa" name="bloco" onchange="this.form.submit()">
                             <option value="">Todos</option>
                             {% for bloco in blocos %}
                             <option value="{{ bloco }}" {% if filtro_bloco == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
@@ -89,7 +89,6 @@
                     </div>
                     <div class="col-auto">
                         <input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
-                        <button class="btn btn-outline-primary" type="submit">Filtrar</button>
                         {% if filtro_competencia %}
                         <a class="btn btn-link" href="{{ url_for('admin_financeiro_conciliacao', competencia='todas', bloco=filtro_bloco) }}">Ver todas</a>
                         {% endif %}

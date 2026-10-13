@@ -1,18 +1,23 @@
 """Planta física e pagadores. Admin gere; síndico libera o 1º acesso do próprio bloco."""
 
-from flask import flash, redirect, render_template, request, url_for
+from flask import flash, jsonify, redirect, render_template, request, url_for
 
 from app import db
 from app.auth import condominio_id_obrigatorio, get_current_user
-from app.models import Role, StatusUnidade, Unidade
+from app.models import Pessoa, Role, StatusUnidade, Unidade
 from app.planta_unidades import (
+    formatar_documento,
     gravar_pagador,
     garantir_unidade_planta,
     ler_linhas_pagadores,
     mascarar_documento,
     nome_pagador_publico,
     reabrir_primeiro_acesso,
+    definir_pagador_manual,
     definir_senha_temporaria,
+    validar_pagador_manual,
+    vinculo_do_pagador,
+    VINCULOS_PAGADOR,
 )
 from app.utils import get_blocos, normalizar_bloco_apartamento, validar_unidade
 
@@ -58,6 +63,23 @@ def _unidades_visiveis(usuario, condominio_id):
     return consulta.order_by(Unidade.bloco.asc(), Unidade.apartamento.asc()).all()
 
 
+def _pessoa_pagador_no_grupo(unidade, pessoas):
+    from app.planta_unidades import apenas_digitos
+
+    externos = [pessoa for pessoa in pessoas if pessoa.eh_proprietario and not pessoa.eh_morador]
+    documento = apenas_digitos(unidade.cpf_pre_autorizado or unidade.proprietario_cpf)
+    if documento:
+        for pessoa in externos:
+            if apenas_digitos(pessoa.cpf) == documento:
+                return pessoa
+        for pessoa in pessoas:
+            if apenas_digitos(pessoa.cpf) == documento:
+                return pessoa
+    if externos:
+        return externos[0]
+    return None
+
+
 def _situacao(unidade):
     if unidade.status == StatusUnidade.PENDENTE or unidade.atualizacao_pendente:
         return "pendente"
@@ -101,14 +123,34 @@ def _render_planta(origem):
         haystack = f"{unidade.bloco} {unidade.apartamento} {nome}".lower()
         if busca and busca not in haystack:
             continue
+        documento_bruto = unidade.cpf_pre_autorizado or unidade.proprietario_cpf or ""
         linhas.append(
             {
                 "unidade": unidade,
                 "nome": nome,
-                "documento": mascarar_documento(unidade.cpf_pre_autorizado or unidade.proprietario_cpf),
+                "documento": mascarar_documento(documento_bruto),
+                "documento_bruto": documento_bruto,
+                "email": unidade.proprietario_email or "",
+                "telefone": unidade.proprietario_telefone or "",
+                "vinculo": "Proprietário",
+                "tem_pagador": bool((unidade.proprietario_nome or "").strip()),
                 "situacao": situacao,
             }
         )
+    if linhas:
+        ids = [linha["unidade"].id for linha in linhas]
+        pessoas = (
+            Pessoa.query.filter(Pessoa.unidade_id.in_(ids))
+            .order_by(Pessoa.id.asc())
+            .all()
+        )
+        por_unidade = {}
+        for pessoa in pessoas:
+            por_unidade.setdefault(pessoa.unidade_id, []).append(pessoa)
+        for linha in linhas:
+            grupo = por_unidade.get(linha["unidade"].id, [])
+            pessoa = _pessoa_pagador_no_grupo(linha["unidade"], grupo)
+            linha["vinculo"] = vinculo_do_pagador(pessoa)
     return render_template(
         "admin/planta.html",
         linhas=linhas,
@@ -119,6 +161,7 @@ def _render_planta(origem):
         blocos=get_blocos() if usuario.get_blocos_permitidos() is None else usuario.get_blocos_permitidos(),
         pode_editar=usuario.role == Role.ADMIN,
         origem=origem,
+        vinculos_pagador=VINCULOS_PAGADOR,
     )
 
 
@@ -127,7 +170,7 @@ def admin_cadastros():
 
 
 def admin_financeiro_pagadores():
-    return _render_planta("financeiro")
+    return redirect(url_for("admin_cadastros", **request.args.to_dict(flat=True)))
 
 
 def admin_cadastros_salvar():
@@ -238,6 +281,48 @@ def admin_cadastros_liberar(unidade_id):
     return redirect(url_for("admin_cadastros"))
 
 
+def admin_definir_pagador(unidade_id):
+    usuario = _usuario_planta()
+    if usuario is None or usuario.role != Role.ADMIN:
+        return jsonify(success=False, message="Somente a administração define o pagador."), 403
+    condominio_id = condominio_id_obrigatorio(usuario)
+    unidade = Unidade.query.filter_by(id=unidade_id, condominio_id=condominio_id).first()
+    if unidade is None or unidade.eh_setor_interno:
+        return jsonify(success=False, message="Unidade não encontrada neste condomínio."), 404
+    erro, dados = validar_pagador_manual(
+        request.form.get("nome"),
+        request.form.get("documento"),
+        request.form.get("email"),
+        request.form.get("telefone"),
+        request.form.get("vinculo"),
+    )
+    if erro:
+        return jsonify(success=False, message=erro), 400
+    definir_pagador_manual(
+        unidade,
+        dados["nome"],
+        dados["documento"],
+        dados["email"],
+        dados["telefone"],
+        dados["vinculo"],
+    )
+    from app.routes import _registrar_auditoria
+
+    _registrar_auditoria(usuario, f"Pagador da unidade #{unidade.id} definido manualmente.")
+    db.session.commit()
+    return jsonify(
+        success=True,
+        message="Pagador definido. Os boletos desta unidade já podem usar esses dados.",
+        nome=unidade.proprietario_nome or "",
+        documento=mascarar_documento(unidade.proprietario_cpf),
+        documento_formatado=formatar_documento(unidade.proprietario_cpf),
+        email=unidade.proprietario_email or "",
+        telefone=unidade.proprietario_telefone or "",
+        vinculo=dados["vinculo"],
+        tem_pagador=True,
+    )
+
+
 def admin_cadastros_senha(unidade_id):
     usuario, unidade = _unidade_do_ator(unidade_id)
     if usuario is None:
@@ -288,5 +373,11 @@ def register(app):
         "/admin/cadastros/<int:unidade_id>/senha",
         "admin_cadastros_senha",
         admin_cadastros_senha,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/unidades/<int:unidade_id>/definir_pagador",
+        "admin_definir_pagador",
+        admin_definir_pagador,
         methods=["POST"],
     )

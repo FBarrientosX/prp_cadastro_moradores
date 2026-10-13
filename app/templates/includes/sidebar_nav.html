@@ -88,7 +88,7 @@
             <i class="bi bi-person-check me-2"></i>Aprovação de Moradores
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_cadastros') %}active{% endif %}" href="{{ url_for('admin_cadastros') }}">
-            🏠 Planta de Unidades &amp; Pagadores
+            🏠 Unidades &amp; Pagadores
         </a>
         <a class="nav-link text-white d-flex justify-content-between align-items-center {% if ocorrencias_ativo %}active{% endif %}" href="{{ url_for('sindico_ocorrencias') }}">
             <span class="d-flex align-items-center"><i class="bi bi-kanban me-2"></i>Ocorrências</span>
@@ -163,7 +163,7 @@
         </a>
         {% if sidebar_user.role == 'admin' %}
         <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_cadastros') %}active{% endif %}" href="{{ url_for('admin_cadastros') }}">
-            🏠 Planta de Unidades &amp; Pagadores
+            🏠 Unidades &amp; Pagadores
         </a>
         {% endif %}
         {% if sidebar_user.role == 'admin' %}
@@ -207,9 +207,6 @@
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_orcamento') %}active{% endif %}" href="{{ url_for('admin_financeiro_orcamento') }}">
             📊 Previsão Orçamentária
-        </a>
-        <a class="nav-link text-white d-flex align-items-center {% if ep == 'admin_financeiro_pagadores' %}active{% endif %}" href="{{ url_for('admin_financeiro_pagadores') }}">
-            🏠 Planta de Unidades &amp; Pagadores
         </a>
         <a class="nav-link text-white d-flex align-items-center {% if ep.startswith('admin_financeiro_frac') %}active{% endif %}" href="{{ url_for('admin_financeiro_fracoes') }}">
             📐 Frações

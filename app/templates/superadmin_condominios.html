@@ -361,8 +361,15 @@
                         <div class="col-md-4">
                             <label class="form-label" for="edit_dias_defesa_{{ condo.id }}">Prazo de defesa da multa (dias)</label>
                             <input type="number" class="form-control" id="edit_dias_defesa_{{ condo.id }}"
-                                   name="dias_padrao_defesa_multa" min="1" max="365" required
-                                   value="{{ condo.dias_padrao_defesa_multa if condo.dias_padrao_defesa_multa is not none else 15 }}">
+                                   name="prazo_defesa_dias" min="1" max="365" required
+                                   value="{{ condo.prazo_defesa_dias if condo.prazo_defesa_dias is not none else (condo.dias_padrao_defesa_multa if condo.dias_padrao_defesa_multa is not none else 15) }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_contagem_defesa_{{ condo.id }}">Contagem do prazo</label>
+                            <select class="form-select" id="edit_contagem_defesa_{{ condo.id }}" name="prazo_defesa_tipo_contagem">
+                                <option value="corridos" {% if (condo.prazo_defesa_tipo_contagem or 'corridos') != 'uteis' %}selected{% endif %}>Dias corridos</option>
+                                <option value="uteis" {% if condo.prazo_defesa_tipo_contagem == 'uteis' %}selected{% endif %}>Dias úteis</option>
+                            </select>
                         </div>
                         <div class="col-md-8 d-flex flex-column justify-content-center gap-2">
                             <input type="hidden" name="exigir_cpf_convidados" value="0">

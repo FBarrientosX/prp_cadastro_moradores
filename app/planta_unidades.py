@@ -122,6 +122,122 @@ def gravar_pagador(unidade, nome, documento, email, telefone, substituir_vazios=
         unidade.proprietario_telefone = telefone[:20] or None
 
 
+VINCULOS_PAGADOR = ("Proprietário", "Inquilino", "Imobiliária")
+
+
+def formatar_documento(documento):
+    digitos = apenas_digitos(documento)
+    if len(digitos) == 11:
+        return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
+    if len(digitos) == 14:
+        return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
+    return digitos
+
+
+def formatar_telefone(telefone):
+    digitos = apenas_digitos(telefone)
+    if digitos.startswith("55") and len(digitos) in (12, 13):
+        digitos = digitos[2:]
+    if len(digitos) == 11:
+        return f"({digitos[:2]}) {digitos[2:7]}-{digitos[7:]}"
+    if len(digitos) == 10:
+        return f"({digitos[:2]}) {digitos[2:6]}-{digitos[6:]}"
+    return digitos[:20]
+
+
+def validar_pagador_manual(nome, documento, email, telefone, vinculo):
+    """Confere o mínimo para o boleto. Devolve (erro, dados)."""
+    nome = (nome or "").strip()
+    if not nome:
+        return "Informe o nome completo ou a razão social.", None
+    digitos = apenas_digitos(documento)
+    if len(digitos) not in (11, 14):
+        return "Informe um CPF com 11 dígitos ou um CNPJ com 14.", None
+    email = (email or "").strip().lower()
+    if email and ("@" not in email or len(email) > 120):
+        return "Informe um e-mail válido.", None
+    vinculo = (vinculo or "").strip()
+    if vinculo not in VINCULOS_PAGADOR:
+        return "Selecione o vínculo do pagador.", None
+    return None, {
+        "nome": nome[:200],
+        "documento": digitos,
+        "email": email[:120],
+        "telefone": formatar_telefone(telefone),
+        "vinculo": vinculo,
+    }
+
+
+def escolher_pessoa_pagador(unidade, documento_novo=""):
+    """Pessoa que já representa o pagador, sem tomar o lugar de um morador."""
+    from app.models import Pessoa
+
+    pessoas = list(unidade.pessoas.order_by(Pessoa.id.asc()).all())
+    externos = [pessoa for pessoa in pessoas if pessoa.eh_proprietario and not pessoa.eh_morador]
+    documento_atual = apenas_digitos(unidade.cpf_pre_autorizado or unidade.proprietario_cpf)
+    for documento in (apenas_digitos(documento_novo), documento_atual):
+        if not documento:
+            continue
+        for pessoa in externos:
+            if apenas_digitos(pessoa.cpf) == documento:
+                return pessoa
+    if externos:
+        return externos[0]
+    for documento in (apenas_digitos(documento_novo), documento_atual):
+        if not documento:
+            continue
+        for pessoa in pessoas:
+            if apenas_digitos(pessoa.cpf) == documento:
+                return pessoa
+    return None
+
+
+def vinculo_do_pagador(pessoa):
+    if pessoa is None:
+        return "Proprietário"
+    bruto = (pessoa.vinculo or "").strip()
+    if bruto in VINCULOS_PAGADOR:
+        return bruto
+    if bruto == "Locatário":
+        return "Inquilino"
+    return "Proprietário"
+
+
+def definir_pagador_manual(unidade, nome, documento, email, telefone, vinculo):
+    """Grava o pagador na unidade e cria ou atualiza a Pessoa. Não faz commit."""
+    from app import db
+    from app.models import Pessoa, StatusPessoa
+
+    pessoa = escolher_pessoa_pagador(unidade, documento)
+    gravar_pagador(unidade, nome, documento, email, telefone, substituir_vazios=True)
+    if pessoa is None:
+        pessoa = Pessoa(
+            unidade_id=unidade.id,
+            nome_completo=unidade.proprietario_nome,
+            cpf=(unidade.proprietario_cpf or "")[:14],
+            vinculo=vinculo,
+            telefone=unidade.proprietario_telefone or "",
+            email=unidade.proprietario_email,
+            is_responsavel=False,
+            autoriza_interfone=False,
+            eh_proprietario=True,
+            eh_morador=False,
+            status=StatusPessoa.APROVADO,
+        )
+        db.session.add(pessoa)
+    else:
+        pessoa.nome_completo = unidade.proprietario_nome
+        pessoa.cpf = (unidade.proprietario_cpf or pessoa.cpf or "")[:14]
+        pessoa.email = unidade.proprietario_email
+        pessoa.telefone = unidade.proprietario_telefone or ""
+        pessoa.vinculo = vinculo
+        if not pessoa.eh_morador:
+            pessoa.eh_proprietario = True
+            pessoa.autoriza_interfone = False
+    db.session.flush()
+    return pessoa
+
+
 def garantir_unidade_planta(condominio_id, bloco, apartamento):
     """Localiza ou cria a unidade oficial. Não faz commit."""
     from app import db

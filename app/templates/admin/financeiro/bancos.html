@@ -120,6 +120,10 @@
                         <input class="form-control" id="finJuros" name="fin_juros_mensal" value="{{ condominio_fin.fin_juros_mensal if condominio_fin else 1 }}">
                     </div>
                     <div class="col-12">
+                        <label class="form-label" for="taxaSegundaVia">Taxa de 2ª via do boleto (R$)</label>
+                        <input class="form-control" id="taxaSegundaVia" name="taxa_segunda_via_boleto" value="{{ condominio_fin.taxa_segunda_via_boleto if condominio_fin else 5.99 }}">
+                    </div>
+                    <div class="col-12">
                         <label class="form-label" for="finIndice">Índice de correção</label>
                         <select class="form-select" id="finIndice" name="fin_indice_correcao">
                             {% for sigla in indices_cobranca %}

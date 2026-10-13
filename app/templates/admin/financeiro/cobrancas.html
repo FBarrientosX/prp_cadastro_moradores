@@ -9,6 +9,13 @@
 <input type="hidden" name="competencia" value="{{ filtro_competencia or 'todas' }}">
 {% endmacro %}
 
+{% macro cabecalho(chave, rotulo, classe='') %}
+{% set proxima = ('asc' if filtro_order == 'desc' else 'desc') if filtro_sort == chave else ('desc' if chave == 'valor' else 'asc') %}
+<th class="{{ classe }}"{% if filtro_sort == chave %} aria-sort="{{ 'descending' if filtro_order == 'desc' else 'ascending' }}"{% endif %}>
+    <a class="link-body-emphasis text-decoration-none" href="{{ url_for('admin_financeiro_cobrancas', sort=chave, order=proxima, **ordenacao_base) }}">{{ rotulo }}{% if filtro_sort == chave %} {{ '▼' if filtro_order == 'desc' else '▲' }}{% endif %}</a>
+</th>
+{% endmacro %}
+
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
     <div>
@@ -69,6 +76,8 @@
             <label class="form-label" for="filtroQ">Busca</label>
             <input class="form-control" id="filtroQ" name="q" value="{{ filtro_q }}" placeholder="Nome, CPF, bloco/apto, #código, @nosso número ou *acordo">
         </div>
+        <button class="btn btn-outline-dark" type="button" id="btnImprimirLote" disabled data-url="{{ url_for('admin_financeiro_cobrancas_imprimir_selecionados') }}" data-alvo="_blank">🖨️ Imprimir Selecionados</button>
+        <button class="btn btn-outline-primary" type="button" id="btnRemessaLote" disabled data-url="{{ url_for('admin_financeiro_cobrancas_remessa_selecionados') }}">📥 Gerar Remessa dos Selecionados</button>
         <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#gavetaFiltros" aria-expanded="{{ 'true' if filtros_ativos else 'false' }}">
             🌪️ Filtros Avançados{% if filtros_ativos %} <span class="badge text-bg-primary">{{ filtros_ativos }}</span>{% endif %}
         </button>
@@ -145,20 +154,26 @@
     <table class="table align-middle">
         <thead>
             <tr>
-                <th>Unidade</th>
-                <th>Pagador</th>
-                <th>Título</th>
-                <th>Competência</th>
-                <th>Vencimento</th>
-                <th>Nosso número</th>
-                <th class="text-end">Valor</th>
-                <th>Status</th>
+                <th style="width: 2.5rem;">
+                    <input class="form-check-input" type="checkbox" id="selecionarVisiveis" aria-label="Selecionar todos os visíveis">
+                </th>
+                {{ cabecalho('unidade', 'Unidade') }}
+                {{ cabecalho('pagador', 'Pagador') }}
+                {{ cabecalho('titulo', 'Título') }}
+                {{ cabecalho('competencia', 'Competência') }}
+                {{ cabecalho('vencimento', 'Vencimento') }}
+                {{ cabecalho('nosso_numero', 'Nosso número') }}
+                {{ cabecalho('valor', 'Valor', 'text-end') }}
+                {{ cabecalho('status', 'Status') }}
             </tr>
         </thead>
         <tbody>
             {% for linha in linhas %}
             {% set c = linha.cobranca %}
             <tr role="button" data-bs-toggle="collapse" data-bs-target="#detalhe-{{ c.id }}" aria-expanded="{{ 'true' if abrir_id == c.id else 'false' }}">
+                <td onclick="event.stopPropagation();">
+                    <input class="form-check-input js-cobranca" type="checkbox" value="{{ c.id }}" aria-label="Selecionar cobrança {{ c.id }}">
+                </td>
                 <td>{% if c.unidade %}Bloco {{ c.unidade.bloco }} · {{ c.unidade.apartamento }}{% endif %}</td>
                 <td>{{ c.pagador_nome or "—" }}</td>
                 <td>{{ c.titulo }}</td>
@@ -176,7 +191,7 @@
                 </td>
             </tr>
             <tr>
-                <td colspan="8" class="p-0 border-0">
+                <td colspan="9" class="p-0 border-0">
                     <div class="collapse {% if abrir_id == c.id %}show{% endif %}" id="detalhe-{{ c.id }}">
                         <div class="border rounded m-2 p-3 bg-light">
                             {% if c.acordo_id %}
@@ -257,6 +272,12 @@
                                                 {% endif %}
                                                 {% if c.status != 'Cancelada' %}
                                                 <a class="btn btn-sm btn-outline-dark" href="{{ url_for('financeiro_boleto', cobranca_id=c.id) }}" target="_blank" rel="noopener">Imprimir</a>
+                                                {% endif %}
+                                                {% if linha.boleto and c.status in ['A Vencer', 'Vencida'] %}
+                                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin_financeiro_cobranca_remessa', cobranca_id=c.id) }}">📥 Gerar Remessa (.REM)</a>
+                                                {% endif %}
+                                                {% if linha.boleto and c.status == 'Vencida' %}
+                                                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#segunda-{{ c.id }}">📄 Emitir 2ª Via</button>
                                                 {% endif %}
                                                 {% if c.pagador_email and linha.boleto and c.status != 'Cancelada' %}
                                                 <form method="post" action="{{ url_for('admin_financeiro_cobranca_email', cobranca_id=c.id) }}">
@@ -383,7 +404,7 @@
             </tr>
             {% else %}
             <tr>
-                <td colspan="8" class="text-muted">Nenhuma cobrança neste filtro.</td>
+                <td colspan="9" class="text-muted">Nenhuma cobrança neste filtro.</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -430,6 +451,28 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
                 <button type="submit" class="btn btn-success">Registrar baixa</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% if linha.boleto and c.status == 'Vencida' %}
+<div class="modal fade" id="segunda-{{ c.id }}" tabindex="-1" aria-labelledby="segundaTitulo-{{ c.id }}">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_cobranca_segunda_via', cobranca_id=c.id) }}">
+            {{ voltar() }}
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="segundaTitulo-{{ c.id }}">Emitir 2ª via da cobrança #{{ c.id }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-3">O boleto atual será cancelado. A nova cobrança recebe outro nosso número, a atualização do atraso até a nova data (correção, multa e juros) e a taxa de 2ª via de {{ taxa_segunda_via|reais }}. Se o título já tiver multa ou juros, o cálculo novo incide só sobre o principal.</p>
+                <label class="form-label" for="novaData-{{ c.id }}">Nova Data de Vencimento</label>
+                <input class="form-control datepicker" id="novaData-{{ c.id }}" name="vencimento" type="text" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Emitir 2ª via</button>
             </div>
         </form>
     </div>
@@ -570,6 +613,80 @@ document.querySelectorAll("[data-atalho]").forEach(function (botao) {
         definirData(document.getElementById("filtroDe"), isoData(inicio));
         definirData(document.getElementById("filtroAte"), isoData(fim));
         document.getElementById("filtrosCobrancas").submit();
+    });
+});
+
+function cobrancasMarcadas() {
+    return Array.prototype.slice.call(document.querySelectorAll(".js-cobranca:checked"));
+}
+
+function atualizarLote() {
+    var marcadas = cobrancasMarcadas();
+    var itens = document.querySelectorAll(".js-cobranca");
+    var imprimir = document.getElementById("btnImprimirLote");
+    var remessa = document.getElementById("btnRemessaLote");
+    if (imprimir) {
+        imprimir.disabled = marcadas.length === 0;
+    }
+    if (remessa) {
+        remessa.disabled = marcadas.length === 0;
+    }
+    var mestre = document.getElementById("selecionarVisiveis");
+    if (mestre) {
+        mestre.checked = itens.length > 0 && marcadas.length === itens.length;
+        mestre.indeterminate = marcadas.length > 0 && marcadas.length < itens.length;
+    }
+}
+
+function enviarLote(botao) {
+    var marcadas = cobrancasMarcadas();
+    if (!marcadas.length || !botao.getAttribute("data-url")) {
+        return;
+    }
+    var form = document.createElement("form");
+    form.method = "post";
+    form.action = botao.getAttribute("data-url");
+    if (botao.getAttribute("data-alvo")) {
+        form.target = botao.getAttribute("data-alvo");
+    }
+    marcadas.forEach(function (campo) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "ids";
+        input.value = campo.value;
+        form.appendChild(input);
+    });
+    var retorno = document.createElement("input");
+    retorno.type = "hidden";
+    retorno.name = "retorno";
+    retorno.value = window.location.search || "";
+    form.appendChild(retorno);
+    document.body.appendChild(form);
+    form.submit();
+}
+
+var mestreVisiveis = document.getElementById("selecionarVisiveis");
+if (mestreVisiveis) {
+    mestreVisiveis.addEventListener("change", function () {
+        document.querySelectorAll(".js-cobranca").forEach(function (campo) {
+            campo.checked = mestreVisiveis.checked;
+        });
+        atualizarLote();
+    });
+}
+document.querySelectorAll(".js-cobranca").forEach(function (campo) {
+    campo.addEventListener("change", atualizarLote);
+    campo.addEventListener("click", function (evento) {
+        evento.stopPropagation();
+    });
+});
+["btnImprimirLote", "btnRemessaLote"].forEach(function (id) {
+    var botao = document.getElementById(id);
+    if (!botao) {
+        return;
+    }
+    botao.addEventListener("click", function () {
+        enviarLote(botao);
     });
 });
 </script>
