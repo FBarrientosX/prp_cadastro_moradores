@@ -159,10 +159,11 @@ def parceiro_esqueci_senha():
 
 
 def parceiro_redefinir_senha(token):
-    # verificar_token_redefinicao retorna (email, condominio_id, emitido_em).
-    # Parceiro é entidade global (sem tenant): condominio_id do token é
-    # ignorado; emitido_em invalida reuso após troca de senha.
-    email, _condominio_id_token, emitido_em = verificar_token_redefinicao(
+    # verificar_token_redefinicao retorna
+    # (email, condominio_id, emitido_em, unidade_id).
+    # Parceiro é entidade global (sem tenant e sem unidade): condominio_id e
+    # unidade_id do token são ignorados; emitido_em invalida reuso após troca.
+    email, _condominio_id_token, emitido_em, _unidade_id = verificar_token_redefinicao(
         token, SALT_RECUPERACAO_PARCEIRO
     )
     if not email:

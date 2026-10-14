@@ -1,0 +1,389 @@
+{% extends "base.html" %}
+
+{% block title %}Áreas Comuns{% endblock %}
+
+{% block head %}
+{% if aba == 'espacos' %}
+<link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quill-rich.css') }}">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% set endpoint = 'sindico_areas' if eh_sindico else 'admin_areas' %}
+{% set acao_salvar = 'sindico_areas_salvar' if eh_sindico else 'admin_areas_salvar' %}
+{% set acao_excluir = 'sindico_areas_excluir' if eh_sindico else 'admin_areas_excluir' %}
+{% set acao_aprovar = 'sindico_areas_aprovar' if eh_sindico else 'admin_areas_aprovar' %}
+{% set acao_rejeitar = 'sindico_areas_rejeitar' if eh_sindico else 'admin_areas_rejeitar' %}
+
+<div class="mb-3">
+    <h1 class="h4 mb-1">Áreas comuns</h1>
+    <p class="text-muted mb-0">Aprovação, calendário e cadastro dos espaços.</p>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if aba == 'pendentes' %}active{% endif %}" href="{{ url_for(endpoint, aba='pendentes') }}">
+            Solicitações &amp; Histórico
+            <span class="badge bg-danger ms-1 {% if not pendentes %}d-none{% endif %}" id="contador-pendentes">{{ pendentes|length }}</span>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if aba == 'calendario' %}active{% endif %}" href="{{ url_for(endpoint, aba='calendario') }}">Calendário</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if aba == 'espacos' %}active{% endif %}" href="{{ url_for(endpoint, aba='espacos') }}">Gestão de Espaços</a>
+    </li>
+</ul>
+
+{% if aba == 'pendentes' %}
+<div class="btn-group mb-3" role="group" aria-label="Filtrar solicitações">
+    <a class="btn {% if filtro == 'pendentes' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{{ url_for(endpoint, aba='pendentes', filtro='pendentes') }}">Pendentes</a>
+    <a class="btn {% if filtro == 'aprovadas' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{{ url_for(endpoint, aba='pendentes', filtro='aprovadas') }}">Aprovadas</a>
+    <a class="btn {% if filtro == 'recusadas' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{{ url_for(endpoint, aba='pendentes', filtro='recusadas') }}">Recusadas/Canceladas</a>
+    <a class="btn {% if filtro == 'todas' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{{ url_for(endpoint, aba='pendentes', filtro='todas') }}">Todas</a>
+</div>
+{% if lista %}
+<div class="table-responsive">
+    <table class="table align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Espaço</th>
+                <th>Unidade</th>
+                <th>Quando</th>
+                <th>Status</th>
+                <th>Motivo</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in lista %}
+            <tr id="reserva-{{ item.id }}" class="{% if foco == item.id %}table-primary{% endif %}">
+                <td class="fw-semibold">{{ item.area.nome }}</td>
+                <td>{{ item.unidade.identificador }}</td>
+                <td class="text-nowrap">
+                    {{ item.data_evento.strftime('%d/%m/%Y') }}
+                    · {{ item.horario_inicio.strftime('%H:%M') }}–{{ item.horario_fim.strftime('%H:%M') }}
+                </td>
+                <td>
+                    {% if item.status == status_pendente %}
+                    <div class="mb-1"><span class="badge text-bg-warning">Pendente</span></div>
+                    {% if item.area.taxa_uso_valor > 0 and item.area.pagamento_antecipado_obrigatorio %}
+                    <span class="badge text-bg-warning">Cobrança Antecipada</span>
+                    {% elif item.area.taxa_uso_valor > 0 %}
+                    <span class="badge text-bg-light border">Embutido na Próxima Taxa</span>
+                    {% else %}
+                    <span class="text-muted">Sem taxa</span>
+                    {% endif %}
+                    {% elif item.status == status_aprovada %}
+                    <span class="badge text-bg-success">Aprovada</span>
+                    {% elif item.status == status_aguardando %}
+                    <span class="badge text-bg-info">Aguardando Pagamento</span>
+                    {% elif item.status == status_rejeitada %}
+                    <span class="badge text-bg-secondary">Rejeitada</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">{{ item.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="small">{{ item.motivo_rejeicao or '—' }}</td>
+                <td class="text-end text-nowrap">
+                    {% if item.status == status_pendente %}
+                    <div class="d-inline-flex gap-2">
+                        <form method="post" action="{{ url_for(acao_aprovar, reserva_id=item.id) }}">
+                            <button type="submit" class="btn btn-success">✅ Aprovar</button>
+                        </form>
+                        <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#recusar-{{ item.id }}">❌ Recusar</button>
+                    </div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% elif filtro == 'pendentes' %}
+<p class="mb-0">🎉 Nenhuma solicitação pendente no momento!</p>
+{% else %}
+<p class="text-muted mb-0">Nenhuma reserva neste filtro.</p>
+{% endif %}
+
+{% elif aba == 'calendario' %}
+<div id="calendario-reservas" class="mb-3"></div>
+<div class="d-flex flex-wrap gap-2 small text-muted">
+    <span><span class="badge" style="background:#f0ad4e">Pendente</span></span>
+    <span><span class="badge" style="background:#0dcaf0">Aguardando pagamento</span></span>
+    <span><span class="badge text-bg-success">Aprovada</span></span>
+    <span><span class="badge text-bg-secondary">Recusada</span></span>
+</div>
+
+<div class="modal fade" id="modal-fast-track" tabindex="-1" aria-labelledby="modal-fast-track-titulo" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modal-fast-track-titulo">Analisar Solicitação</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fw-semibold mb-1" id="ft-espaco"></p>
+                <p class="mb-1" id="ft-unidade"></p>
+                <p class="mb-1" id="ft-quando"></p>
+                <p class="mb-1" id="ft-valor"></p>
+                <p class="mb-0" id="ft-financeiro"></p>
+                <div class="mt-3 d-none" id="ft-motivo-box">
+                    <label class="form-label" for="ft-motivo">Motivo da recusa</label>
+                    <textarea class="form-control" id="ft-motivo" rows="3" maxlength="255"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" id="ft-recusar">❌ Recusar</button>
+                <button type="button" class="btn btn-success" id="ft-aprovar">✅ Aprovar</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1090">
+    <div id="toast-decisao" class="toast align-items-center text-bg-success border-0" role="status" aria-live="polite" aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body" id="toast-decisao-texto"></div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Fechar"></button>
+        </div>
+    </div>
+</div>
+
+{% else %}
+<div class="d-flex justify-content-end mb-3">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaArea">
+        + Novo Espaço
+    </button>
+</div>
+{% if areas %}
+<div class="table-responsive">
+    <table class="table align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Espaço</th>
+                <th>Vínculo</th>
+                <th>Capacidade</th>
+                <th>Taxa</th>
+                <th>Situação</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for area in areas %}
+            <tr>
+                <td class="fw-semibold">{{ area.nome }}</td>
+                <td>{{ 'Geral' if area.bloco_vinculado == geral else 'Bloco ' ~ area.bloco_vinculado }}</td>
+                <td>{{ area.capacidade }}</td>
+                <td>{% if area.taxa_uso_valor > 0 %}R$ {{ '%.2f'|format(area.taxa_uso_valor)|replace('.', ',') }}{% else %}Gratuita{% endif %}</td>
+                <td>
+                    {% if area.ativa %}
+                    <span class="badge text-bg-success">Ativa</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Inativa</span>
+                    {% endif %}
+                </td>
+                <td class="text-end text-nowrap">
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalArea{{ area.id }}">Editar</button>
+                    <form class="d-inline" method="post" action="{{ url_for(acao_excluir, area_id=area.id) }}" onsubmit="return confirm('Excluir este espaço?');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="text-muted mb-0">Nenhum espaço neste mandato.</p>
+{% endif %}
+{% endif %}
+
+{% if aba == 'espacos' %}
+<div class="modal fade" id="modalNovaArea" tabindex="-1" aria-labelledby="modalNovaAreaTitulo" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for(acao_salvar) }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="modalNovaAreaTitulo">Novo espaço</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% with area=none %}
+                {% include "admin/_area_form.html" %}
+                {% endwith %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar área</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% for area in areas %}
+<div class="modal fade" id="modalArea{{ area.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for(acao_salvar) }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Editar {{ area.nome }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% include "admin/_area_form.html" %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar área</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if aba == 'pendentes' %}
+{% for item in pendentes %}
+<div class="modal fade" id="recusar-{{ item.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for(acao_rejeitar, reserva_id=item.id) }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5">Recusar {{ item.area.nome }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label" for="motivo-{{ item.id }}">Motivo da recusa</label>
+                <textarea class="form-control" id="motivo-{{ item.id }}" name="motivo_rejeicao" rows="3" maxlength="255" required></textarea>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-danger">❌ Recusar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if aba == 'espacos' %}
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<script src="{{ url_for('static', filename='js/quill-rich.js') }}"></script>
+{% endif %}
+<script>
+(function () {
+    var foco = {{ foco if foco else 'null' }};
+    var linha = foco ? document.getElementById("reserva-" + foco) : null;
+    if (linha) linha.scrollIntoView({ block: "center" });
+    var calendario = document.getElementById("calendario-reservas");
+    if (calendario && window.FullCalendar) {
+        var modalEl = document.getElementById("modal-fast-track");
+        var modal = window.bootstrap ? bootstrap.Modal.getOrCreateInstance(modalEl) : null;
+        var eventoAtual = null;
+        var motivoBox = document.getElementById("ft-motivo-box");
+        var motivo = document.getElementById("ft-motivo");
+        var botaoAprovar = document.getElementById("ft-aprovar");
+        var botaoRecusar = document.getElementById("ft-recusar");
+        function texto(id, valor) {
+            document.getElementById(id).textContent = valor || "";
+        }
+        function aviso(mensagem, sucesso) {
+            var toast = document.getElementById("toast-decisao");
+            document.getElementById("toast-decisao-texto").textContent = mensagem;
+            toast.classList.toggle("text-bg-success", sucesso);
+            toast.classList.toggle("text-bg-danger", !sucesso);
+            if (window.bootstrap) bootstrap.Toast.getOrCreateInstance(toast, { delay: 4000 }).show();
+        }
+        function contador(valor) {
+            var selo = document.getElementById("contador-pendentes");
+            if (!selo) return;
+            selo.textContent = String(valor);
+            selo.classList.toggle("d-none", !valor);
+        }
+        function reiniciar() {
+            motivoBox.classList.add("d-none");
+            motivo.value = "";
+            botaoAprovar.disabled = false;
+            botaoRecusar.disabled = false;
+        }
+        function decidir(url, campos, evento) {
+            botaoAprovar.disabled = true;
+            botaoRecusar.disabled = true;
+            fetch(url, {
+                method: "POST",
+                headers: {
+                    "X-Requested-With": "fetch",
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                body: new URLSearchParams(campos || {})
+            }).then(function (resposta) {
+                return resposta.json().then(function (corpo) {
+                    return { ok: resposta.ok && (corpo.success === true || corpo.ok === true), corpo: corpo };
+                });
+            }).then(function (resultado) {
+                if (!resultado.ok) {
+                    botaoAprovar.disabled = false;
+                    botaoRecusar.disabled = false;
+                    aviso(resultado.corpo.message || resultado.corpo.mensagem || "Não foi possível concluir.", false);
+                    return;
+                }
+                if (resultado.corpo.remover) {
+                    evento.remove();
+                } else if (resultado.corpo.cor) {
+                    evento.setProp("backgroundColor", resultado.corpo.cor);
+                    evento.setProp("borderColor", resultado.corpo.cor);
+                    evento.setExtendedProp("pendente", false);
+                }
+                if (typeof resultado.corpo.pendentes === "number") contador(resultado.corpo.pendentes);
+                modal.hide();
+                aviso(resultado.corpo.message || resultado.corpo.mensagem, true);
+            }).catch(function () {
+                botaoAprovar.disabled = false;
+                botaoRecusar.disabled = false;
+                aviso("Não foi possível concluir.", false);
+            });
+        }
+        modalEl.addEventListener("hidden.bs.modal", reiniciar);
+        botaoAprovar.addEventListener("click", function () {
+            if (!eventoAtual) return;
+            decidir(eventoAtual.extendedProps.aprovar, {}, eventoAtual);
+        });
+        botaoRecusar.addEventListener("click", function () {
+            if (!eventoAtual) return;
+            if (motivoBox.classList.contains("d-none")) {
+                motivoBox.classList.remove("d-none");
+                motivo.focus();
+                return;
+            }
+            if (!motivo.value.trim()) {
+                motivo.focus();
+                return;
+            }
+            decidir(eventoAtual.extendedProps.recusar, { motivo_rejeicao: motivo.value.trim() }, eventoAtual);
+        });
+        var agenda = new FullCalendar.Calendar(calendario, {
+            locale: "pt-br",
+            initialView: "dayGridMonth",
+            height: "auto",
+            headerToolbar: { left: "prev,next", center: "title", right: "" },
+            events: {{ eventos|tojson }},
+            eventClick: function (info) {
+                info.jsEvent.preventDefault();
+                if (!info.event.extendedProps.pendente) return;
+                eventoAtual = info.event;
+                reiniciar();
+                var dados = info.event.extendedProps;
+                texto("ft-espaco", dados.espaco);
+                texto("ft-unidade", dados.unidade);
+                texto("ft-quando", dados.data + " · " + dados.horario);
+                texto("ft-valor", dados.valor);
+                texto("ft-financeiro", dados.financeiro);
+                modal.show();
+            }
+        });
+        agenda.render();
+    }
+})();
+</script>
+{% endblock %}

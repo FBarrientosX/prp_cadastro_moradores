@@ -1,0 +1,25 @@
+{% if qtd_ocorrencias_abertas %}
+<div class="alert alert-danger border-danger shadow-sm mb-4" role="alert">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+            <div class="fw-semibold">
+                🚨 Atenção: Existem <strong>{{ qtd_ocorrencias_abertas }} ocorrência(s) em aberto</strong> aguardando atendimento dos moradores!
+            </div>
+            {% if ocorrencias_alerta %}
+            <ul class="mb-0 mt-2">
+                {% for item in ocorrencias_alerta %}
+                <li>
+                    {{ item.unidade }} — {{ item.titulo }} — {{ item.categoria }}
+                    {% if item.quando %} — {{ item.quando.strftime('%d/%m/%Y %H:%M') }}{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        <a class="btn btn-danger"
+           href="{{ url_for('sindico_ocorrencias' if sidebar_user and sidebar_user.role == 'sindico' else 'admin_ocorrencias') }}">
+            Ver e Atender Ocorrências →
+        </a>
+    </div>
+</div>
+{% endif %}

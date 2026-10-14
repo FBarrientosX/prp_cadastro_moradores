@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Previsão Orçamentária{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">📊 Previsão Orçamentária</h1>
+        <p class="text-muted small mb-0">Orçado contra o realizado. Conta de água, luz ou gás já prevista na taxa fica no caixa e aparece aqui — não vira cobrança extra.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        {% if pode_editar %}
+        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalMetas">✏️ Definir / Editar Metas do Orçamento</button>
+        {% else %}
+        <button class="btn btn-primary btn-sm" type="button" disabled title="Escolha Administração Geral ou um bloco para gravar metas">✏️ Definir / Editar Metas do Orçamento</button>
+        {% endif %}
+    </div>
+</div>
+
+<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_orcamento') }}">
+    <div class="col-md-3">
+        <label class="form-label" for="ano">Ano</label>
+        <select class="form-select" id="ano" name="ano" onchange="this.form.submit()">
+            {% for item in anos %}
+            <option value="{{ item }}" {% if item == ano %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label" for="mes">Competência em foco</label>
+        <select class="form-select" id="mes" name="mes" onchange="this.form.submit()">
+            <option value="anual" {% if mes == 'anual' %}selected{% endif %}>Visão anual completa</option>
+            {% for item in meses %}
+            <option value="{{ item }}" {% if item == mes %}selected{% endif %}>{{ nomes_meses[item|int] }}/{{ ano }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-5">
+        <label class="form-label" for="escopo">Escopo</label>
+        <select class="form-select" id="escopo" name="escopo" onchange="this.form.submit()">
+            <option value="CONSOLIDADO" {% if escopo == 'CONSOLIDADO' %}selected{% endif %}>Consolidado geral</option>
+            <option value="GERAL" {% if escopo == 'GERAL' %}selected{% endif %}>Apenas Administração Geral</option>
+            {% for bloco in blocos %}
+            <option value="{{ bloco }}" {% if escopo == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</form>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Receita orçada vs. realizada {% if mes == 'anual' %}no ano{% else %}no mês{% endif %}</div>
+            <div class="h5 mb-1">{{ comparativo.receita_realizada|reais }}</div>
+            <div class="small text-muted">de {{ comparativo.receita_orcada|reais }} · {{ '%.0f'|format(comparativo.receita_percentual) }}% atingido</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Despesa orçada (teto {% if mes == 'anual' %}do ano{% else %}do mês{% endif %})</div>
+            <div class="h5 mb-0">{{ comparativo.despesa_orcada|reais }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Despesa realizada (efetiva)</div>
+            <div class="h5 mb-0">{{ comparativo.despesa_realizada|reais }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <div class="text-muted small">Saldo / desvio orçamentário</div>
+            <div class="h5 mb-0 {% if comparativo.desvio < 0 %}text-danger{% else %}text-success{% endif %}">{{ comparativo.desvio|reais }}</div>
+            <div class="small {% if comparativo.desvio < 0 %}text-danger{% else %}text-success{% endif %}">
+                {% if comparativo.desvio < 0 %}Acima do orçado{% else %}Dentro do orçamento{% endif %}
+            </div>
+        </div></div>
+    </div>
+</div>
+
+{% macro tabela(titulo, linhas, despesas) %}
+<h2 class="h6 mt-3">{{ titulo }}</h2>
+<div class="table-responsive mb-3">
+    <table class="table table-sm align-middle bg-white">
+        <thead>
+            <tr>
+                <th>Código / Conta</th>
+                <th>Escopo</th>
+                <th class="text-end">Orçado (R$)</th>
+                <th class="text-end">Realizado (R$)</th>
+                <th class="text-end">Diferença (R$)</th>
+                <th style="min-width: 140px;">%</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for linha in linhas %}
+            <tr>
+                <td>{{ linha.codigo }} — {{ linha.nome }}</td>
+                <td>{{ linha.escopo }}</td>
+                <td class="text-end">{{ linha.orcado|reais }}</td>
+                <td class="text-end">{{ linha.realizado|reais }}</td>
+                <td class="text-end {% if despesas and linha.diferenca > 0 %}text-danger{% elif not despesas and linha.diferenca >= 0 %}text-success{% endif %}">{{ linha.diferenca|reais }}</td>
+                <td>
+                    <div class="progress" style="height: 8px;">
+                        <div class="progress-bar bg-{{ linha.cor }}" style="width: {{ '%.1f'|format(linha.largura) }}%"></div>
+                    </div>
+                    <span class="small text-muted">
+                        {% if linha.orcado <= 0 and linha.realizado <= 0 %}—{% elif linha.percentual > 100 %}{{ '%.0f'|format(linha.percentual) }}%{% else %}{{ '%.0f'|format(linha.percentual) }}%{% endif %}
+                    </span>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted">Nenhuma meta nem movimento neste recorte.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endmacro %}
+
+{{ tabela('Receitas', comparativo.receitas, false) }}
+{{ tabela('Despesas', comparativo.despesas, true) }}
+<p class="small text-muted">Nas despesas, a barra fica verde até 85% do orçado, amarela entre 85% e 100% e vermelha quando a conta passa do teto.</p>
+
+{% if pode_editar %}
+<div class="modal fade" id="modalMetas" tabindex="-1" aria-labelledby="tituloMetas" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_orcamento_salvar') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloMetas">Metas de {{ ano }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="ano" value="{{ ano }}">
+                <input type="hidden" name="mes" value="{{ mes }}">
+                <input type="hidden" name="escopo" value="{{ escopo }}">
+                <input type="hidden" name="acao" value="repetir">
+                <p class="small text-muted">Informe o valor mensal de cada conta. O botão abaixo repete esse valor nos 12 meses. Conta em branco permanece como está.</p>
+                {% for plano in planos %}
+                {% set meta = metas.get(plano.id) %}
+                <div class="row g-2 align-items-center mb-2">
+                    <label class="col-md-7 col-form-label col-form-label-sm" for="plano{{ plano.id }}">{{ plano.codigo }} — {{ plano.nome }}</label>
+                    <div class="col-md-5">
+                        <input class="form-control form-control-sm" id="plano{{ plano.id }}" name="plano_{{ plano.id }}" inputmode="decimal" placeholder="{% if meta and not meta.uniforme %}meses diferentes{% else %}0,00{% endif %}" value="{% if meta and meta.uniforme %}{{ '%.2f'|format(meta.valor)|replace('.', ',') }}{% endif %}" aria-label="Valor mensal de {{ plano.nome }}">
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-primary" type="submit" form="formMediaOrcamento">⚡ Preencher Baseado na Média Realizada</button>
+                <button class="btn btn-primary" type="submit">📅 Repetir valor para os 12 meses do ano</button>
+            </div>
+        </form>
+    </div>
+</div>
+<form id="formMediaOrcamento" method="post" action="{{ url_for('admin_financeiro_orcamento_salvar') }}" onsubmit="return confirm('Substituir as metas deste escopo pela média mensal do realizado em {{ ano - 1 }}?');">
+    <input type="hidden" name="ano" value="{{ ano }}">
+    <input type="hidden" name="mes" value="{{ mes }}">
+    <input type="hidden" name="escopo" value="{{ escopo }}">
+    <input type="hidden" name="acao" value="media">
+</form>
+{% endif %}
+{% endblock %}

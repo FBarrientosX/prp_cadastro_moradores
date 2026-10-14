@@ -26,7 +26,13 @@ def _enviar_email(email_destino, assunto, corpo):
         servidor.sendmail(username, [email_destino], mensagem.as_string())
 
 
-def enviar_email_redefinicao_senha(email_destino, link_redefinicao, perfil="morador"):
+def enviar_email_redefinicao_senha(
+    email_destino,
+    link_redefinicao,
+    perfil="morador",
+    bloco=None,
+    apartamento=None,
+):
     if perfil == "parceiro":
         assunto = "PRP Condomínio - Redefinição de Senha do Parceiro"
         corpo = (
@@ -35,10 +41,14 @@ def enviar_email_redefinicao_senha(email_destino, link_redefinicao, perfil="mora
             "Se você não solicitou esta alteração, ignore este e-mail."
         )
     else:
-        assunto = "PRP Condomínio - Redefinição de Senha da Unidade"
+        identificacao = f"Bloco {bloco}, Apto {apartamento}"
+        assunto = f"Recuperação de senha — {identificacao}"
         corpo = (
-            "Recebemos uma solicitação para redefinir a senha de acesso da sua unidade no cadastro de moradores.\n\n"
+            f"Recuperação de senha — {identificacao}\n\n"
+            "Recebemos uma solicitação para redefinir a senha de acesso desta unidade "
+            "no cadastro de moradores.\n\n"
             f"Acesse o link abaixo para criar uma nova senha (válido por 1 hora):\n{link_redefinicao}\n\n"
+            "O link altera somente a senha desta unidade. "
             "Se você não solicitou esta alteração, ignore este e-mail."
         )
     _enviar_email(email_destino, assunto, corpo)
@@ -82,25 +92,31 @@ def enviar_email_validacao_parcial(email_destino, moradores_recusados):
     _enviar_email(email_destino, assunto, corpo)
 
 
-def enviar_email_nova_reserva(email_destino, nome_espaco, bloco, apartamento, data_reserva):
-    assunto = "PRP Condomínio - Nova Solicitação de Reserva"
-    corpo = (
-        "Uma nova solicitação de reserva foi registrada no sistema.\n\n"
-        f"Espaço: {nome_espaco}\n"
-        f"Unidade solicitante: Bloco {bloco}, Apto {apartamento}\n"
-        f"Data desejada: {data_reserva}\n\n"
-        "Acesse o módulo de reservas para aprovar ou recusar a solicitação."
-    )
-    _enviar_email(email_destino, assunto, corpo)
+def enviar_email_encomenda_setor(email_destino, setor, quando, destinatario=None, codigo_rastreio=None):
+    """Avisa um contato do setor interno de que chegou encomenda na portaria."""
+    assunto = f"Encomenda na portaria — {setor}"
+    linhas = [
+        f"A portaria recebeu uma encomenda para {setor}.",
+        f"Recebida em: {quando}",
+    ]
+    if destinatario:
+        linhas.append(f"Destinatário informado: {destinatario}")
+    if codigo_rastreio:
+        linhas.append(f"Código de rastreio: {codigo_rastreio}")
+    linhas.append("")
+    linhas.append("O pacote está aguardando retirada na portaria.")
+    _enviar_email(email_destino, assunto, "\n".join(linhas))
 
 
-def enviar_email_resposta_reserva(email_destino, nome_espaco, data_reserva, status):
-    assunto = "PRP Condomínio - Atualização da sua Reserva"
+def enviar_email_boleto(
+    email_destino, nome_condominio, vencimento, valor, linha_digitavel, link_boleto
+):
+    assunto = f"{nome_condominio} - Boleto para pagamento"
     corpo = (
-        "Sua solicitação de reserva foi atualizada.\n\n"
-        f"Espaço: {nome_espaco}\n"
-        f"Data solicitada: {data_reserva}\n"
-        f"Status final: {status}\n\n"
-        "Em caso de dúvidas, procure a administração do condomínio."
+        f"Segue a 2ª via do boleto de {nome_condominio}.\n\n"
+        f"Vencimento: {vencimento}\n"
+        f"Valor: {valor}\n"
+        f"Linha digitável:\n{linha_digitavel}\n\n"
+        f"Abra o boleto completo neste endereço:\n{link_boleto}\n"
     )
     _enviar_email(email_destino, assunto, corpo)

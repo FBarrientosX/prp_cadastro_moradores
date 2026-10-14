@@ -3,15 +3,103 @@
 {% block title %}Controle de Acesso — Administração{% endblock %}
 
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-    <div>
-        <h1 class="h4 mb-1">Controle de Acesso</h1>
-        <p class="text-muted mb-0">Tags, biometria, controles e cartões dos moradores.</p>
-    </div>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaCredencial">
-        <i class="bi bi-plus-lg me-1"></i>Nova Credencial
-    </button>
+<div class="mb-3">
+    <h1 class="h4 mb-1">Controle de Acesso</h1>
+    <p class="text-muted mb-3">Credenciais dos moradores e controladoras da portaria.</p>
+    <ul class="nav nav-tabs">
+        <li class="nav-item">
+            <a class="nav-link {% if aba != 'equipamentos' %}active{% endif %}"
+               href="{{ url_for('admin_controle_acesso', aba='credenciais', q=filtro_q, tipo=filtro_tipo, status=filtro_status) }}">
+                🔑 Credenciais dos Moradores
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if aba == 'equipamentos' %}active{% endif %}"
+               href="{{ url_for('admin_controle_acesso', aba='equipamentos', q=filtro_q, tipo=filtro_tipo, status=filtro_status) }}">
+                🖥️ Equipamentos &amp; Agente (Control iD / Intelbras)
+            </a>
+        </li>
+    </ul>
 </div>
+
+{% if aba != 'equipamentos' %}
+<div class="d-flex flex-wrap justify-content-end gap-2 mb-3">
+    <div class="d-flex flex-wrap gap-2">
+        <form method="post" action="{{ url_for('admin_controle_acesso_sincronizar_faciais') }}"
+              onsubmit="return confirm('Criar ou atualizar a credencial Facial de quem já tem foto no cadastro?');">
+            <input type="hidden" name="filtro_q" value="{{ filtro_q }}">
+            <input type="hidden" name="filtro_tipo" value="{{ filtro_tipo }}">
+            <input type="hidden" name="filtro_status" value="{{ filtro_status }}">
+            <button type="submit" class="btn btn-outline-primary">⚡ Sincronizar Fotos Faciais dos Cadastros</button>
+        </form>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovaCredencial">
+            <i class="bi bi-plus-lg me-1"></i>Nova Credencial
+        </button>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-xl-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Total de Credenciais Ativas</p>
+                <p class="h3 mb-0">{{ resumo.ativas }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Moradores com Foto Facial</p>
+                <p class="h3 mb-0">{{ resumo.faciais }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Tags / Cartões Cadastrados</p>
+                <p class="h3 mb-0">{{ resumo.tags }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <p class="text-muted small mb-1">Credenciais Bloqueadas</p>
+                <p class="h3 mb-0">{{ resumo.bloqueadas }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<form method="get" action="{{ url_for('admin_controle_acesso') }}" class="row g-2 align-items-end mb-3">
+    <div class="col-12 col-md-4">
+        <label class="form-label mb-1" for="filtro-q">Bloco / Apto ou nome</label>
+        <input type="search" class="form-control form-control-sm" id="filtro-q" name="q" value="{{ filtro_q }}"
+               placeholder="Bloco, apartamento ou nome do morador">
+    </div>
+    <div class="col-6 col-md-3">
+        <label class="form-label mb-1" for="filtro-tipo">Tipo de credencial</label>
+        <select class="form-select form-select-sm" id="filtro-tipo" name="tipo">
+            <option value="">Todos</option>
+            {% for tipo in tipos_filtro %}
+            <option value="{{ tipo }}" {% if filtro_tipo == tipo %}selected{% endif %}>{{ tipo }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-6 col-md-3">
+        <label class="form-label mb-1" for="filtro-status">Status</label>
+        <select class="form-select form-select-sm" id="filtro-status" name="status">
+            <option value="">Todos</option>
+            <option value="ativa" {% if filtro_status == 'ativa' %}selected{% endif %}>Ativa</option>
+            <option value="bloqueada" {% if filtro_status == 'bloqueada' %}selected{% endif %}>Bloqueada</option>
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <button type="submit" class="btn btn-sm btn-primary w-100">Filtrar</button>
+    </div>
+</form>
 
 <div class="table-responsive card shadow-sm">
     <table class="table table-hover align-middle mb-0">
@@ -37,9 +125,9 @@
                 <td class="font-monospace">{{ credencial.codigo_identificador }}</td>
                 <td>
                     {% if credencial.ativa %}
-                    <span class="badge text-bg-success">Ativo</span>
+                    <span class="badge text-bg-success">Ativa</span>
                     {% else %}
-                    <span class="badge text-bg-secondary">Revogado</span>
+                    <span class="badge text-bg-secondary">Bloqueada</span>
                     {% endif %}
                 </td>
                 <td class="text-end">
@@ -47,17 +135,18 @@
                     <form method="post"
                           action="{{ url_for('admin_controle_acesso_revogar', credencial_id=credencial.id) }}"
                           class="d-inline"
-                          onsubmit="return confirm('Revogar esta credencial? Ela deixa de abrir o acesso, mas o registro permanece.');">
-                        <button type="submit" class="btn btn-sm btn-danger">Revogar</button>
+                          onsubmit="return confirm('Bloquear esta credencial? Ela deixa de abrir o acesso, mas o registro permanece.');">
+                        <input type="hidden" name="filtro_q" value="{{ filtro_q }}">
+                        <input type="hidden" name="filtro_tipo" value="{{ filtro_tipo }}">
+                        <input type="hidden" name="filtro_status" value="{{ filtro_status }}">
+                        <button type="submit" class="btn btn-sm btn-danger">Bloquear</button>
                     </form>
-                    {% else %}
-                    <span class="badge text-bg-secondary">Inativa</span>
                     {% endif %}
                 </td>
             </tr>
             {% else %}
             <tr>
-                <td colspan="5" class="text-muted">Nenhuma credencial cadastrada.</td>
+                <td colspan="5" class="text-muted">Nenhuma credencial encontrada.</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -67,19 +156,27 @@
 <div class="modal fade" id="modalNovaCredencial" tabindex="-1" aria-labelledby="modalNovaCredencialLabel" aria-hidden="true">
     <div class="modal-dialog">
         <form method="post" action="{{ url_for('admin_controle_acesso_salvar') }}" class="modal-content">
+            <input type="hidden" name="filtro_q" value="{{ filtro_q }}">
+            <input type="hidden" name="filtro_tipo" value="{{ filtro_tipo }}">
+            <input type="hidden" name="filtro_status" value="{{ filtro_status }}">
             <div class="modal-header">
                 <h5 class="modal-title" id="modalNovaCredencialLabel">Nova Credencial</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
                 <div class="mb-3">
-                    <label class="form-label" for="morador_id">Morador</label>
+                    <label class="form-label" for="busca-morador-credencial">Buscar unidade ou morador</label>
+                    <input type="search" class="form-control mb-1" id="busca-morador-credencial"
+                           placeholder="Bloco, apto ou nome" autocomplete="off">
                     <select class="form-select" id="morador_id" name="morador_id" required>
                         <option value="">Selecione</option>
                         {% for grupo in moradores_por_unidade %}
                         <optgroup label="{{ grupo.unidade.bloco }} / {{ grupo.unidade.apartamento }}">
                             {% for morador in grupo.moradores %}
-                            <option value="{{ morador.id }}">{{ morador.nome_completo }}</option>
+                            <option value="{{ morador.id }}"
+                                    data-busca="{{ grupo.unidade.bloco }} {{ grupo.unidade.apartamento }} {{ morador.nome_completo }}">
+                                {{ morador.nome_completo }}
+                            </option>
                             {% endfor %}
                         </optgroup>
                         {% endfor %}
@@ -98,7 +195,7 @@
                     <label class="form-label" for="codigo_identificador">Código/ID</label>
                     <input type="text" class="form-control" id="codigo_identificador"
                            name="codigo_identificador" required maxlength="120"
-                           placeholder="Número da tag ou código lido pelo equipamento">
+                           placeholder="Número da tag, cartão ou controle">
                 </div>
             </div>
             <div class="modal-footer">
@@ -108,4 +205,175 @@
         </form>
     </div>
 </div>
+{% else %}
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+            <div>
+                <h2 class="h5 mb-2">Vizinsync Agent</h2>
+                {% if status_agente.online %}
+                <p class="mb-1"><span class="badge text-bg-success">🟢 {{ status_agente.rotulo }}</span></p>
+                {% elif 'Sem contato' in status_agente.rotulo %}
+                <p class="mb-1"><span class="badge text-bg-secondary">⚪ {{ status_agente.rotulo }}</span></p>
+                {% else %}
+                <p class="mb-1"><span class="badge text-bg-light border">⚪ {{ status_agente.rotulo }}</span></p>
+                {% endif %}
+                <p class="small text-muted mb-0">
+                    O computador da portaria consulta este condomínio a cada minuto.
+                    Regenerar o token desconecta o script que já estava baixado.
+                </p>
+            </div>
+            <a class="btn btn-primary" href="{{ url_for('admin_controle_acesso_baixar_agente') }}">
+                ⬇️ Baixar vizinsync_agent.py
+            </a>
+        </div>
+        <label class="form-label mt-3" for="agent-api-token">Token da API</label>
+        <div class="input-group">
+            <input type="text" class="form-control font-monospace" id="agent-api-token"
+                   value="{{ agent_token }}" readonly>
+            <button type="button" class="btn btn-outline-secondary" id="copiar-token-agente">Copiar</button>
+        </div>
+        <form method="post" action="{{ url_for('admin_controle_acesso_regenerar_token') }}" class="mt-2"
+              onsubmit="return confirm('Gerar um token novo? O script já instalado na portaria para de sincronizar até ser baixado de novo.');">
+            <button type="submit" class="btn btn-sm btn-outline-warning">Regenerar token</button>
+        </form>
+    </div>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Controladoras</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNovoEquipamento">
+        + Novo Equipamento
+    </button>
+</div>
+
+<div class="table-responsive card shadow-sm">
+    <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Nome</th>
+                <th>Fabricante</th>
+                <th>Endereço</th>
+                <th>Escopo</th>
+                <th>Situação</th>
+                <th class="text-end">Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for equipamento in equipamentos %}
+            <tr>
+                <td>
+                    <div class="fw-semibold">{{ equipamento.nome }}</div>
+                    {% if equipamento.status_ultimo_envio %}
+                    <div class="small text-muted">{{ equipamento.status_ultimo_envio }}</div>
+                    {% endif %}
+                </td>
+                <td>{{ equipamento.rotulo_fabricante }}</td>
+                <td class="font-monospace">{{ equipamento.ip_local }}:{{ equipamento.porta }}</td>
+                <td>{{ equipamento.rotulo_escopo }}</td>
+                <td>
+                    {% if equipamento.ativo %}
+                    <span class="badge text-bg-success">Ativo</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Inativo</span>
+                    {% endif %}
+                    {% if equipamento.sincronia_label %}
+                    <div class="small text-muted">Sincronia {{ equipamento.sincronia_label }}</div>
+                    {% endif %}
+                </td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            data-bs-toggle="modal" data-bs-target="#modalEquipamento{{ equipamento.id }}">
+                        Editar
+                    </button>
+                    <form method="post" class="d-inline"
+                          action="{{ url_for('admin_controle_acesso_equipamento_remover', equipamento_id=equipamento.id) }}"
+                          onsubmit="return confirm('Remover esta controladora? O agente deixa de enviá-la na próxima consulta.');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Remover</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="text-muted">Nenhuma controladora cadastrada.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="modalNovoEquipamento" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="{{ url_for('admin_controle_acesso_equipamento_salvar') }}" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Novo Equipamento</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% include "admin/_equipamento_campos.html" %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% for equipamento in equipamentos %}
+<div class="modal fade" id="modalEquipamento{{ equipamento.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="{{ url_for('admin_controle_acesso_equipamento_salvar') }}" class="modal-content">
+            <input type="hidden" name="equipamento_id" value="{{ equipamento.id }}">
+            <div class="modal-header">
+                <h5 class="modal-title">Editar equipamento</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                {% with equipamento=equipamento %}
+                {% include "admin/_equipamento_campos.html" %}
+                {% endwith %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const buscaMorador = document.getElementById("busca-morador-credencial");
+    const selectMorador = document.getElementById("morador_id");
+    if (buscaMorador && selectMorador) {
+        buscaMorador.addEventListener("input", function () {
+            const termo = buscaMorador.value.trim().toLowerCase();
+            selectMorador.querySelectorAll("option").forEach(function (opcao) {
+                if (!opcao.value) {
+                    return;
+                }
+                const texto = (opcao.dataset.busca || opcao.textContent).toLowerCase();
+                opcao.hidden = Boolean(termo) && !texto.includes(termo);
+            });
+        });
+    }
+    const copiarToken = document.getElementById("copiar-token-agente");
+    const campoToken = document.getElementById("agent-api-token");
+    if (copiarToken && campoToken) {
+        copiarToken.addEventListener("click", async function () {
+            try {
+                await navigator.clipboard.writeText(campoToken.value);
+                copiarToken.textContent = "Copiado";
+            } catch (erro) {
+                campoToken.select();
+                document.execCommand("copy");
+                copiarToken.textContent = "Copiado";
+            }
+        });
+    }
+</script>
 {% endblock %}

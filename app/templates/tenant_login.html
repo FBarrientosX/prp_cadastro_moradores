@@ -4,7 +4,7 @@
 
 {% block content %}
 {% set aba_ativa = active_tab if active_tab is defined else 'morador' %}
-{% set brand_logo = condominio.configuracao.logo_filename if condominio and condominio.configuracao else None %}
+{% set brand_logo = logo_publica(condominio) %}
 
 <div class="card auth-card shadow-lg">
     <div class="card-body p-4 p-md-5">
@@ -81,7 +81,8 @@
                     </button>
                 </form>
                 <div class="text-center mt-3">
-                    <a href="{{ url_for('esqueci_senha') }}" class="small text-muted text-decoration-none">
+                    <a href="{{ url_for('esqueci_senha') }}" id="link-esqueci-senha"
+                       class="small text-muted text-decoration-none">
                         Esqueci minha senha
                     </a>
                 </div>
@@ -128,6 +129,7 @@
     const campoSenha = document.getElementById("campo-senha-unidade");
     const senhaInput = document.getElementById("senha");
     const btnContinuar = document.getElementById("btn-continuar-unidade");
+    const linkEsqueci = document.getElementById("link-esqueci-senha");
     const blocoInicial = {{ bloco | tojson }};
     const apartamentoInicial = {{ apartamento | tojson }};
     let statusUnidadeController = null;
@@ -168,7 +170,7 @@
         });
     }
 
-    function aplicarEstadoSenha(exigeSenha) {
+    function aplicarEstadoSenha(exigeSenha, primeiroAcesso) {
         if (!campoSenha || !senhaInput || !btnContinuar) return;
         if (exigeSenha) {
             campoSenha.hidden = false;
@@ -180,7 +182,7 @@
             senhaInput.required = false;
             senhaInput.disabled = true;
             senhaInput.value = "";
-            btnContinuar.textContent = "Continuar";
+            btnContinuar.textContent = primeiroAcesso ? "Fazer 1º acesso" : "Continuar";
         }
     }
 
@@ -212,7 +214,7 @@
                 return resp.json();
             })
             .then((data) => {
-                aplicarEstadoSenha(Boolean(data && data.exige_senha));
+                aplicarEstadoSenha(Boolean(data && data.exige_senha), Boolean(data && data.primeiro_acesso));
             })
             .catch((err) => {
                 if (err.name === "AbortError") return;
@@ -220,9 +222,23 @@
             });
     }
 
+    function atualizarLinkEsqueci() {
+        if (!linkEsqueci || !blocoSelect || !apartamentoSelect) {
+            return;
+        }
+        const url = new URL(linkEsqueci.href, window.location.origin);
+        url.search = "";
+        if (blocoSelect.value && apartamentoSelect.value) {
+            url.searchParams.set("bloco", blocoSelect.value);
+            url.searchParams.set("apartamento", apartamentoSelect.value);
+        }
+        linkEsqueci.href = url.pathname + url.search;
+    }
+
     function aoTrocarUnidade() {
         aplicarEstadoSenha(false);
         verificarStatusUnidade();
+        atualizarLinkEsqueci();
     }
 
     if (blocoSelect && apartamentoSelect) {
@@ -230,6 +246,7 @@
         if (blocoInicial) {
             popularApartamentos(blocoInicial, apartamentoInicial);
         }
+        atualizarLinkEsqueci();
         blocoSelect.addEventListener("change", (event) => {
             popularApartamentos(event.target.value);
             aoTrocarUnidade();

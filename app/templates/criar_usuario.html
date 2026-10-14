@@ -9,7 +9,7 @@
             <div class="card-body p-4">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h1 class="h4 mb-0">Criar Novo Usuário</h1>
-                    <a href="{{ url_for('admin_index') }}" class="btn btn-outline-secondary btn-sm">
+                    <a href="{{ url_for('admin_index', tab='equipe') }}" class="btn btn-outline-secondary btn-sm">
                         Voltar ao Painel
                     </a>
                 </div>
@@ -33,20 +33,15 @@
                         <select class="form-select" id="tipo_acesso" name="tipo_acesso" required>
                             <option value="" selected disabled>Selecione...</option>
                             <option value="assistente">Assistente Administrativo</option>
-                            <option value="sindico">Síndico de Bloco</option>
+                            <option value="sindico">Síndico</option>
                             <option value="porteiro">Porteiro</option>
                         </select>
                     </div>
 
-                    <div class="mb-4">
-                        <label class="form-label" for="bloco_responsavel">Bloco Responsável</label>
-                        <select class="form-select" id="bloco_responsavel" name="bloco_responsavel" disabled>
-                            <option value="" selected disabled>Selecione um bloco...</option>
-                            {% for bloco in blocos %}
-                            <option value="{{ bloco }}">{{ bloco }}</option>
-                            {% endfor %}
-                        </select>
-                        <small class="text-muted">Obrigatório apenas para Síndico.</small>
+                    <div id="painel-sindico" class="d-none">
+                        {% with id_prefix="novo", escopo_todos=false, escopo_codigos=[], perm_portaria=false, perm_reservas_geral=false, perm_configuracoes=false %}
+                        {% include "includes/escopo_sindico_campos.html" %}
+                        {% endwith %}
                     </div>
 
                     <button type="submit" class="btn btn-primary w-100">
@@ -60,20 +55,16 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/escopo-sindico.js') }}"></script>
 <script>
     const tipoAcesso = document.getElementById("tipo_acesso");
-    const blocoResponsavel = document.getElementById("bloco_responsavel");
+    const painelSindico = document.getElementById("painel-sindico");
 
-    function atualizarCampoBloco() {
-        const sindicoSelecionado = tipoAcesso.value === "sindico";
-        blocoResponsavel.disabled = !sindicoSelecionado;
-        blocoResponsavel.required = sindicoSelecionado;
-        if (!sindicoSelecionado) {
-            blocoResponsavel.value = "";
-        }
+    function atualizarPainelSindico() {
+        painelSindico.classList.toggle("d-none", tipoAcesso.value !== "sindico");
     }
 
-    tipoAcesso.addEventListener("change", atualizarCampoBloco);
-    atualizarCampoBloco();
+    tipoAcesso.addEventListener("change", atualizarPainelSindico);
+    atualizarPainelSindico();
 </script>
 {% endblock %}

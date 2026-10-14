@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Lista de Convidados{% endblock %}
+
+{% block content %}
+<p class="mb-3"><a href="{{ url_for('morador_areas') }}">← Minhas Reservas</a></p>
+<div class="mb-3">
+    <h1 class="h4 mb-1">📝 Lista de Convidados</h1>
+    <p class="text-muted mb-0">
+        {{ reserva.area.nome }} · {{ reserva.data_evento.strftime('%d/%m/%Y') }}
+        · {{ reserva.horario_inicio.strftime('%H:%M') }} às {{ reserva.horario_fim.strftime('%H:%M') }}
+    </p>
+</div>
+
+<p class="fw-semibold {% if lotado %}text-danger{% endif %}">
+    Convidados: {{ convidados|length }} de {{ capacidade }} (Lotação Máxima)
+</p>
+
+{% if not lotado %}
+<form class="card shadow-sm mb-4" method="post" action="{{ url_for('morador_reservas_convidados_adicionar', reserva_id=reserva.id) }}">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-6">
+                <label class="form-label" for="nome">Nome completo</label>
+                <input type="text" class="form-control" id="nome" name="nome" maxlength="200" required>
+            </div>
+            {% if exigir_cpf %}
+            <div class="col-md-4">
+                <label class="form-label" for="documento_cpf">CPF</label>
+                <input type="text" class="form-control" id="documento_cpf" name="documento_cpf" inputmode="numeric" maxlength="14" required>
+            </div>
+            {% endif %}
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Adicionar à Lista</button>
+            </div>
+        </div>
+    </div>
+</form>
+{% endif %}
+
+{% if convidados %}
+<ul class="list-group">
+    {% for convidado in convidados %}
+    <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+        <div>
+            <div class="fw-semibold">{{ convidado.nome }}</div>
+            {% if convidado.documento_cpf %}
+            <div class="small text-muted">{{ convidado.documento_cpf[:3] }}.{{ convidado.documento_cpf[3:6] }}.{{ convidado.documento_cpf[6:9] }}-{{ convidado.documento_cpf[9:] }}</div>
+            {% endif %}
+        </div>
+        {% if pode_remover and not convidado.status_checkin %}
+        <form method="post" action="{{ url_for('morador_reservas_convidados_remover', reserva_id=reserva.id, convidado_id=convidado.id) }}" onsubmit="return confirm('Remover este convidado?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">🗑️ Remover</button>
+        </form>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p class="text-muted mb-0">Nenhum convidado nesta lista.</p>
+{% endif %}
+{% endblock %}

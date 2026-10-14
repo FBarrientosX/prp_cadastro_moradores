@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+
+{% block title %}Rateios / Taxa Condomínio — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Rateios / Taxa Condomínio</h1>
+        <p class="text-muted mb-0">A composição de cada lote vira o valor do boleto da unidade.</p>
+    </div>
+    {% if planos %}
+    <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#formRateio" aria-expanded="{{ 'true' if abrir_form else 'false' }}">
+        + Novo Rateio / Gerar Taxa Mensal
+    </button>
+    {% endif %}
+</div>
+
+{% if condominio_fin and not condominio_fin.fin_repasses_ativos %}
+<p class="text-muted">Este condomínio está em caixa único. O escopo geral reúne todas as unidades residenciais ativas.</p>
+{% endif %}
+
+{% if not planos %}
+<div class="alert alert-warning">Cadastre o plano de contas antes de montar um rateio.</div>
+{% else %}
+<div class="collapse {% if abrir_form %}show{% endif %} mb-4" id="formRateio">
+    <form class="card border-0 shadow-sm" method="post" action="{{ url_for('admin_financeiro_rateios') }}">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label" for="competencia">Competência</label>
+                    <input class="form-control" id="competencia" name="competencia" placeholder="10/2026" maxlength="7" value="{{ competencia_atual }}" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="vencimento">Vencimento</label>
+                    <input class="form-control datepicker" id="vencimento" name="vencimento" type="text" value="{{ vencimento_atual }}" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="titulo">Título</label>
+                    <input class="form-control" id="titulo" name="titulo" value="{{ titulo_atual }}" placeholder="Opcional. Ex.: TAXA BLOCO 1 - out/2026">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="escopo">Escopo</label>
+                    <select class="form-select" id="escopo" name="escopo">
+                        <option value="BLOCO" {% if escopo_atual == 'BLOCO' %}selected{% endif %}>Bloco específico</option>
+                        <option value="TODOS" {% if escopo_atual == 'TODOS' %}selected{% endif %}>Todos os blocos, com valor por bloco</option>
+                        <option value="GERAL" {% if escopo_atual == 'GERAL' %}selected{% endif %}>Condomínio geral</option>
+                    </select>
+                </div>
+                <div class="col-md-6 {% if escopo_atual != 'BLOCO' %}d-none{% endif %}" id="campoBloco">
+                    <label class="form-label" for="bloco">Bloco</label>
+                    <select class="form-select" id="bloco" name="bloco">
+                        {% for bloco in blocos %}
+                        <option value="{{ bloco }}" {% if bloco_atual == bloco %}selected{% endif %}>Bloco {{ bloco }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="grupo_fracao_id">Base de fração</label>
+                    <select class="form-select" id="grupo_fracao_id" name="grupo_fracao_id">
+                        <option value="" {% if not grupo_atual %}selected{% endif %}>Cota igual para todas as unidades elegíveis</option>
+                        {% for grupo in grupos_fracao %}
+                        <option value="{{ grupo.id }}" {% if grupo_atual|string == grupo.id|string %}selected{% endif %}>
+                            {{ grupo.titulo }}{% if grupo.padrao %} (padrão){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div class="form-text">Sem fração, cada unidade elegível recebe o mesmo valor da composição.</div>
+                </div>
+                <div class="col-12">
+                    <span class="form-label d-block">Modo de cálculo</span>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="modo_rateio" id="modoUnitario" value="VALOR_UNITARIO" {% if modo_rateio_atual != 'DIVIDIR_TOTAL' %}checked{% endif %}>
+                        <label class="form-check-label" for="modoUnitario">Valor base por unidade — a composição é a cota do peso 1,0. Peso 2,0 paga o dobro. Isenção de 100% não gera boleto.</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="modo_rateio" id="modoTotal" value="DIVIDIR_TOTAL" {% if modo_rateio_atual == 'DIVIDIR_TOTAL' %}checked{% endif %}>
+                        <label class="form-check-label" for="modoTotal">Ratear despesa total pela fração ideal — a composição é o montante global, dividido pelo coeficiente de cada unidade ativa.</label>
+                    </div>
+                </div>
+            </div>
+
+            <h2 class="h6 mt-4">Composição do boleto</h2>
+            <div class="table-responsive">
+                <table class="table align-middle" id="tabelaLinhas">
+                    <thead>
+                        <tr>
+                            <th>Plano de contas</th>
+                            <th>Descrição</th>
+                            <th>Fundo</th>
+                            <th>Valor</th>
+                            <th>Parcela</th>
+                            <th>De</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="linhasRateio">
+                        {% for linha in linhas %}
+                        <tr data-linha="{{ loop.index0 }}">
+                            <td>
+                                <select class="form-select form-select-sm js-plano" name="linha_{{ loop.index0 }}_plano">
+                                    <option value="">Selecione</option>
+                                    {% for plano in planos %}
+                                    <option value="{{ plano.id }}" data-fundo="{{ plano.fundo.nome if plano.fundo else '' }}" data-nome="{{ plano.nome }}"
+                                            {% if linha.plano_id|string == plano.id|string %}selected{% endif %}>
+                                        {{ plano.codigo }} — {{ plano.nome }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                            <td><input class="form-control form-control-sm" name="linha_{{ loop.index0 }}_descricao" value="{{ linha.descricao }}"></td>
+                            <td><span class="js-fundo text-muted small"></span></td>
+                            <td><input class="form-control form-control-sm js-valor" name="linha_{{ loop.index0 }}_valor" value="{{ linha.valor }}" inputmode="decimal" placeholder="0,00"></td>
+                            <td style="width:5rem"><input class="form-control form-control-sm" name="linha_{{ loop.index0 }}_parcela" value="{{ linha.parcela }}"></td>
+                            <td style="width:5rem"><input class="form-control form-control-sm" name="linha_{{ loop.index0 }}_total" value="{{ linha.total }}"></td>
+                            <td><button type="button" class="btn btn-sm btn-outline-danger js-remover">Remover</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="adicionarLinha">+ Linha</button>
+
+            <div id="gradeBlocos" class="mt-3 {% if escopo_atual != 'TODOS' %}d-none{% endif %}"></div>
+        </div>
+        <div class="card-footer bg-white d-flex flex-wrap gap-2">
+            <button type="submit" class="btn btn-outline-primary" name="acao" value="rascunho">Salvar rascunho</button>
+            <button type="submit" class="btn btn-primary" name="acao" value="gerar" onclick="return confirm('Gerar uma cobrança para cada unidade ativa deste critério?');">Gerar Cobranças do Rateio</button>
+        </div>
+    </form>
+</div>
+<template id="modeloLinha">
+    <tr data-linha="__i__">
+        <td>
+            <select class="form-select form-select-sm js-plano" name="linha___i___plano">
+                <option value="">Selecione</option>
+                {% for plano in planos %}
+                <option value="{{ plano.id }}" data-fundo="{{ plano.fundo.nome if plano.fundo else '' }}" data-nome="{{ plano.nome }}">{{ plano.codigo }} — {{ plano.nome }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td><input class="form-control form-control-sm" name="linha___i___descricao"></td>
+        <td><span class="js-fundo text-muted small"></span></td>
+        <td><input class="form-control form-control-sm js-valor" name="linha___i___valor" inputmode="decimal" placeholder="0,00"></td>
+        <td style="width:5rem"><input class="form-control form-control-sm" name="linha___i___parcela" value="1"></td>
+        <td style="width:5rem"><input class="form-control form-control-sm" name="linha___i___total" value="1"></td>
+        <td><button type="button" class="btn btn-sm btn-outline-danger js-remover">Remover</button></td>
+    </tr>
+</template>
+<script type="application/json" id="blocosDados">{{ blocos|tojson }}</script>
+{% endif %}
+
+{% if rateios %}
+<div class="d-flex flex-column gap-2">
+    {% for rateio in rateios %}
+    <div class="card border-0 shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <button class="btn btn-link text-white text-decoration-none p-0 text-start" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#rateio{{ rateio.id }}">
+                    <strong>{{ rateio.titulo }}</strong>
+                    <span class="ms-2">{{ rateio.criterio_bloco|rotulo_criterio }}</span>
+                    <span class="ms-2">{{ rateio.competencia|competencia_extenso }}</span>
+                </button>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    {% if rateio.grupo_fracao_id and rateio.modo_rateio == 'DIVIDIR_TOTAL' %}
+                    <span>despesa total {{ rateio.valor_unitario|reais }}</span>
+                    {% elif rateio.grupo_fracao_id %}
+                    <span>{{ rateio.valor_unitario|reais }} por peso 1</span>
+                    {% else %}
+                    <span>{{ rateio.valor_unitario|reais }} / unidade</span>
+                    {% endif %}
+                    <span class="badge {{ rateio.status|badge_status }}">{{ rateio.status }}</span>
+                    {% if rateio.status == 'Rascunho' %}
+                    <form method="post" action="{{ url_for('admin_financeiro_rateio_gerar', rateio_id=rateio.id) }}"
+                          onsubmit="return confirm('Gerar uma cobrança para cada unidade ativa deste critério?');">
+                        <button type="submit" class="btn btn-light btn-sm">Gerar Cobranças do Rateio</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin_financeiro_rateio_excluir', rateio_id=rateio.id) }}"
+                          onsubmit="return confirm('Excluir este rascunho?');">
+                        <button type="submit" class="btn btn-outline-light btn-sm">Excluir</button>
+                    </form>
+                    {% else %}
+                    <span class="small">{{ contagens.get(rateio.id, 0) }} cobranças · {{ rateio.total_gerado|reais }}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="collapse" id="rateio{{ rateio.id }}">
+            <div class="card-body">
+                <p class="text-muted small mb-2">
+                    Vencimento {{ rateio.vencimento_padrao.strftime('%d/%m/%Y') }}
+                    {% if rateio.grupo_fracao %} · {{ rateio.grupo_fracao.titulo }}{% endif %}
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Descrição</th>
+                                <th>Fundo</th>
+                                <th>Parcela</th>
+                                <th class="text-end">Valor</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in rateio.itens_json|como_lista %}
+                            <tr>
+                                <td>{{ item.descricao }}</td>
+                                <td>{{ item.fundo_nome }}</td>
+                                <td>{{ item.parcela_atual }}/{{ item.total_parcelas }}</td>
+                                <td class="text-end">{{ item.valor|reais }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <th colspan="3">{% if rateio.modo_rateio == 'DIVIDIR_TOTAL' and rateio.grupo_fracao_id %}Despesa total{% else %}Referência da composição{% endif %}</th>
+                                <th class="text-end">{{ rateio.valor_unitario|reais }}</th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-muted">Nenhum rateio neste condomínio.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr(".datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+
+    const corpo = document.getElementById("linhasRateio");
+    const modelo = document.getElementById("modeloLinha");
+    const escopo = document.getElementById("escopo");
+    const campoBloco = document.getElementById("campoBloco");
+    const grade = document.getElementById("gradeBlocos");
+    const dados = document.getElementById("blocosDados");
+    if (!corpo || !modelo || !escopo || !grade || !dados) return;
+
+    const blocos = JSON.parse(dados.textContent || "[]");
+    let proximo = corpo.querySelectorAll("tr[data-linha]").length;
+
+    function escapar(valor) {
+        return String(valor || "").replace(/[&<>"']/g, function (ch) {
+            return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
+        });
+    }
+
+    function atualizarFundo(tr) {
+        const select = tr.querySelector(".js-plano");
+        const destino = tr.querySelector(".js-fundo");
+        const descricao = tr.querySelector("[name$='_descricao']");
+        if (!select || !destino) return;
+        const opcao = select.selectedOptions[0];
+        destino.textContent = opcao && opcao.dataset.fundo ? opcao.dataset.fundo : "";
+        if (descricao && !descricao.value && opcao && opcao.dataset.nome) {
+            descricao.value = opcao.dataset.nome;
+        }
+    }
+
+    function atualizarGrade() {
+        if (escopo.value !== "TODOS") {
+            grade.classList.add("d-none");
+            grade.innerHTML = "";
+            return;
+        }
+        const anteriores = {};
+        grade.querySelectorAll("input").forEach(function (campo) {
+            anteriores[campo.name] = {
+                valor: campo.value,
+                origem: campo.getAttribute("data-origem") || ""
+            };
+        });
+        const linhas = Array.from(corpo.querySelectorAll("tr[data-linha]"));
+        let html = "<h3 class='h6'>Valores por bloco</h3><div class='table-responsive'><table class='table table-sm'><thead><tr><th>Bloco</th>";
+        linhas.forEach(function (tr) {
+            const descricao = tr.querySelector("[name$='_descricao']");
+            html += "<th>" + escapar(descricao && descricao.value ? descricao.value : "Linha") + "</th>";
+        });
+        html += "</tr></thead><tbody>";
+        blocos.forEach(function (bloco) {
+            html += "<tr><td>Bloco " + escapar(bloco) + "</td>";
+            linhas.forEach(function (tr) {
+                const indice = tr.getAttribute("data-linha");
+                const base = tr.querySelector(".js-valor");
+                const nome = "linha_" + indice + "_bloco_" + bloco;
+                const baseAtual = base ? base.value : "";
+                let valor = baseAtual;
+                const anterior = anteriores[nome];
+                if (anterior && anterior.valor !== anterior.origem && anterior.valor !== "") {
+                    valor = anterior.valor;
+                }
+                html += "<td><input class='form-control form-control-sm' name='" + nome + "' data-origem='" + escapar(baseAtual) + "' value='" + escapar(valor) + "'></td>";
+            });
+            html += "</tr>";
+        });
+        html += "</tbody></table></div>";
+        grade.innerHTML = html;
+        grade.classList.remove("d-none");
+    }
+
+    function sincronizarEscopo() {
+        if (campoBloco) {
+            campoBloco.classList.toggle("d-none", escopo.value !== "BLOCO");
+        }
+        atualizarGrade();
+    }
+
+    corpo.addEventListener("change", function (evento) {
+        const tr = evento.target.closest("tr");
+        if (tr) atualizarFundo(tr);
+        atualizarGrade();
+    });
+    corpo.addEventListener("input", function () {
+        if (escopo.value === "TODOS") atualizarGrade();
+    });
+    corpo.addEventListener("click", function (evento) {
+        const botao = evento.target.closest(".js-remover");
+        if (!botao) return;
+        const linhas = corpo.querySelectorAll("tr[data-linha]");
+        if (linhas.length <= 1) return;
+        botao.closest("tr").remove();
+        atualizarGrade();
+    });
+
+    const botaoLinha = document.getElementById("adicionarLinha");
+    if (botaoLinha) {
+        botaoLinha.addEventListener("click", function () {
+            const html = modelo.innerHTML.replaceAll("__i__", String(proximo));
+            proximo += 1;
+            corpo.insertAdjacentHTML("beforeend", html);
+            const tr = corpo.lastElementChild;
+            atualizarFundo(tr);
+            atualizarGrade();
+        });
+    }
+    escopo.addEventListener("change", sincronizarEscopo);
+    corpo.querySelectorAll("tr[data-linha]").forEach(atualizarFundo);
+    sincronizarEscopo();
+})();
+</script>
+{% endblock %}

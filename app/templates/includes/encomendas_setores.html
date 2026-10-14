@@ -1,0 +1,27 @@
+<div class="alert alert-warning border-0 shadow-sm mb-4" role="status">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+        <div>
+            <h2 class="h6 mb-1">
+                <i class="bi bi-box-seam me-1"></i>
+                Encomendas aguardando retirada nos setores
+            </h2>
+            <p class="mb-0 small">Pacotes recebidos na portaria para Administração e demais setores internos.</p>
+        </div>
+        <a href="{{ url_for('admin_setores') }}" class="btn btn-sm btn-outline-dark">Ver setores</a>
+    </div>
+    <ul class="list-group list-group-flush mt-3 bg-transparent">
+        {% for encomenda in encomendas_setores %}
+        <li class="list-group-item bg-transparent px-0">
+            <div class="fw-semibold">{{ encomenda.unidade.identificador }}</div>
+            <div>
+                {{ encomenda.destinatario or "Sem destinatário" }}
+                {% if encomenda.transportadora %} · {{ encomenda.transportadora }}{% endif %}
+                {% if encomenda.codigo_rastreio %} · {{ encomenda.codigo_rastreio }}{% endif %}
+            </div>
+            <div class="small text-muted">
+                Na portaria desde {{ encomenda.data_recebimento.strftime("%d/%m/%Y %H:%M") }}
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+</div>

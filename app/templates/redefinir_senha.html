@@ -5,8 +5,9 @@
 {% block content %}
 <div class="card auth-card shadow-lg">
     <div class="card-body p-4 p-md-5">
-        <h1 class="h4 mb-3 text-center">Redefinir senha da unidade</h1>
-        <p class="text-muted small text-center mb-4">Crie uma nova senha de acesso para sua unidade.</p>
+        <h1 class="h4 mb-1 text-center">Redefinir senha da unidade</h1>
+        <p class="h5 text-center fw-semibold text-primary mb-3">Bloco {{ unidade.bloco }} - Apartamento {{ unidade.apartamento }}</p>
+        <p class="text-muted small text-center mb-4">Crie uma nova senha de acesso para esta unidade.</p>
 
         <form method="post" action="{{ url_for('redefinir_senha', token=token) }}">
             <div class="mb-3">

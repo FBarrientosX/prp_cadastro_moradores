@@ -16,3 +16,23 @@ app/static/uploads/ocorrencias/*
 !app/static/uploads/ocorrencias/.gitkeep
 app/static/uploads/encomendas/*
 !app/static/uploads/encomendas/.gitkeep
+app/static/uploads/faciais/*
+!app/static/uploads/faciais/.gitkeep
+app/static/uploads/infracoes/*
+!app/static/uploads/infracoes/.gitkeep
+app/static/uploads/documentos/*
+!app/static/uploads/documentos/.gitkeep
+app/static/uploads/financeiro/*
+!app/static/uploads/financeiro/.gitkeep
+app/static/uploads/medidores/*
+!app/static/uploads/medidores/.gitkeep
+# Midia enviada por usuarios. Imagens de interface ficam fora de uploads/.
+app/static/uploads/**/*.mp4
+app/static/uploads/**/*.mov
+app/static/uploads/**/*.webm
+app/static/uploads/**/*.pdf
+app/static/uploads/**/*.jpg
+app/static/uploads/**/*.jpeg
+app/static/uploads/**/*.png
+app/static/uploads/**/*.webp
+agent/agent_state.json

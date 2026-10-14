@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}Correção Monetária — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Selecione um Índice</h1>
+        <p class="text-muted mb-0">Série histórica usada nas cobranças, nos acordos e na calculadora.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalIndice">+ Novo Índice</button>
+        <form method="post" action="{{ url_for('admin_financeiro_correcao_sincronizar') }}">
+            <button class="btn btn-outline-secondary" type="submit">🔄 Sincronizar Índices com Banco Central (BACEN)</button>
+        </form>
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalCalculadora">🧮 Calculadora de Correção</button>
+        <button class="btn btn-outline-dark" type="button" data-bs-toggle="modal" data-bs-target="#modalAjuda">❓ Como funciona</button>
+    </div>
+</div>
+
+<div class="row g-3">
+    {% for card in cards %}
+    {% set item = card.catalogo %}
+    <div class="col-md-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <h2 class="h6 mb-1">
+                        {% if card.completo %}🟢{% else %}⚠️{% endif %}
+                        {{ item.nome_completo }}
+                    </h2>
+                </div>
+                <div class="small text-muted mb-2">{{ item.orgao }} · {{ item.sigla }}</div>
+                <div class="mb-2">
+                    <span class="badge text-bg-light border">{{ card.formula }}</span>
+                    {% if card.padrao %}
+                    <span class="badge text-bg-primary">Padrão do Condomínio</span>
+                    {% endif %}
+                </div>
+                <div class="mt-auto d-flex flex-wrap gap-2">
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin_financeiro_correcao_detalhe', indice_id=item.id) }}">Abrir série</a>
+                    {% if not card.padrao %}
+                    <form method="post" action="{{ url_for('admin_financeiro_correcao_padrao', indice_id=item.id) }}">
+                        <button class="btn btn-sm btn-outline-secondary" type="submit">Definir como padrão</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-muted">Nenhum índice disponível.</p>
+    {% endfor %}
+</div>
+
+<div class="modal fade" id="modalIndice" tabindex="-1" aria-labelledby="tituloIndice" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_correcao_novo') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloIndice">Novo índice</h2>
+                <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body row g-2">
+                <div class="col-4">
+                    <label class="form-label">Sigla</label>
+                    <input class="form-control" name="sigla" maxlength="20" required>
+                </div>
+                <div class="col-8">
+                    <label class="form-label">Nome</label>
+                    <input class="form-control" name="nome_completo" maxlength="120" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Órgão</label>
+                    <input class="form-control" name="orgao" list="orgaosIndice" maxlength="40">
+                    <datalist id="orgaosIndice">
+                        {% for orgao in orgaos %}<option value="{{ orgao }}">{% endfor %}
+                    </datalist>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Fórmula</label>
+                    <select class="form-select" name="tipo_calculo">
+                        <option value="PERCENTUAL_MENSAL">% Mensal</option>
+                        <option value="NUMERO_INDICE">Fator/Nominal</option>
+                        <option value="SOMA_SIMPLES">Soma simples</option>
+                    </select>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Código SGS BACEN</label>
+                    <input class="form-control" name="codigo_sgs_bacen" inputmode="numeric">
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Fonte oficial</label>
+                    <input class="form-control" name="url_fonte_oficial" placeholder="https://">
+                </div>
+                <div class="col-12 form-check ms-2">
+                    <input type="hidden" name="ignorar_deflacao" value="0">
+                    <input class="form-check-input" type="checkbox" name="ignorar_deflacao" value="1" id="ignorarDeflacao" checked>
+                    <label class="form-check-label" for="ignorarDeflacao">Ignorar deflação (mês negativo entra como zero)</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Criar índice</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalCalculadora" tabindex="-1" aria-labelledby="tituloCalc" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_correcao_calcular') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloCalc">Calculadora de correção</h2>
+                <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body row g-2">
+                <div class="col-12">
+                    <label class="form-label">Índice</label>
+                    <select class="form-select" name="indice_id" required>
+                        {% for card in cards %}
+                        <option value="{{ card.catalogo.id }}" {% if card.padrao %}selected{% endif %}>{{ card.catalogo.nome_completo }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Valor original (R$)</label>
+                    <input class="form-control" name="valor_original" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Data inicial (vencimento)</label>
+                    <input class="form-control datepicker" type="text" name="data_inicial" required>
+                </div>
+                <div class="col-6">
+                    <label class="form-label">Data final (atualização)</label>
+                    <input class="form-control datepicker" type="text" name="data_final" required>
+                </div>
+                <div class="col-12 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" name="incluir_multa" value="1" id="incluirMulta">
+                    <label class="form-check-label" for="incluirMulta">Incluir multa ({{ multa|indice_num }}%)</label>
+                </div>
+                <div class="col-12 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" name="incluir_juros" value="1" id="incluirJuros">
+                    <label class="form-check-label" for="incluirJuros">Incluir juros de mora ({{ juros|indice_num }}% a.m. pró-rata)</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Calcular</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalAjuda" tabindex="-1" aria-labelledby="tituloAjuda" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloAjuda">Como a correção é calculada</h2>
+                <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p>O índice marcado como padrão do condomínio entra nas cobranças em atraso e nos acordos. No próprio mês do vencimento a correção fica zerada.</p>
+                <p><strong>% Mensal</strong> (IPCA, IGP-M, Poupança e outros) acumula cada mês seguinte ao vencimento com a conta (1 + taxa/100). Se o índice ignora deflação, um mês negativo entra como zero.</p>
+                <p><strong>Fator/Nominal</strong> (UFIR-RJ, salário mínimo e tabelas de tribunais) divide o valor do mês da atualização pelo valor do mês do vencimento.</p>
+                <p class="mb-0"><strong>Soma simples</strong> soma os percentuais do período, sem juros sobre juros. A sincronização com o Banco Central usa o código SGS de cada índice.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr("#modalCalculadora .datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+})();
+</script>
+{% endblock %}

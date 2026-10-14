@@ -1,0 +1,420 @@
+{% extends layout %}
+
+{% block title %}Interfone / Contatos{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Interfone / Contatos</h1>
+    <p class="text-muted mb-0">Busque a unidade e fale com quem reside no imóvel.</p>
+</div>
+
+{% if sem_condominio %}
+<div class="alert alert-warning" role="alert">
+    Abra a portaria a partir de um condomínio para consultar os contatos.
+</div>
+{% else %}
+<div class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <div class="row g-3 align-items-end">
+            <div class="col-12 col-md-3">
+                <label class="form-label fs-5" for="filtro-bloco">Bloco</label>
+                <select class="form-select form-select-lg" id="filtro-bloco">
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label fs-5" for="filtro-apartamento">Apartamento</label>
+                <select class="form-select form-select-lg" id="filtro-apartamento" disabled>
+                    <option value="">Selecione</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label fs-5" for="filtro-busca">Busca rápida</label>
+                <input class="form-control form-control-lg" id="filtro-busca" type="search"
+                       placeholder="Ex.: 6 703, 703 ou nome do morador" autocomplete="off">
+                <button type="button" class="btn btn-outline-dark btn-lg w-100 mt-2" id="atalho-administracao">
+                    🏢 Administração / Setores
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <label class="form-label fs-5" for="identificacao-portaria">Identificação na portaria (opcional):</label>
+        <input class="form-control form-control-lg" id="identificacao-portaria" type="text"
+               placeholder="Ex: João (Visitante), iFood, técnico da Claro..." autocomplete="off">
+        <p class="text-muted small mb-0 mt-2">Entra na mensagem de WhatsApp dos botões Visitante e Delivery.</p>
+    </div>
+</div>
+
+<div id="resultado-contatos" class="d-flex flex-column gap-3" aria-live="polite"></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not sem_condominio %}
+<script>
+    const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
+    const SETORES_INTERNOS = {{ setores_internos | tojson }};
+    const BLOCO_SETORES = "ADM";
+    const SETOR_ADMINISTRACAO = "Administração";
+    const URL_BUSCA = {{ url_for("api_portaria_buscar_unidade") | tojson }};
+    const blocoSelect = document.getElementById("filtro-bloco");
+    const aptoSelect = document.getElementById("filtro-apartamento");
+    const buscaInput = document.getElementById("filtro-busca");
+    const identificacaoInput = document.getElementById("identificacao-portaria");
+    const resultado = document.getElementById("resultado-contatos");
+    let buscaTimer = null;
+    let buscaAtual = 0;
+
+    function popularBlocos() {
+        Object.keys(CONDOMINIO_ESTRUTURA).sort().forEach((bloco) => {
+            const option = document.createElement("option");
+            option.value = bloco;
+            option.textContent = "Bloco " + bloco;
+            blocoSelect.appendChild(option);
+        });
+        const setores = document.createElement("option");
+        setores.value = BLOCO_SETORES;
+        setores.textContent = "ADM — Setores Internos";
+        blocoSelect.appendChild(setores);
+    }
+
+    function popularApartamentos(bloco) {
+        aptoSelect.innerHTML = "";
+        const vazio = document.createElement("option");
+        vazio.value = "";
+        vazio.textContent = bloco ? "Selecione" : "Selecione o bloco";
+        aptoSelect.appendChild(vazio);
+        aptoSelect.disabled = !bloco;
+        if (bloco === BLOCO_SETORES) {
+            SETORES_INTERNOS.forEach((setor) => {
+                const option = document.createElement("option");
+                option.value = setor;
+                option.textContent = setor;
+                aptoSelect.appendChild(option);
+            });
+            return;
+        }
+        if (!bloco || !CONDOMINIO_ESTRUTURA[bloco]) {
+            return;
+        }
+        const andares = CONDOMINIO_ESTRUTURA[bloco];
+        Object.keys(andares).sort((a, b) => Number(a) - Number(b)).forEach((andar) => {
+            andares[andar].forEach((apto) => {
+                const option = document.createElement("option");
+                option.value = apto;
+                option.textContent = apto;
+                aptoSelect.appendChild(option);
+            });
+        });
+    }
+
+    function mensagem(texto) {
+        const aviso = document.createElement("div");
+        aviso.className = "alert alert-light border mb-0";
+        aviso.textContent = texto;
+        return aviso;
+    }
+
+    function badge(texto, classe) {
+        const span = document.createElement("span");
+        span.className = "badge " + classe;
+        span.textContent = texto;
+        return span;
+    }
+
+    function referenciaUnidade(bloco, apto) {
+        return "Bloco " + bloco + " - Apto " + apto;
+    }
+
+    function mensagemWhatsapp(tipo, nome, bloco, apto, setorInterno) {
+        const identificacao = identificacaoInput.value.trim();
+        if (setorInterno) {
+            const saudacaoSetor = "Olá, " + nome + "! Aqui é da Portaria. ";
+            if (tipo === "visitante") {
+                if (identificacao) {
+                    return saudacaoSetor + "*" + identificacao + "* encontra-se na portaria procurando pela *" + apto + "*. Podemos autorizar a entrada?";
+                }
+                return saudacaoSetor + "Há um visitante/prestador na portaria procurando pela *" + apto + "*. Podemos autorizar a entrada?";
+            }
+            if (tipo === "delivery") {
+                if (identificacao) {
+                    return saudacaoSetor + "Há um entregador (*" + identificacao + "*) na portaria para o setor *" + apto + "*. Você pode vir receber?";
+                }
+                return saudacaoSetor + "Há um entregador de delivery na portaria para o setor *" + apto + "*. Você pode vir receber?";
+            }
+            return "Olá, " + nome + "! Aqui é da Portaria (ref. setor " + apto + ").";
+        }
+        const referencia = referenciaUnidade(bloco, apto);
+        const saudacao = "Olá, " + nome + "! Aqui é da Portaria do condomínio. ";
+        if (tipo === "visitante") {
+            if (identificacao) {
+                return saudacao + "*" + identificacao + "* encontra-se na portaria para a unidade *" + referencia + "*. Podemos autorizar a entrada?";
+            }
+            return saudacao + "Há um visitante/prestador na portaria aguardando autorização para o *" + referencia + "*. Podemos liberar a entrada?";
+        }
+        if (tipo === "delivery") {
+            if (identificacao) {
+                return saudacao + "Há um entregador (*" + identificacao + "*) na portaria para o *" + referencia + "*. Você pode vir receber?";
+            }
+            return saudacao + "Há um entregador de delivery na portaria aguardando para o *" + referencia + "*. Você pode vir receber?";
+        }
+        return "Olá, " + nome + "! Aqui é da Portaria do condomínio (ref. " + referencia + ").";
+    }
+
+    function botaoWhatsapp(tipo, rotulo, classe, morador, unidade) {
+        const link = document.createElement("a");
+        link.className = classe;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = rotulo;
+        link.dataset.waTipo = tipo;
+        link.dataset.waNome = morador.nome || "Morador";
+        link.dataset.waBloco = unidade.bloco;
+        link.dataset.waApto = unidade.apartamento;
+        link.dataset.waSetor = unidade.eh_setor_interno ? "1" : "0";
+        link.dataset.waTelefone = morador.telefone;
+        link.href = "#";
+        return link;
+    }
+
+    function aplicarLinksWhatsapp() {
+        resultado.querySelectorAll("[data-wa-tipo]").forEach((link) => {
+            const texto = mensagemWhatsapp(
+                link.dataset.waTipo,
+                link.dataset.waNome,
+                link.dataset.waBloco,
+                link.dataset.waApto,
+                link.dataset.waSetor === "1"
+            );
+            link.href = "https://wa.me/" + link.dataset.waTelefone + "?text=" + encodeURIComponent(texto);
+        });
+    }
+
+    function desenharMorador(morador, unidade) {
+        const item = document.createElement("div");
+        item.className = "border rounded p-3";
+
+        const topo = document.createElement("div");
+        topo.className = "d-flex flex-wrap align-items-center gap-2 mb-2";
+        if (morador.foto_url) {
+            const foto = document.createElement("img");
+            foto.src = morador.foto_url;
+            foto.alt = "";
+            foto.width = 48;
+            foto.height = 48;
+            foto.className = "rounded-circle flex-shrink-0";
+            foto.style.objectFit = "cover";
+            topo.appendChild(foto);
+        }
+        const nome = document.createElement("span");
+        nome.className = "fs-5 fw-semibold";
+        nome.textContent = morador.nome || "Morador";
+        topo.appendChild(nome);
+        if (morador.responsavel) {
+            topo.appendChild(badge("Responsável", "text-bg-primary"));
+        }
+        if (morador.vinculo) {
+            topo.appendChild(badge(morador.vinculo, "text-bg-light border"));
+        }
+        item.appendChild(topo);
+
+        if (morador.parentesco && morador.parentesco !== morador.vinculo) {
+            const parentesco = document.createElement("p");
+            parentesco.className = "text-muted mb-2";
+            parentesco.textContent = morador.parentesco;
+            item.appendChild(parentesco);
+        }
+
+        if (morador.autoriza_interfone && morador.telefone) {
+            item.appendChild(badge("Interfone autorizado", "bg-success-subtle text-success border border-success-subtle"));
+            const numero = document.createElement("p");
+            numero.className = "fs-4 fw-semibold mb-2 mt-2";
+            numero.textContent = morador.telefone_formatado || morador.telefone;
+            item.appendChild(numero);
+            const acoes = document.createElement("div");
+            acoes.className = "d-flex flex-wrap gap-2";
+            acoes.appendChild(botaoWhatsapp("visitante", "🧑 Visitante / Prestador", "btn btn-primary btn-lg", morador, unidade));
+            acoes.appendChild(botaoWhatsapp("delivery", "🛵 Delivery / Entrega", "btn btn-warning btn-lg", morador, unidade));
+            acoes.appendChild(botaoWhatsapp("chat", "💬 Abrir Chat / Ligar no Whats", "btn btn-outline-secondary btn-lg", morador, unidade));
+            const ligar = document.createElement("a");
+            ligar.className = "btn btn-outline-primary btn-lg";
+            ligar.href = "tel:+" + morador.telefone;
+            ligar.textContent = "📞 Ligar";
+            acoes.appendChild(ligar);
+            item.appendChild(acoes);
+        } else if (morador.autoriza_interfone) {
+            item.appendChild(badge("Autorizado, sem telefone cadastrado", "bg-warning-subtle text-warning-emphasis border"));
+        } else {
+            item.appendChild(badge("Sem autorização de interfone", "text-bg-secondary"));
+            const oculto = document.createElement("p");
+            oculto.className = "small text-muted mb-0 mt-2";
+            oculto.textContent = "Telefone oculto por falta de consentimento LGPD.";
+            item.appendChild(oculto);
+        }
+        return item;
+    }
+
+    function desenharUnidade(unidade) {
+        const card = document.createElement("article");
+        card.className = "card shadow-sm";
+        const header = document.createElement("div");
+        header.className = "card-header bg-white py-3";
+        const titulo = document.createElement("h2");
+        titulo.className = "h4 mb-0";
+        titulo.textContent = unidade.eh_setor_interno
+            ? "🏢 Setor: " + unidade.apartamento
+            : "Bloco " + unidade.bloco + " — Apartamento " + unidade.apartamento;
+        header.appendChild(titulo);
+        card.appendChild(header);
+
+        const body = document.createElement("div");
+        body.className = "card-body d-flex flex-column gap-3";
+        const autorizacoes = desenharAutorizacoes(unidade);
+        if (autorizacoes) {
+            body.appendChild(autorizacoes);
+        }
+        const lista = document.createElement("h3");
+        lista.className = "h6 text-uppercase text-muted mb-0";
+        lista.textContent = unidade.eh_setor_interno ? "Contatos" : "Moradores residentes";
+        body.appendChild(lista);
+        if (!unidade.moradores || !unidade.moradores.length) {
+            body.appendChild(mensagem(
+                unidade.eh_setor_interno
+                    ? "Nenhum contato cadastrado neste setor."
+                    : "Nenhum morador residente encontrado."
+            ));
+        } else {
+            unidade.moradores.forEach((morador) => body.appendChild(desenharMorador(morador, unidade)));
+        }
+        card.appendChild(body);
+        return card;
+    }
+
+    function desenharAutorizacoes(unidade) {
+        const itens = unidade.autorizacoes_ativas || [];
+        if (!itens.length) {
+            return null;
+        }
+        const alerta = document.createElement("div");
+        alerta.className = "alert alert-success mb-0";
+        alerta.setAttribute("role", "status");
+        const titulo = document.createElement("div");
+        titulo.className = "fw-semibold mb-2";
+        titulo.textContent = "✅ Autorizações liberadas para esta unidade hoje:";
+        alerta.appendChild(titulo);
+        const lista = document.createElement("ul");
+        lista.className = "mb-0";
+        itens.forEach((item) => {
+            const linha = document.createElement("li");
+            const partes = [item.nome || "Visitante"];
+            if (item.tipo) {
+                partes.push(item.tipo);
+            }
+            if (item.documento) {
+                partes.push("Doc. " + item.documento);
+            }
+            if (item.placa) {
+                partes.push("Placa " + item.placa);
+            }
+            if (item.validade) {
+                partes.push("Validade " + item.validade);
+            }
+            linha.textContent = partes.join(" — ");
+            lista.appendChild(linha);
+        });
+        alerta.appendChild(lista);
+        return alerta;
+    }
+
+    function desenhar(dados) {
+        resultado.replaceChildren();
+        const unidades = (dados && dados.unidades) || [];
+        if (!unidades.length) {
+            resultado.appendChild(mensagem("Nenhuma unidade encontrada."));
+            return;
+        }
+        unidades.forEach((unidade) => resultado.appendChild(desenharUnidade(unidade)));
+        aplicarLinksWhatsapp();
+        if (dados.truncado) {
+            resultado.appendChild(mensagem("Mostrando os primeiros resultados. Refine a busca."));
+        }
+    }
+
+    function podeBuscar() {
+        const bloco = blocoSelect.value;
+        const apto = aptoSelect.value;
+        const q = buscaInput.value.trim();
+        if (bloco && apto) {
+            return true;
+        }
+        return q.length >= 2;
+    }
+
+    function agendarBusca() {
+        window.clearTimeout(buscaTimer);
+        buscaTimer = window.setTimeout(executarBusca, 250);
+    }
+
+    function executarBusca() {
+        if (!podeBuscar()) {
+            resultado.replaceChildren();
+            resultado.appendChild(mensagem("Selecione o bloco e o apartamento ou digite a busca."));
+            return;
+        }
+        const params = new URLSearchParams();
+        if (blocoSelect.value) {
+            params.set("bloco", blocoSelect.value);
+        }
+        if (aptoSelect.value) {
+            params.set("apartamento", aptoSelect.value);
+        }
+        const q = buscaInput.value.trim();
+        if (q) {
+            params.set("q", q);
+        }
+        const pedido = ++buscaAtual;
+        fetch(URL_BUSCA + "?" + params.toString(), { headers: { Accept: "application/json" } })
+            .then((resp) => {
+                if (!resp.ok) {
+                    throw new Error("busca");
+                }
+                return resp.json();
+            })
+            .then((dados) => {
+                if (pedido !== buscaAtual) {
+                    return;
+                }
+                desenhar(dados);
+            })
+            .catch(() => {
+                if (pedido !== buscaAtual) {
+                    return;
+                }
+                resultado.replaceChildren();
+                resultado.appendChild(mensagem("Não foi possível consultar os contatos agora."));
+            });
+    }
+
+    popularBlocos();
+    blocoSelect.addEventListener("change", () => {
+        popularApartamentos(blocoSelect.value);
+        executarBusca();
+    });
+    aptoSelect.addEventListener("change", executarBusca);
+    buscaInput.addEventListener("input", agendarBusca);
+    identificacaoInput.addEventListener("input", aplicarLinksWhatsapp);
+    document.getElementById("atalho-administracao").addEventListener("click", () => {
+        blocoSelect.value = BLOCO_SETORES;
+        popularApartamentos(BLOCO_SETORES);
+        aptoSelect.value = SETOR_ADMINISTRACAO;
+        buscaInput.value = "";
+        executarBusca();
+    });
+    resultado.appendChild(mensagem("Selecione o bloco e o apartamento ou digite a busca."));
+</script>
+{% endif %}
+{% endblock %}

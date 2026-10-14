@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Lançamentos{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">⇄ Lançamentos</h1>
+        <p class="text-muted small mb-0">Livro-caixa da competência: boletos, despesas, repasses e movimentos avulsos.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalAvulso" {% if fechada %}disabled{% endif %}>+ Novo Lançamento Avulso (Rendimento / Tarifa / Ajuste)</button>
+        <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#modalTransferencia" {% if fechada %}disabled{% endif %}>🔄 Transferir entre Fundos</button>
+    </div>
+</div>
+
+{% if fechada %}
+<div class="alert alert-warning">🔒 A competência {{ competencia }} está fechada para prestação de contas. Para alterar lançamentos deste período, reabra o mês em Fechamento do Mês.</div>
+{% endif %}
+
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_financeiro_lancamentos', competencia=competencia_anterior, conta=conta_id, fundo=fundo_id, tipo=tipo, bloco=bloco) }}">&lt;</a>
+    <span class="fw-semibold">{{ competencia_rotulo }}</span>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_financeiro_lancamentos', competencia=competencia_proxima, conta=conta_id, fundo=fundo_id, tipo=tipo, bloco=bloco) }}">&gt;</a>
+</div>
+
+<form class="row g-2 align-items-end mb-3" method="get" action="{{ url_for('admin_financeiro_lancamentos') }}">
+    <input type="hidden" name="competencia" value="{{ competencia }}">
+    <div class="col-md-3">
+        <label class="form-label" for="conta">Conta bancária</label>
+        <select class="form-select" id="conta" name="conta" onchange="this.form.submit()">
+            <option value="">Todas</option>
+            {% for conta in contas %}
+            <option value="{{ conta.id }}" {% if conta_id == conta.id %}selected{% endif %}>{{ conta.nome_banco }} {{ conta.codigo_banco }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-3">
+        <label class="form-label" for="fundo">Fundo</label>
+        <select class="form-select" id="fundo" name="fundo" onchange="this.form.submit()">
+            <option value="">Todos</option>
+            {% for fundo in fundos %}
+            <option value="{{ fundo.id }}" {% if fundo_id == fundo.id %}selected{% endif %}>{{ fundo.nome }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-3">
+        <label class="form-label" for="tipo">Tipo</label>
+        <select class="form-select" id="tipo" name="tipo" onchange="this.form.submit()">
+            <option value="todos" {% if tipo == 'todos' %}selected{% endif %}>Todos</option>
+            <option value="entradas" {% if tipo == 'entradas' %}selected{% endif %}>Entradas</option>
+            <option value="saidas" {% if tipo == 'saidas' %}selected{% endif %}>Saídas</option>
+            <option value="transferencias" {% if tipo == 'transferencias' %}selected{% endif %}>Transferências</option>
+        </select>
+    </div>
+    <div class="col-md-3">
+        <label class="form-label" for="bloco">Bloco</label>
+        <select class="form-select" id="bloco" name="bloco" onchange="this.form.submit()">
+            <option value="">Todos</option>
+            <option value="GERAL" {% if bloco == 'GERAL' %}selected{% endif %}>Administração geral</option>
+            {% for item in blocos %}
+            <option value="{{ item }}" {% if bloco == item %}selected{% endif %}>Bloco {{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</form>
+
+<div class="table-responsive">
+    <table class="table table-sm align-middle bg-white">
+        <thead>
+            <tr>
+                <th>Data</th>
+                <th>Descrição</th>
+                <th>Movimento</th>
+                <th>Conta</th>
+                <th>Fundo</th>
+                <th>Bloco</th>
+                <th class="text-end">Entrada</th>
+                <th class="text-end">Saída</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for linha in linhas %}
+            <tr>
+                <td>{{ linha.data.strftime('%d/%m/%Y') if linha.data else '' }}</td>
+                <td>{{ linha.descricao }}</td>
+                <td>
+                    {% if linha.cor == 'info' %}
+                    <span class="badge" style="background:#6f42c1">{{ linha.badge }}</span>
+                    {% elif linha.cor == 'warning' %}
+                    <span class="badge" style="background:#fd7e14">{{ linha.badge }}</span>
+                    {% else %}
+                    <span class="badge text-bg-{{ linha.cor }}">{{ linha.badge }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ linha.conta }}</td>
+                <td>{{ linha.fundo }}</td>
+                <td>{{ linha.bloco }}</td>
+                <td class="text-end">{% if linha.entrada %}{{ linha.entrada|reais }}{% elif linha.transferencia %}{{ linha.transferencia|reais }}{% endif %}</td>
+                <td class="text-end">{% if linha.saida %}{{ linha.saida|reais }}{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="text-muted">Nenhum movimento nesta competência com os filtros atuais.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="modalAvulso" tabindex="-1" aria-labelledby="tituloAvulso" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_lancamento_avulso') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloAvulso">Novo lançamento avulso</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="competencia" value="{{ competencia }}">
+                <label class="form-label" for="tipoAvulso">Tipo</label>
+                <select class="form-select mb-2" id="tipoAvulso" name="tipo">
+                    <option value="ENTRADA">Entrada (rendimento, ajuste a maior)</option>
+                    <option value="SAIDA">Saída (tarifa, ajuste a menor)</option>
+                </select>
+                <label class="form-label" for="descAvulso">Descrição</label>
+                <input class="form-control mb-2" id="descAvulso" name="descricao" maxlength="200" required placeholder="Rendimento Aplicação Itaú">
+                <label class="form-label" for="dataAvulso">Data</label>
+                <input class="form-control datepicker mb-2" id="dataAvulso" name="data_lancamento" type="text" required>
+                <label class="form-label" for="valorAvulso">Valor (R$)</label>
+                <input class="form-control mb-2" id="valorAvulso" name="valor" inputmode="decimal" required>
+                <label class="form-label" for="contaAvulso">Conta bancária</label>
+                <select class="form-select mb-2" id="contaAvulso" name="conta_bancaria_id" required>
+                    {% for conta in contas %}<option value="{{ conta.id }}">{{ conta.nome_banco }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="fundoAvulso">Fundo</label>
+                <select class="form-select mb-2" id="fundoAvulso" name="fundo_id" required>
+                    {% for fundo in fundos %}<option value="{{ fundo.id }}">{{ fundo.nome }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="planoAvulso">Plano de contas</label>
+                <select class="form-select mb-2" id="planoAvulso" name="plano_conta_id">
+                    <option value="">Não definido</option>
+                    {% for plano in planos %}<option value="{{ plano.id }}">{{ plano.codigo }} — {{ plano.nome }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="blocoAvulso">Bloco</label>
+                <select class="form-select" id="blocoAvulso" name="bloco_escopo">
+                    <option value="GERAL">Administração geral</option>
+                    {% for item in blocos %}<option value="{{ item }}">Bloco {{ item }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Registrar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalTransferencia" tabindex="-1" aria-labelledby="tituloTransferencia" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_lancamento_transferir') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloTransferencia">Transferir entre fundos</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted">Move o saldo contábil de um fundo para outro. O saldo da conta corrente não muda.</p>
+                <input type="hidden" name="competencia" value="{{ competencia }}">
+                <label class="form-label" for="descTransf">Descrição</label>
+                <input class="form-control mb-2" id="descTransf" name="descricao" maxlength="200" required placeholder="Aporte para Fundo de Reserva">
+                <label class="form-label" for="dataTransf">Data</label>
+                <input class="form-control datepicker mb-2" id="dataTransf" name="data_lancamento" type="text" required>
+                <label class="form-label" for="valorTransf">Valor (R$)</label>
+                <input class="form-control mb-2" id="valorTransf" name="valor" inputmode="decimal" required>
+                <label class="form-label" for="contaTransf">Conta de referência</label>
+                <select class="form-select mb-2" id="contaTransf" name="conta_bancaria_id" required>
+                    {% for conta in contas %}<option value="{{ conta.id }}">{{ conta.nome_banco }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="fundoOrigem">Fundo de origem</label>
+                <select class="form-select mb-2" id="fundoOrigem" name="fundo_id" required>
+                    {% for fundo in fundos %}<option value="{{ fundo.id }}">{{ fundo.nome }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="fundoDestino">Fundo de destino</label>
+                <select class="form-select mb-2" id="fundoDestino" name="fundo_destino_id" required>
+                    {% for fundo in fundos %}<option value="{{ fundo.id }}">{{ fundo.nome }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="blocoTransf">Bloco</label>
+                <select class="form-select" id="blocoTransf" name="bloco_escopo">
+                    <option value="GERAL">Administração geral</option>
+                    {% for item in blocos %}<option value="{{ item }}">Bloco {{ item }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Transferir</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

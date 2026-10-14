@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}Acordos — Administração{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <h1 class="h4 mb-1">Acordos de inadimplência</h1>
+    <p class="text-muted mb-0">O valor em aberto é atualizado com {{ condominio_fin.fin_indice_correcao or 'UFIR-RJ' }}, multa e juros. As cobranças escolhidas são canceladas e viram parcelas novas.</p>
+</div>
+
+<form class="row g-2 align-items-end mb-4" method="get" action="{{ url_for('admin_financeiro_acordos') }}">
+    <div class="col-sm-3">
+        <label class="form-label" for="acordoBloco">Bloco</label>
+        <select class="form-select" id="acordoBloco" name="bloco" required>
+            {% for item in blocos %}
+            <option value="{{ item }}" {% if bloco == item %}selected{% endif %}>Bloco {{ item }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-sm-3">
+        <label class="form-label" for="acordoApto">Apartamento</label>
+        <input class="form-control" id="acordoApto" name="apartamento" value="{{ apartamento }}" required>
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-outline-primary">Buscar títulos</button>
+    </div>
+</form>
+
+{% if unidade %}
+<form method="post" action="{{ url_for('admin_financeiro_acordo_criar') }}">
+    <input type="hidden" name="bloco" value="{{ unidade.bloco }}">
+    <input type="hidden" name="apartamento" value="{{ unidade.apartamento }}">
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h6">Bloco {{ unidade.bloco }} · Apto {{ unidade.apartamento }}</h2>
+            {% if abertas %}
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Título</th>
+                            <th>Vencimento</th>
+                            <th class="text-end">Principal</th>
+                            <th class="text-end">Correção</th>
+                            <th class="text-end">Multa</th>
+                            <th class="text-end">Juros</th>
+                            <th class="text-end">Atualizado</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for linha in abertas %}
+                        {% set c = linha.cobranca %}
+                        <tr>
+                            <td>
+                                <input class="form-check-input acordo-titulo" type="checkbox" name="cobranca_id" value="{{ c.id }}" checked
+                                       data-principal="{{ c.valor_original }}"
+                                       data-correcao="{{ linha.encargos.correcao }}"
+                                       data-multa="{{ linha.encargos.multa }}"
+                                       data-juros="{{ linha.encargos.juros }}"
+                                       data-total="{{ linha.encargos.total_atualizado }}">
+                            </td>
+                            <td>#{{ c.id }} {{ c.titulo }}</td>
+                            <td>{{ c.vencimento.strftime('%d/%m/%Y') }}</td>
+                            <td class="text-end">{{ c.valor_original|reais }}</td>
+                            <td class="text-end">{{ linha.encargos.correcao|reais }}</td>
+                            <td class="text-end">{{ linha.encargos.multa|reais }}</td>
+                            <td class="text-end">{{ linha.encargos.juros|reais }}</td>
+                            <td class="text-end">{{ linha.encargos.total_atualizado|reais }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <label class="form-label" for="valorJudiciais">Custas / honorários</label>
+                    <input class="form-control" id="valorJudiciais" name="valor_judiciais" inputmode="decimal" value="0,00">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="valorDesconto">Desconto</label>
+                    <input class="form-control" id="valorDesconto" name="valor_desconto" inputmode="decimal" value="0,00">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="qtdParcelas">Parcelas</label>
+                    <input class="form-control" id="qtdParcelas" name="qtd_parcelas" type="number" min="1" max="36" value="1" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="primeiroVencimento">1º vencimento</label>
+                    <input class="form-control datepicker" id="primeiroVencimento" name="primeiro_vencimento" type="text" required>
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="obsAcordo">Observações</label>
+                    <textarea class="form-control" id="obsAcordo" name="observacoes" rows="2"></textarea>
+                </div>
+            </div>
+            <p class="mt-3 mb-0">Total selecionado: <strong id="totalAcordo">R$ 0,00</strong></p>
+            {% else %}
+            <p class="text-muted mb-0">Esta unidade não tem cobrança em aberto.</p>
+            {% endif %}
+        </div>
+        {% if abertas %}
+        <div class="card-footer bg-white">
+            <button type="submit" class="btn btn-primary" onclick="return confirm('Cancelar os títulos marcados e gerar as parcelas do acordo?');">Confirmar acordo</button>
+        </div>
+        {% endif %}
+    </div>
+</form>
+{% endif %}
+
+<h2 class="h6">Acordos recentes</h2>
+<div class="table-responsive">
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Unidade</th>
+                <th>Parcelas</th>
+                <th>1º vencimento</th>
+                <th class="text-end">Total</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for acordo in acordos %}
+            <tr>
+                <td>{{ acordo.id }}</td>
+                <td>{% if acordo.unidade %}Bloco {{ acordo.unidade.bloco }} · {{ acordo.unidade.apartamento }}{% endif %}</td>
+                <td>{{ acordo.qtd_parcelas }}</td>
+                <td>{{ acordo.primeiro_vencimento.strftime('%d/%m/%Y') }}</td>
+                <td class="text-end">{{ acordo.valor_total_acordo|reais }}</td>
+                <td>{{ acordo.status }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="text-muted">Nenhum acordo neste condomínio.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function reais(valor) {
+    return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function atualizarTotal() {
+    var soma = 0;
+    document.querySelectorAll(".acordo-titulo:checked").forEach(function (campo) {
+        soma += parseFloat(campo.dataset.total || "0");
+    });
+    var destino = document.getElementById("totalAcordo");
+    if (destino) {
+        destino.textContent = reais(soma);
+    }
+}
+document.querySelectorAll(".acordo-titulo").forEach(function (campo) {
+    campo.addEventListener("change", atualizarTotal);
+});
+atualizarTotal();
+document.querySelectorAll(".datepicker").forEach(function (campo) {
+    if (campo._flatpickr) {
+        return;
+    }
+    flatpickr(campo, {
+        dateFormat: "Y-m-d",
+        altInput: true,
+        altFormat: "d/m/Y",
+        locale: "pt",
+        allowInput: true
+    });
+});
+</script>
+{% endblock %}

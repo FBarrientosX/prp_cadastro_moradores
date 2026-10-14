@@ -1,0 +1,58 @@
+{% set atual = equipamento if equipamento is defined else none %}
+{% set sufixo = atual.id if atual else 'novo' %}
+<div class="mb-3">
+    <label class="form-label" for="equip-nome-{{ sufixo }}">Nome</label>
+    <input type="text" class="form-control" id="equip-nome-{{ sufixo }}" name="nome" required maxlength="120"
+           value="{{ atual.nome if atual else '' }}"
+           placeholder="Portaria 1 - Facial Pedestre">
+</div>
+<div class="mb-3">
+    <label class="form-label" for="equip-fabricante-{{ sufixo }}">Fabricante</label>
+    <select class="form-select" id="equip-fabricante-{{ sufixo }}" name="fabricante" required>
+        <option value="control_id" {% if not atual or atual.fabricante == 'control_id' %}selected{% endif %}>Control iD</option>
+        <option value="intelbras" {% if atual and atual.fabricante == 'intelbras' %}selected{% endif %}>Intelbras</option>
+    </select>
+</div>
+<div class="row g-2 mb-3">
+    <div class="col-8">
+        <label class="form-label" for="equip-ip-{{ sufixo }}">IP local</label>
+        <input type="text" class="form-control" id="equip-ip-{{ sufixo }}" name="ip_local" required
+               value="{{ atual.ip_local if atual else '' }}" placeholder="192.168.1.201" inputmode="decimal">
+    </div>
+    <div class="col-4">
+        <label class="form-label" for="equip-porta-{{ sufixo }}">Porta</label>
+        <input type="number" class="form-control" id="equip-porta-{{ sufixo }}" name="porta" min="1" max="65535"
+               value="{{ atual.porta if atual else 80 }}">
+    </div>
+</div>
+<div class="row g-2 mb-3">
+    <div class="col-6">
+        <label class="form-label" for="equip-usuario-{{ sufixo }}">Login do equipamento</label>
+        <input type="text" class="form-control" id="equip-usuario-{{ sufixo }}" name="usuario_equipamento"
+               maxlength="80" value="{{ atual.usuario_equipamento if atual else 'admin' }}" autocomplete="off">
+    </div>
+    <div class="col-6">
+        <label class="form-label" for="equip-senha-{{ sufixo }}">Senha do equipamento</label>
+        <input type="password" class="form-control" id="equip-senha-{{ sufixo }}" name="senha_equipamento"
+               maxlength="120" autocomplete="new-password"
+               placeholder="{% if atual %}Em branco mantém a atual{% else %}admin{% endif %}">
+    </div>
+</div>
+<div class="mb-3">
+    <label class="form-label" for="equip-escopo-{{ sufixo }}">Escopo</label>
+    <select class="form-select" id="equip-escopo-{{ sufixo }}" name="bloco_escopo">
+        <option value="" {% if not atual or not atual.bloco_escopo %}selected{% endif %}>
+            Portaria Geral (Todos os Blocos)
+        </option>
+        {% for bloco in blocos %}
+        <option value="{{ bloco }}" {% if atual and atual.bloco_escopo == bloco %}selected{% endif %}>
+            Exclusivo do Bloco {{ bloco }}
+        </option>
+        {% endfor %}
+    </select>
+</div>
+<div class="form-check">
+    <input class="form-check-input" type="checkbox" id="equip-ativo-{{ sufixo }}" name="ativo"
+           {% if not atual or atual.ativo %}checked{% endif %}>
+    <label class="form-check-label" for="equip-ativo-{{ sufixo }}">Equipamento ativo</label>
+</div>

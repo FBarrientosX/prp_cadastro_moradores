@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Leitura de medidores{% endblock %}
+{% block content %}
+<h1 class="h4 mb-3">⏱️ Enviar leitura de medidor</h1>
+{% if not abertos %}
+<div class="alert alert-info">Não há leitura em aberto para a sua unidade.</div>
+{% endif %}
+{% for item in abertos %}
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-body">
+        <h2 class="h6">{{ item.ciclo.medidor.titulo }}</h2>
+        <p class="small text-muted mb-2">{{ item.ciclo.competencia }} · leitura anterior {{ '%.3f'|format(item.leitura_anterior or 0)|replace('.', ',') }} {{ item.ciclo.medidor.unidade_medida }}</p>
+        {% if item.leitura_atual is not none %}
+        <p class="mb-2">Último envio: {{ '%.3f'|format(item.leitura_atual)|replace('.', ',') }} · consumo {{ '%.3f'|format(item.consumo_final or 0)|replace('.', ',') }} · prévia {{ item.valor_calculado|reais }}</p>
+        {% endif %}
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('morador_medidores_enviar') }}" class="row g-2 align-items-end" data-anterior="{{ item.leitura_anterior or 0 }}">
+            <input type="hidden" name="item_id" value="{{ item.id }}">
+            <div class="col-md-3">
+                <label class="form-label" for="atual{{ item.id }}">Leitura atual</label>
+                <input class="form-control" id="atual{{ item.id }}" name="leitura_atual" inputmode="decimal" required value="{% if item.leitura_atual is not none %}{{ '%.3f'|format(item.leitura_atual) }}{% endif %}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="foto{{ item.id }}">Foto do relógio</label>
+                <input class="form-control" id="foto{{ item.id }}" type="file" name="foto_relogio" accept="image/jpeg,image/png,image/webp">
+            </div>
+            <div class="col-md-3">
+                <input type="hidden" name="reiniciada" value="0">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="reiniciada" value="1" id="reinicio{{ item.id }}" {% if item.reiniciada %}checked{% endif %}>
+                    <label class="form-check-label" for="reinicio{{ item.id }}">Relógio trocado ou zerado</label>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-primary" type="submit">Enviar</button>
+            </div>
+        </form>
+        <p class="small mt-2 mb-0" id="previa{{ item.id }}"></p>
+        {% if item.foto_relogio %}
+        <a class="small" href="{{ url_for('morador_medidores_foto', item_id=item.id) }}" target="_blank">Ver foto enviada</a>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll("form[action$='/medidores/enviar']").forEach(function (form) {
+    var atual = form.querySelector("[name=leitura_atual]");
+    var previa = form.parentElement.querySelector("p[id^='previa']");
+    var marco = parseFloat(form.getAttribute("data-anterior") || "0");
+    form.addEventListener("input", function () {
+        var numero = parseFloat((atual.value || "").replace(",", "."));
+        if (!atual.value || isNaN(numero)) {
+            previa.textContent = "";
+            return;
+        }
+        var reinicio = form.querySelector("[name=reiniciada][type=checkbox]").checked;
+        var consumo = reinicio ? Math.max(0, numero) : Math.max(0, numero - marco);
+        previa.textContent = "Prévia do consumo: " + consumo.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+    });
+});
+</script>
+{% endblock %}

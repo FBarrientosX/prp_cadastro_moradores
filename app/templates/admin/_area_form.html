@@ -1,0 +1,48 @@
+{% if area is defined and area %}
+<input type="hidden" name="area_id" value="{{ area.id }}">
+{% endif %}
+<div class="row g-3">
+    <div class="col-md-6">
+        <label class="form-label" for="nome-{{ area.id if area is defined and area else 'nova' }}">Nome</label>
+        <input type="text" class="form-control" id="nome-{{ area.id if area is defined and area else 'nova' }}" name="nome" maxlength="150" required value="{{ area.nome if area is defined and area else '' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label" for="bloco-{{ area.id if area is defined and area else 'nova' }}">Bloco vinculado</label>
+        <select class="form-select" id="bloco-{{ area.id if area is defined and area else 'nova' }}" name="bloco_vinculado" required>
+            {% for bloco in blocos %}
+            <option value="{{ bloco }}" {% if area is defined and area and area.bloco_vinculado == bloco %}selected{% elif not (area is defined and area) and bloco == geral %}selected{% endif %}>
+                {{ 'Geral' if bloco == geral else 'Bloco ' ~ bloco }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label" for="capacidade-{{ area.id if area is defined and area else 'nova' }}">Capacidade máxima</label>
+        <input type="number" class="form-control" id="capacidade-{{ area.id if area is defined and area else 'nova' }}" name="capacidade" min="0" max="9999" required value="{{ area.capacidade if area is defined and area else 0 }}">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label" for="taxa-{{ area.id if area is defined and area else 'nova' }}">Taxa de uso (R$)</label>
+        <input type="text" class="form-control" id="taxa-{{ area.id if area is defined and area else 'nova' }}" name="taxa_uso_valor" inputmode="decimal" placeholder="0,00" value="{% if area is defined and area %}{{ '%.2f'|format(area.taxa_uso_valor)|replace('.', ',') }}{% endif %}">
+    </div>
+    <div class="col-md-4 d-flex align-items-end">
+        <div class="form-check mb-2">
+            <input type="hidden" name="pagamento_antecipado_obrigatorio" value="0">
+            <input class="form-check-input" type="checkbox" id="antecipado-{{ area.id if area is defined and area else 'nova' }}" name="pagamento_antecipado_obrigatorio" value="1" {% if area is defined and area and area.pagamento_antecipado_obrigatorio %}checked{% endif %}>
+            <label class="form-check-label" for="antecipado-{{ area.id if area is defined and area else 'nova' }}">Exigir pagamento antecipado para confirmar?</label>
+        </div>
+    </div>
+    {% if area is defined and area %}
+    <div class="col-12">
+        <div class="form-check">
+            <input type="hidden" name="ativa" value="0">
+            <input class="form-check-input" type="checkbox" id="ativa-{{ area.id }}" name="ativa" value="1" {% if area.ativa %}checked{% endif %}>
+            <label class="form-check-label" for="ativa-{{ area.id }}">Área ativa para reservas</label>
+        </div>
+    </div>
+    {% endif %}
+    <div class="col-12" data-quill-editor data-placeholder="Regras de uso do espaço">
+        <label class="form-label">Regras de uso</label>
+        <input type="hidden" name="regras_uso" value="{{ area.regras_uso if area is defined and area and area.regras_uso else '' }}">
+        <div class="quill-editor"></div>
+    </div>
+</div>

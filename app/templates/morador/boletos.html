@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Boletos / 2ª via{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <h1 class="h4 mb-1">Boletos / 2ª via</h1>
+    <p class="text-muted mb-0">Cobranças desta unidade. A linha digitável e o boleto completo ficam disponíveis enquanto o título não estiver cancelado.</p>
+</div>
+
+{% if not linhas %}
+<div class="alert alert-light border">Nenhum boleto em aberto ou pago nesta unidade.</div>
+{% endif %}
+
+{% for linha in linhas %}
+{% set c = linha.cobranca %}
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between gap-2">
+            <div>
+                <div class="fw-semibold">{{ c.titulo }}</div>
+                <div class="small text-muted">Competência {{ c.competencia }} · Vencimento {{ c.vencimento.strftime('%d/%m/%Y') }}</div>
+            </div>
+            <div class="text-end">
+                <div class="fw-semibold">{{ linha.encargos.total_atualizado|reais }}</div>
+                <span class="badge text-bg-secondary">{{ c.status }}</span>
+            </div>
+        </div>
+        <table class="table table-sm mt-3 mb-2">
+            <thead>
+                <tr>
+                    <th>Descrição</th>
+                    <th>Plano</th>
+                    <th>Fundo</th>
+                    <th class="text-end">Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in linha.composicao %}
+                <tr>
+                    <td>{{ item.descricao }}</td>
+                    <td>{{ item.plano }}</td>
+                    <td>{{ item.fundo }}</td>
+                    <td class="text-end">{{ item.valor|reais }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if linha.boleto %}
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <code class="small" id="linha-{{ c.id }}">{{ linha.boleto.linha_digitavel }}</code>
+            <button class="btn btn-sm btn-outline-primary copiar-linha" type="button" data-alvo="linha-{{ c.id }}">Copiar linha digitável</button>
+        </div>
+        {% endif %}
+        <div class="d-flex flex-wrap gap-2 mt-3">
+            <a class="btn btn-sm btn-outline-dark" href="{{ url_for('financeiro_boleto', cobranca_id=c.id) }}" target="_blank" rel="noopener">Abrir boleto</a>
+            {% if c.status == 'Paga' %}
+            <a class="btn btn-sm btn-success" href="{{ url_for('financeiro_recibo', cobranca_id=c.id) }}" target="_blank" rel="noopener">Recibo</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll(".copiar-linha").forEach(function (botao) {
+    botao.addEventListener("click", function () {
+        var alvo = document.getElementById(botao.dataset.alvo);
+        if (!alvo) {
+            return;
+        }
+        navigator.clipboard.writeText(alvo.textContent.trim()).then(function () {
+            botao.textContent = "Linha copiada";
+        });
+    });
+});
+</script>
+{% endblock %}

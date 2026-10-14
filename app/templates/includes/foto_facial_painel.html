@@ -1,0 +1,29 @@
+<div class="foto-facial-painel border-top px-3 py-3 d-none"
+     {% if pessoa and pessoa.id %}data-upload-url="{{ url_for('atualizar_foto_facial', pessoa_id=pessoa.id) }}"{% endif %}>
+    <div class="fw-semibold">Foto para Reconhecimento Facial (Portaria)</div>
+    <p class="small text-muted mb-2">Foto de frente, boa iluminação, sem óculos escuros ou boné.</p>
+    <div class="d-flex flex-wrap gap-2 mb-2">
+        <button type="button" class="btn btn-sm btn-primary js-selfie">📷 Tirar Selfie com a Câmera</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary js-escolher-arquivo">📁 Escolher Arquivo de Foto</button>
+    </div>
+    <div class="js-camera d-none">
+        <div class="foto-facial-visor">
+            <video class="js-video" autoplay playsinline muted></video>
+            <div class="foto-facial-guia"></div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mt-2">
+            <button type="button" class="btn btn-sm btn-success js-capturar">Capturar Foto</button>
+            <button type="button" class="btn btn-sm btn-link js-fechar-camera">Fechar câmera</button>
+        </div>
+    </div>
+    {% if pessoa and foto_facial_url(pessoa) %}
+    <img class="js-preview-foto rounded mt-2" alt="Prévia da foto facial"
+         width="160" height="160" style="object-fit: cover;"
+         src="{{ foto_facial_url(pessoa) }}">
+    {% else %}
+    <img class="js-preview-foto d-none rounded mt-2" alt="Prévia da foto facial" width="160" height="160">
+    {% endif %}
+    <input type="hidden" name="morador_{{ i }}_foto_base64" class="js-foto-base64" value="">
+    <input type="file" name="morador_{{ i }}_foto" class="d-none js-arquivo-foto" accept="image/*" capture="user">
+    <p class="small js-foto-status text-muted mb-0 mt-2"></p>
+</div>

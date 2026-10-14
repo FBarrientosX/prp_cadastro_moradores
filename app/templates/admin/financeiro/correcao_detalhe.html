@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}{{ catalogo.nome_completo }} — Correção Monetária{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+        <a class="btn btn-sm btn-outline-secondary mb-2" href="{{ url_for('admin_financeiro_correcao') }}">← Voltar aos Índices</a>
+        <h1 class="h4 mb-1">
+            {{ catalogo.nome_completo }}
+            {% if catalogo.url_fonte_oficial %}
+            <a class="small" href="{{ catalogo.url_fonte_oficial }}" target="_blank" rel="noopener">fonte oficial</a>
+            {% endif %}
+        </h1>
+        <p class="text-muted mb-0">{{ catalogo.orgao }} · {{ formula }}{% if catalogo.codigo_sgs_bacen %} · SGS {{ catalogo.codigo_sgs_bacen }}{% endif %}</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        {% if catalogo.codigo_sgs_bacen %}
+        <form method="post" action="{{ url_for('admin_financeiro_correcao_bacen', indice_id=catalogo.id) }}">
+            <button class="btn btn-outline-primary" type="submit">⚡ Puxar Série Oficial do BACEN</button>
+        </form>
+        {% endif %}
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#preencherAno">📅 Preencher Ano Inteiro (Jan a Dez)</button>
+    </div>
+</div>
+
+<form class="collapse card border-0 shadow-sm mb-3" id="preencherAno" method="post" action="{{ url_for('admin_financeiro_correcao_ano', indice_id=catalogo.id) }}">
+    <div class="card-body row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label">Ano</label>
+            <input class="form-control" name="ano" inputmode="numeric" required>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Valor de janeiro a dezembro</label>
+            <input class="form-control" name="valor" required>
+        </div>
+        <div class="col-md-3">
+            <button class="btn btn-primary" type="submit">Preencher os 12 meses</button>
+        </div>
+    </div>
+</form>
+
+{% set nomes = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'] %}
+<div class="row g-3">
+    {% for bloco in grade %}
+    <div class="col-md-6 col-xl-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white"><h2 class="h6 mb-0">{{ bloco.ano }}</h2></div>
+            <ul class="list-group list-group-flush">
+                {% for item in bloco.meses %}
+                <li class="list-group-item">
+                    <form class="d-flex align-items-center gap-2" method="post" action="{{ url_for('admin_financeiro_correcao_mes', indice_id=catalogo.id) }}">
+                        <input type="hidden" name="ano_mes" value="{{ item.ano_mes }}">
+                        <span class="small" style="min-width: 4.5rem;">
+                            {% if item.alerta %}⚠️{% endif %}
+                            {{ nomes[item.mes] }}/{{ bloco.ano }}
+                        </span>
+                        <input class="form-control form-control-sm" name="valor" value="{{ item.valor|indice_num if item.valor is not none else '' }}" aria-label="Valor de {{ item.ano_mes }}">
+                        <button class="btn btn-sm btn-outline-primary" type="submit">Salvar</button>
+                    </form>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

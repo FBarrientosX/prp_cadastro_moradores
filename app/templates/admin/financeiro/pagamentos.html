@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}Pagamentos / Despesas — Administração{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h4 mb-1">Pagamentos / Despesas</h1>
+        <p class="text-muted mb-0">Contas a pagar do condomínio, com baixa na conta bancária.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#modalFornecedor">Fornecedores</button>
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#modalDespesa">+ Novo Pagamento / Despesa</button>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-success">
+            <div class="card-body">
+                <div class="text-muted small">Pago ({{ pago_qtd }})</div>
+                <div class="fs-4 fw-semibold">{{ pago|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100 border-start border-4 border-danger">
+            <div class="card-body">
+                <div class="text-muted small">A Pagar ({{ a_pagar_qtd }})</div>
+                <div class="fs-4 fw-semibold">{{ a_pagar|reais }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small">Total ({{ pago_qtd + a_pagar_qtd }})</div>
+                <div class="fs-4 fw-semibold">{{ total|reais }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div class="btn-group" role="group" aria-label="Competência">
+        <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_pagamentos', competencia=competencia_anterior, q=filtro_q) }}">&lt;</a>
+        <span class="btn btn-outline-secondary disabled">{{ competencia_rotulo }}</span>
+        <a class="btn btn-outline-secondary" href="{{ url_for('admin_financeiro_pagamentos', competencia=competencia_proxima, q=filtro_q) }}">&gt;</a>
+    </div>
+    <form class="d-flex gap-2" method="get" action="{{ url_for('admin_financeiro_pagamentos') }}">
+        {% if filtro_competencia %}
+        <input type="hidden" name="competencia" value="{{ filtro_competencia }}">
+        {% else %}
+        <input type="hidden" name="competencia" value="todas">
+        {% endif %}
+        <input class="form-control" type="search" name="q" value="{{ filtro_q }}" placeholder="Título ou fornecedor">
+        <button class="btn btn-outline-primary" type="submit">Buscar</button>
+    </form>
+</div>
+
+<div class="table-responsive card border-0 shadow-sm">
+    <table class="table table-hover align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>Código</th>
+                <th>Competência</th>
+                <th>Vencimento</th>
+                <th>Pagamento</th>
+                <th>Extrato</th>
+                <th>Operação</th>
+                <th>Título</th>
+                <th>Fornecedor</th>
+                <th>Documentos</th>
+                <th class="text-end">Valor</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for linha in linhas %}
+            {% set d = linha.despesa %}
+            <tr>
+                <td>
+                    {% if d.status == 'Pago' %}
+                    <span class="badge text-bg-success">Pago</span>
+                    {% elif d.status == 'Vencido' %}
+                    <span class="badge text-bg-danger">Vencido</span>
+                    {% else %}
+                    <span class="badge text-bg-secondary">A Vencer</span>
+                    {% endif %}
+                </td>
+                <td>{{ d.id }}</td>
+                <td>{{ d.competencia }}</td>
+                <td>{{ d.vencimento.strftime('%d/%m/%Y') if d.vencimento else '—' }}</td>
+                <td>{{ d.data_pagamento.strftime('%d/%m/%Y') if d.data_pagamento else '—' }}</td>
+                <td>{{ d.data_extrato.strftime('%d/%m/%Y') if d.data_extrato else '—' }}</td>
+                <td>{{ d.operacao }}</td>
+                <td>
+                    <button class="btn btn-link p-0 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#despesa-{{ d.id }}">{{ d.titulo }}</button>
+                    {% if d.bloco_alocado and d.bloco_alocado != 'GERAL' %}
+                    <span class="badge text-bg-light border">Bloco {{ d.bloco_alocado }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ d.fornecedor_nome or '—' }}</td>
+                <td>
+                    {% if d.arquivo_anexo %}
+                    <a class="text-warning" href="{{ url_for('admin_financeiro_pagamento_arquivo', despesa_id=d.id) }}" title="Abrir anexo">📎</a>
+                    {% endif %}
+                </td>
+                <td class="text-end">{{ linha.a_pagar|reais }}</td>
+                <td>
+                    {% if d.status in ('A Vencer', 'Vencido') %}
+                    <button class="btn btn-sm btn-outline-success" type="button" data-bs-toggle="collapse" data-bs-target="#despesa-{{ d.id }}">PAGAR</button>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr class="collapse {% if abrir_id == d.id %}show{% endif %}" id="despesa-{{ d.id }}">
+                <td colspan="12" class="bg-light">
+                    <div class="row g-3 p-2">
+                        <div class="col-lg-6">
+                            <h3 class="h6">Compra</h3>
+                            <dl class="row mb-0 small">
+                                <dt class="col-4">Título</dt>
+                                <dd class="col-8">{{ d.titulo }}</dd>
+                                <dt class="col-4">Fornecedor</dt>
+                                <dd class="col-8">{{ d.fornecedor_nome or '—' }}</dd>
+                                <dt class="col-4">Documento</dt>
+                                <dd class="col-8">
+                                    {% if d.arquivo_anexo %}
+                                    <a href="{{ url_for('admin_financeiro_pagamento_arquivo', despesa_id=d.id) }}">Abrir boleto / nota fiscal</a>
+                                    {% endif %}
+                                    <form class="d-flex gap-2 mt-1" method="post" action="{{ url_for('admin_financeiro_pagamento_anexo', despesa_id=d.id) }}" enctype="multipart/form-data">
+                                        <input class="form-control form-control-sm" type="file" name="arquivo_anexo" accept=".pdf,.png,.jpg,.jpeg">
+                                        <button class="btn btn-sm btn-outline-secondary" type="submit">Anexar</button>
+                                    </form>
+                                </dd>
+                                <dt class="col-4">Competência</dt>
+                                <dd class="col-8">{{ d.competencia }}</dd>
+                                <dt class="col-4">Alocação</dt>
+                                <dd class="col-8">{% if d.bloco_alocado == 'GERAL' %}ADM Geral{% else %}Bloco {{ d.bloco_alocado }}{% endif %}</dd>
+                                <dt class="col-4">Status</dt>
+                                <dd class="col-8">{{ d.status }}</dd>
+                            </dl>
+                        </div>
+                        <div class="col-lg-6">
+                            <h3 class="h6">Resumo</h3>
+                            <table class="table table-sm mb-0">
+                                <tbody>
+                                    <tr><th>Valor</th><td class="text-end">{{ linha.valor|reais }}</td></tr>
+                                    <tr><th>(-) Impostos</th><td class="text-end">{{ linha.impostos|reais }}</td></tr>
+                                    <tr><th>(-) Descontos</th><td class="text-end">{{ linha.descontos|reais }}</td></tr>
+                                    <tr><th>(+) Acréscimos</th><td class="text-end">{{ linha.acrescimos|reais }}</td></tr>
+                                    <tr><th>(=) A Pagar</th><td class="text-end">{{ linha.a_pagar|reais }}</td></tr>
+                                    <tr><th>(-) Pago</th><td class="text-end">{{ linha.pago|reais }}</td></tr>
+                                    <tr><th>(=) Dívida</th><td class="text-end">{{ linha.divida|reais }}</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <ul class="nav nav-tabs px-2" role="tablist">
+                        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#pag-{{ d.id }}" type="button">Pagamentos</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#cont-{{ d.id }}" type="button">Contabilizações</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#doc-{{ d.id }}" type="button">Documentos</button></li>
+                    </ul>
+                    <div class="tab-content p-3">
+                        <div class="tab-pane fade show active" id="pag-{{ d.id }}">
+                            {% if d.conta_bancaria %}
+                            <p class="mb-2">{{ d.conta_bancaria.nome_banco }} ({{ d.conta_bancaria.codigo_banco }}) - Ag: {{ d.conta_bancaria.agencia }} - C/c: {{ d.conta_bancaria.conta }}{% if d.conta_bancaria.conta_dv %}-{{ d.conta_bancaria.conta_dv }}{% endif %}</p>
+                            {% endif %}
+                            <p class="mb-2">{{ d.operacao }} · vencimento {{ d.vencimento.strftime('%d/%m/%Y') if d.vencimento else '—' }}{% if d.data_pagamento %} · pago em {{ d.data_pagamento.strftime('%d/%m/%Y') }}{% endif %}</p>
+                            {% if d.status in ('A Vencer', 'Vencido') %}
+                            <form class="row g-2 align-items-end" method="post" action="{{ url_for('admin_financeiro_pagamento_pagar', despesa_id=d.id) }}">
+                                <div class="col-md-3">
+                                    <label class="form-label">Data do pagamento</label>
+                                    <input class="form-control datepicker" type="text" name="data_pagamento" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Data do extrato</label>
+                                    <input class="form-control datepicker" type="text" name="data_extrato">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Valor (vazio quita a dívida)</label>
+                                    <input class="form-control" type="text" name="valor_pago" placeholder="{{ '%.2f'|format(linha.divida)|replace('.', ',') }}">
+                                </div>
+                                <div class="col-md-3">
+                                    <button class="btn btn-success" type="submit">Dar baixa</button>
+                                </div>
+                            </form>
+                            {% endif %}
+                        </div>
+                        <div class="tab-pane fade" id="cont-{{ d.id }}">
+                            <p class="mb-1">Plano: {{ d.plano_conta.codigo if d.plano_conta else '—' }} {{ d.plano_conta.nome if d.plano_conta else '' }}</p>
+                            <p class="mb-0">Fundo: {{ d.fundo.codigo if d.fundo else '—' }} {{ d.fundo.nome if d.fundo else '' }}</p>
+                        </div>
+                        <div class="tab-pane fade" id="doc-{{ d.id }}">
+                            {% if d.arquivo_anexo %}
+                            <a href="{{ url_for('admin_financeiro_pagamento_arquivo', despesa_id=d.id) }}">Baixar comprovante / nota fiscal</a>
+                            {% else %}
+                            <p class="text-muted mb-0">Nenhum documento anexado.</p>
+                            {% endif %}
+                            {% if d.observacoes %}
+                            <p class="mt-2 mb-0">{{ d.observacoes }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="12" class="text-muted p-3">Nenhuma despesa nesta competência.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="modalDespesa" tabindex="-1" aria-labelledby="tituloDespesa" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_pagamento_salvar') }}" enctype="multipart/form-data">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloDespesa">Novo pagamento / despesa</h2>
+                <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body row g-2">
+                <div class="col-md-8">
+                    <label class="form-label">Título</label>
+                    <input class="form-control" name="titulo" required maxlength="200">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Competência</label>
+                    <input class="form-control" name="competencia" value="{{ filtro_competencia or '' }}" required maxlength="7" placeholder="MM/AAAA">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Fornecedor</label>
+                    <select class="form-select" name="fornecedor_id">
+                        <option value="">Sem cadastro</option>
+                        {% for fornecedor in fornecedores %}
+                        <option value="{{ fornecedor.id }}">{{ fornecedor.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Nome livre</label>
+                    <input class="form-control" name="fornecedor_nome" maxlength="200">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Vencimento</label>
+                    <input class="form-control datepicker" type="text" name="vencimento" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Operação</label>
+                    <select class="form-select" name="operacao" required>
+                        {% for operacao in operacoes %}
+                        <option>{{ operacao }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Alocação</label>
+                    <select class="form-select" name="bloco_alocado">
+                        <option value="GERAL">ADM Geral</option>
+                        {% for bloco in blocos %}
+                        <option value="{{ bloco }}">Bloco {{ bloco }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Conta</label>
+                    <select class="form-select" name="conta_bancaria_id" required>
+                        {% for conta in contas %}
+                        <option value="{{ conta.id }}">{{ conta.nome_banco }} ({{ conta.codigo_banco }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Plano de contas</label>
+                    <select class="form-select" name="plano_conta_id" required>
+                        {% for plano in planos %}
+                        <option value="{{ plano.id }}">{{ plano.codigo }} {{ plano.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Fundo</label>
+                    <select class="form-select" name="fundo_id" required>
+                        {% for fundo in fundos %}
+                        <option value="{{ fundo.id }}">{{ fundo.codigo }} {{ fundo.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Valor</label>
+                    <input class="form-control" name="valor_original" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Impostos</label>
+                    <input class="form-control" name="valor_impostos" value="0">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Descontos</label>
+                    <input class="form-control" name="valor_descontos" value="0">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Acréscimos</label>
+                    <input class="form-control" name="valor_acrescimos" value="0">
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Boleto ou nota fiscal</label>
+                    <input class="form-control" type="file" name="arquivo_anexo" accept=".pdf,.png,.jpg,.jpeg">
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Observações</label>
+                    <textarea class="form-control" name="observacoes" rows="2"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Lançar despesa</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="modalFornecedor" tabindex="-1" aria-labelledby="tituloFornecedor" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="{{ url_for('admin_financeiro_fornecedor_salvar') }}">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="tituloFornecedor">Novo fornecedor</h2>
+                <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body row g-2">
+                <div class="col-12">
+                    <label class="form-label">Nome</label>
+                    <input class="form-control" name="nome" required maxlength="200">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">CPF/CNPJ</label>
+                    <input class="form-control" name="documento" maxlength="20">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Chave PIX</label>
+                    <input class="form-control" name="chave_pix" maxlength="120">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Telefone</label>
+                    <input class="form-control" name="telefone" maxlength="20">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">E-mail</label>
+                    <input class="form-control" name="email" maxlength="120">
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Categoria</label>
+                    <input class="form-control" name="categoria_padrao" maxlength="80">
+                </div>
+                {% if fornecedores %}
+                <div class="col-12">
+                    <p class="small text-muted mb-1">Cadastrados</p>
+                    <ul class="small mb-0">
+                        {% for fornecedor in fornecedores %}
+                        <li>{{ fornecedor.nome }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" type="submit">Salvar fornecedor</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    if (window.flatpickr) {
+        flatpickr(".datepicker", {
+            locale: "pt",
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "d/m/Y",
+            allowInput: true
+        });
+    }
+})();
+</script>
+{% endblock %}
