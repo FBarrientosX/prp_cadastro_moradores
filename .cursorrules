@@ -145,6 +145,8 @@ Transicao de schema:
 - Constraint de `Unidade`: `UniqueConstraint("condominio_id", "bloco", "apartamento")`.
  Lookups de negocio sempre filtram `condominio_id`.
 - Planta física: `criada_pela_admin`, `conta_reivindicada` e `cpf_pre_autorizado`.
+  `_garantir_colunas_planta_unidades` cria `eh_setor_interno`,
+  `criada_pela_admin` e `conta_reivindicada` antes do UPDATE de saneamento.
   O boot do `prp` completa as 496 unidades (blocos 1–8) que ainda não existem,
   com status `Pré-Cadastro Admin` e sem senha do morador. Quem já tinha
   cadastro fica `conta_reivindicada=True`. O autocadastro só reivindica

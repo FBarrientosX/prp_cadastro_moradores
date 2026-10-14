@@ -1344,17 +1344,21 @@ def _garantir_colunas_financeiro():
 
 
 def _garantir_colunas_planta_unidades():
-    """Colunas da planta física. Roda antes de qualquer Unidade.query."""
+    """Colunas da planta física. O ALTER termina antes de qualquer UPDATE."""
     inspetor = inspect(db.engine)
     if "unidades" not in inspetor.get_table_names():
         return
     colunas = {coluna["name"] for coluna in inspetor.get_columns("unidades")}
     definicoes = (
+        ("eh_setor_interno", "BOOLEAN DEFAULT 0"),
         ("criada_pela_admin", "BOOLEAN NOT NULL DEFAULT 1"),
         ("conta_reivindicada", "BOOLEAN NOT NULL DEFAULT 0"),
         ("cpf_pre_autorizado", "VARCHAR(20)"),
     )
-    coluna_nova = "conta_reivindicada" not in colunas
+    precisa_sanear = any(
+        nome not in colunas
+        for nome in ("eh_setor_interno", "criada_pela_admin", "conta_reivindicada")
+    )
     alterou = False
     for nome, tipo in definicoes:
         if nome in colunas:
@@ -1365,7 +1369,10 @@ def _garantir_colunas_planta_unidades():
         db.session.commit()
     if hasattr(inspetor, "clear_cache"):
         inspetor.clear_cache()
-    if not coluna_nova:
+    if not precisa_sanear:
+        return
+    colunas = {coluna["name"] for coluna in inspect(db.engine).get_columns("unidades")}
+    if not {"eh_setor_interno", "criada_pela_admin", "conta_reivindicada"} <= colunas:
         return
     db.session.execute(
         text(
