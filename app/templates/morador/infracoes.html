@@ -35,7 +35,11 @@
                 {% if anexos_por_id[item.id] %}
                 <div class="d-flex flex-wrap gap-2 mb-2">
                     {% for anexo in anexos_por_id[item.id] %}
+                    {% if anexo.view_url %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ anexo.view_url }}" target="_blank" rel="noopener noreferrer">{{ anexo.nome }}</a>
+                    {% elif anexo.arquivo %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('morador_infracoes_anexo', infracao_id=item.id, arquivo=anexo.arquivo) }}">{{ anexo.nome }}</a>
+                    {% endif %}
                     {% endfor %}
                 </div>
                 {% endif %}

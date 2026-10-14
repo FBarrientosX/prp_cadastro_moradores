@@ -463,7 +463,9 @@ Parceiro logado:
   vai para `Penalidade Confirmada`. Multa com valor gera `CobrancaUnidade`
   no plano "Multas e Penalidades" (receita; criado se nao existir), com
   vencimento em 5 dias ou no dia 10 do mes seguinte, e grava `cobranca_id`.
-  Anexos ficam em `static/uploads/infracoes` e so saem por rota autenticada.
+  Anexos novos vao ao Drive em `{slug}/infracoes/{id}` (`drive_file_id` e
+  `view_url` em `anexos_json`). O botao abre o link do Drive. Arquivo
+  antigo, so com nome local, continua na rota autenticada.
   O boot cria as tabelas antes das consultas.
 
 `LogAuditoria`: `usuario_id`, `condominio_id`, `mensagem`, `data_criacao`
@@ -983,6 +985,7 @@ Auditoria:
 
 Uploads:
 - Pastas em config: logos, parceiros, ocorrencias, encomendas, faciais, infracoes.
+  Evidencia de infracao nao fica nessa pasta: sobe para o Drive.
 - Extensoes globais de documento: `ALLOWED_EXTENSIONS = {pdf, png, jpg, jpeg}`.
 - Logo de parceiro: png/jpg/jpeg/webp, max 2MB (`salvar_logo_parceiro`).
 - Fotos de ocorrencia/encomenda: helpers com blindagem de tipo/tamanho.

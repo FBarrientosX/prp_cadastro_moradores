@@ -51,20 +51,18 @@ def _escapar_query_drive(valor):
     return str(valor).replace("\\", "\\\\").replace("'", "\\'")
 
 
-def _get_or_create_tenant_folder(tenant_slug, service=None):
-    """Retorna o ID da pasta do condomínio dentro de DRIVE_FOLDER_ID."""
-    slug = (tenant_slug or "").strip()
-    if not slug:
-        return DRIVE_FOLDER_ID
+def _get_or_create_child_folder(service, nome, parent_id):
+    """Cria ou reutiliza uma pasta filha. O nome vazio permanece no pai."""
+    nome = (nome or "").strip()
+    if not nome or not parent_id:
+        return parent_id
 
-    if service is None:
-        service = _get_drive_service()
-
-    slug_q = _escapar_query_drive(slug)
+    nome_q = _escapar_query_drive(nome)
+    parent_q = _escapar_query_drive(parent_id)
     query = (
-        f"name = '{slug_q}' and "
+        f"name = '{nome_q}' and "
         "mimeType = 'application/vnd.google-apps.folder' and "
-        f"'{DRIVE_FOLDER_ID}' in parents and trashed = false"
+        f"'{parent_q}' in parents and trashed = false"
     )
     resposta = (
         service.files()
@@ -79,18 +77,29 @@ def _get_or_create_tenant_folder(tenant_slug, service=None):
         service.files()
         .create(
             body={
-                "name": slug,
+                "name": nome,
                 "mimeType": "application/vnd.google-apps.folder",
-                "parents": [DRIVE_FOLDER_ID],
+                "parents": [parent_id],
             },
             fields="id",
         )
         .execute()
     )
-    return pasta.get("id") or DRIVE_FOLDER_ID
+    return pasta.get("id") or parent_id
 
 
-def upload_to_drive(file_obj, filename=None, tenant_slug=None):
+def _get_or_create_tenant_folder(tenant_slug, service=None):
+    """Retorna o ID da pasta do condomínio dentro de DRIVE_FOLDER_ID."""
+    slug = (tenant_slug or "").strip()
+    if not slug:
+        return DRIVE_FOLDER_ID
+
+    if service is None:
+        service = _get_drive_service()
+    return _get_or_create_child_folder(service, slug, DRIVE_FOLDER_ID)
+
+
+def upload_to_drive(file_obj, filename=None, tenant_slug=None, subpastas=None):
     """
     Envia um FileStorage (ou stream) para a pasta do condomínio no Drive.
 
@@ -108,6 +117,8 @@ def upload_to_drive(file_obj, filename=None, tenant_slug=None):
 
         service = _get_drive_service()
         pasta_id = _get_or_create_tenant_folder(tenant_slug, service=service)
+        for parte in subpastas or []:
+            pasta_id = _get_or_create_child_folder(service, str(parte), pasta_id)
 
         mimetype = getattr(file_obj, "content_type", None) or "application/octet-stream"
         media = MediaIoBaseUpload(stream, mimetype=mimetype, resumable=True)

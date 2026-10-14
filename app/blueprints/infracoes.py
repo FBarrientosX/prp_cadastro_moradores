@@ -3,8 +3,9 @@
 import json
 import os
 import re
-import secrets
 from datetime import date, datetime, timedelta
+from io import BytesIO
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from flask import (
@@ -126,6 +127,31 @@ def _prazo_informado(hoje, condominio):
     return _calcular_prazo_defesa(hoje, int(bruto), tipo), None
 
 
+def _id_drive_seguro(valor):
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{10,128}", str(valor or "")))
+
+
+def _url_drive_segura(url):
+    partes = urlparse(str(url or ""))
+    return (
+        partes.scheme == "https"
+        and partes.netloc in ("drive.google.com", "docs.google.com")
+        and partes.username is None
+    )
+
+
+def _anexo_util(item):
+    if not isinstance(item, dict):
+        return False
+    if not str(item.get("nome") or "").strip():
+        return False
+    drive_id = str(item.get("drive_file_id") or "")
+    view = str(item.get("view_url") or "")
+    if drive_id or view:
+        return _id_drive_seguro(drive_id) and _url_drive_segura(view)
+    return bool(_NOME_ARQUIVO.match(str(item.get("arquivo") or "")))
+
+
 def _anexos(infracao):
     try:
         dados = json.loads(infracao.anexos_json or "[]")
@@ -133,11 +159,7 @@ def _anexos(infracao):
         return []
     if not isinstance(dados, list):
         return []
-    return [
-        item
-        for item in dados
-        if isinstance(item, dict) and _NOME_ARQUIVO.match(str(item.get("arquivo") or ""))
-    ]
+    return [item for item in dados if _anexo_util(item)]
 
 
 def _assinatura_valida(conteudo, extensao):
@@ -160,57 +182,90 @@ def _assinatura_valida(conteudo, extensao):
     return False
 
 
-def _ler_uploads(origem):
-    """Lê os anexos do formulário. Devolve (lista pronta para gravar, erro)."""
+def _mensagem_tipo_anexo():
+    return "Envie foto, PDF ou vídeo (JPG, PNG, WEBP, PDF, MP4, WEBM ou MOV)."
+
+
+def _validar_uploads():
+    """Confere os anexos na memória. Devolve (lista validada, erro)."""
     arquivos = request.files.getlist("anexos")
     escolhidos = [arquivo for arquivo in arquivos if arquivo and arquivo.filename]
     if len(escolhidos) > _MAX_ARQUIVOS:
         return None, f"Envie no máximo {_MAX_ARQUIVOS} anexos."
-    gravados = []
-    pasta = current_app.config["UPLOAD_INFRACOES_FOLDER"]
-    os.makedirs(pasta, exist_ok=True)
+    validados = []
     for arquivo in escolhidos:
         nome_seguro = secure_filename(arquivo.filename)
         if not nome_seguro or "." not in nome_seguro:
-            _apagar_uploads(gravados)
-            return None, "Envie foto, PDF ou vídeo (JPG, PNG, WEBP, PDF, MP4, WEBM ou MOV)."
+            return None, _mensagem_tipo_anexo()
         extensao = nome_seguro.rsplit(".", 1)[-1].lower()
         if extensao not in _EXTENSOES:
-            _apagar_uploads(gravados)
-            return None, "Envie foto, PDF ou vídeo (JPG, PNG, WEBP, PDF, MP4, WEBM ou MOV)."
+            return None, _mensagem_tipo_anexo()
         arquivo.stream.seek(0, os.SEEK_END)
         tamanho = arquivo.stream.tell()
         arquivo.stream.seek(0)
         if tamanho <= 0 or tamanho > _MAX_ANEXO:
-            _apagar_uploads(gravados)
             return None, "Cada anexo deve ter no máximo 8 MB."
         conteudo = arquivo.stream.read()
         arquivo.stream.seek(0)
         if not _assinatura_valida(conteudo, extensao):
-            _apagar_uploads(gravados)
             return None, "Um dos anexos não corresponde ao tipo de arquivo informado."
-        nome_final = f"inf{secrets.token_hex(8)}.{extensao}"
-        with open(os.path.join(pasta, nome_final), "wb") as destino:
-            destino.write(conteudo)
-        gravados.append(
+        validados.append(
             {
-                "arquivo": nome_final,
                 "nome": nome_seguro[:80],
-                "origem": origem,
+                "conteudo": conteudo,
+                "mimetype": _EXTENSOES[extensao],
             }
         )
-    return gravados, None
+    return validados, None
 
 
-def _apagar_uploads(itens):
-    pasta = current_app.config["UPLOAD_INFRACOES_FOLDER"]
+def _descartar_drive(itens):
+    from app.drive_api import delete_from_drive
+
     for item in itens or []:
-        nome = str(item.get("arquivo") or "")
-        if not _NOME_ARQUIVO.match(nome):
-            continue
-        caminho = os.path.join(pasta, nome)
-        if os.path.isfile(caminho):
-            os.remove(caminho)
+        delete_from_drive(str(item.get("drive_file_id") or ""))
+
+
+def _publicar_anexos_drive(validados, slug, infracao_id, origem):
+    """Envia os anexos para `{slug}/infracoes/{id}` e devolve os metadados."""
+    from app.drive_api import upload_to_drive
+
+    if not validados:
+        return [], None
+    slug = (slug or "").strip()
+    if not slug:
+        return None, "O condomínio não tem identificador para a pasta do Drive."
+    publicados = []
+    for item in validados or []:
+        stream = BytesIO(item["conteudo"])
+
+        class _Envio:
+            filename = item["nome"]
+            content_type = item["mimetype"]
+
+            def __init__(self, corpo):
+                self.stream = corpo
+
+        resultado = upload_to_drive(
+            _Envio(stream),
+            filename=item["nome"],
+            tenant_slug=slug,
+            subpastas=["infracoes", str(infracao_id)],
+        )
+        file_id = (resultado or {}).get("id")
+        view_url = (resultado or {}).get("webViewLink")
+        if not _id_drive_seguro(file_id) or not _url_drive_segura(view_url):
+            _descartar_drive(publicados)
+            return None, "Não foi possível enviar os anexos ao Google Drive. Tente novamente."
+        publicados.append(
+            {
+                "nome": item["nome"],
+                "origem": origem,
+                "drive_file_id": file_id,
+                "view_url": view_url,
+            }
+        )
+    return publicados, None
 
 
 def _unidades_do_ator(usuario, condominio_id):
@@ -517,7 +572,7 @@ def infracoes_criar():
         flash("Descreva a infração em até 5000 caracteres.", "danger")
         return _redirecionar_lista()
 
-    anexos, erro = _ler_uploads("gestao")
+    validados, erro = _validar_uploads()
     if erro:
         flash(erro, "danger")
         return _redirecionar_lista()
@@ -531,11 +586,19 @@ def infracoes_criar():
         data_ocorrencia=data_ocorrencia,
         status=StatusInfracao.NOTIFICADA,
         prazo_defesa=prazo,
-        anexos_json=json.dumps(anexos or []),
+        anexos_json="[]",
         criada_por=(usuario.username or "")[:80],
     )
     db.session.add(infracao)
     db.session.flush()
+    anexos, erro = _publicar_anexos_drive(
+        validados, condominio.slug, infracao.id, "gestao"
+    )
+    if erro:
+        db.session.rollback()
+        flash(erro, "danger")
+        return _redirecionar_lista()
+    infracao.anexos_json = json.dumps(anexos or [])
     prazo_texto = prazo.strftime("%d/%m/%Y")
     titulo = (
         f"🚨 Você recebeu uma notificação de infração. Prazo para defesa: {prazo_texto}"
@@ -545,7 +608,13 @@ def infracoes_criar():
         usuario,
         f"Registrou infração #{infracao.id} ({tipo}) na unidade {unidade.identificador}.",
     )
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _descartar_drive(anexos)
+        flash("Não foi possível registrar a infração.", "danger")
+        return _redirecionar_lista()
     flash("Infração registrada e o morador foi notificado.", "success")
     return _redirecionar_lista(foco=infracao.id)
 
@@ -697,7 +766,14 @@ def morador_infracoes_defesa(unidade, infracao_id):
     if not texto or len(texto) > 5000:
         flash("Escreva a defesa em até 5000 caracteres.", "danger")
         return redirect(url_for("morador_infracoes", foco=infracao.id))
-    novos, erro = _ler_uploads("defesa")
+    validados, erro = _validar_uploads()
+    if erro:
+        flash(erro, "danger")
+        return redirect(url_for("morador_infracoes", foco=infracao.id))
+    condominio = db.session.get(Condominio, unidade.condominio_id)
+    novos, erro = _publicar_anexos_drive(
+        validados, condominio.slug if condominio else "", infracao.id, "defesa"
+    )
     if erro:
         flash(erro, "danger")
         return redirect(url_for("morador_infracoes", foco=infracao.id))
@@ -716,7 +792,7 @@ def morador_infracoes_defesa(unidade, infracao_id):
         synchronize_session=False,
     )
     if not linhas:
-        _apagar_uploads(novos)
+        _descartar_drive(novos)
         db.session.rollback()
         flash("O prazo de defesa desta infração já encerrou.", "warning")
         return redirect(url_for("morador_infracoes", foco=infracao.id))
