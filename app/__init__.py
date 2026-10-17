@@ -2050,6 +2050,10 @@ def create_app(config=None):
         usuario = get_current_user()
         unidade = get_unidade_logada()
         encomendas_pendentes_count = 0
+        badge_morador_encomendas = 0
+        badge_morador_boletos = 0
+        badge_morador_infracoes = 0
+        badge_morador = 0
         condominio_ctx = None
         notificacoes_nao_lidas = 0
         notificacoes_habilitadas = False
@@ -2104,11 +2108,42 @@ def create_app(config=None):
                 perfil_destino=PerfilDestinoNotificacao.MORADOR,
                 lida=False,
             ).count()
-            encomendas_pendentes_count = Encomenda.query.filter_by(
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            from app.models import (
+                CobrancaUnidade,
+                Infracao,
+                StatusCobranca,
+                StatusInfracao,
+            )
+
+            hoje_morador = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+            badge_morador_encomendas = Encomenda.query.filter_by(
                 unidade_id=unidade.id,
                 condominio_id=unidade.condominio_id,
                 status=StatusEncomenda.PENDENTE,
             ).count()
+            encomendas_pendentes_count = badge_morador_encomendas
+            badge_morador_boletos = CobrancaUnidade.query.filter(
+                CobrancaUnidade.condominio_id == unidade.condominio_id,
+                CobrancaUnidade.unidade_id == unidade.id,
+                CobrancaUnidade.status.in_(
+                    (StatusCobranca.A_VENCER, StatusCobranca.VENCIDA)
+                ),
+                CobrancaUnidade.vencimento < hoje_morador,
+            ).count()
+            badge_morador_infracoes = Infracao.query.filter(
+                Infracao.condominio_id == unidade.condominio_id,
+                Infracao.unidade_id == unidade.id,
+                Infracao.status == StatusInfracao.NOTIFICADA,
+                Infracao.prazo_defesa >= hoje_morador,
+            ).count()
+            badge_morador = (
+                badge_morador_encomendas
+                + badge_morador_boletos
+                + badge_morador_infracoes
+            )
 
         # Fallback: slug do tenant na sessão (portas públicas).
         if condominio_ctx is None:
@@ -2137,82 +2172,183 @@ def create_app(config=None):
         qtd_cadastros_pendentes = 0
         qtd_inclusoes_ocupantes = 0
         qtd_pendencias_condominio = 0
+        badge_aprovacoes = 0
+        badge_ocorrencias = 0
+        badge_mudancas = 0
+        badge_reservas = 0
+        badge_encomendas = 0
+        badge_boletos = 0
+        badge_admin_cobrancas = 0
+        badge_despesas = 0
+        badge_financeiro = 0
         ocorrencias_alerta = []
-        if (
-            usuario
-            and usuario.condominio_id
-            and usuario.role in (Role.ADMIN, Role.SINDICO)
+        if usuario and usuario.condominio_id and usuario.role in (
+            Role.ADMIN,
+            Role.SINDICO,
+            Role.ASSISTENTE,
+            Role.PORTEIRO,
         ):
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
             from sqlalchemy import or_
 
             from app.models import (
+                AgendamentoMudanca,
+                CobrancaUnidade,
+                DespesaPagamento,
                 EtapaAprovacaoOcupante,
                 Ocorrencia,
+                StatusAgendamentoMudanca,
+                StatusCobranca,
+                StatusDespesa,
                 StatusOcorrencia,
                 StatusUnidade,
                 Unidade,
             )
-            from app.routes import _blocos_codigo_sindico
 
-            base_ocorrencias = Ocorrencia.query.join(
-                Unidade, Ocorrencia.unidade_id == Unidade.id
-            ).filter(
-                Ocorrencia.condominio_id == usuario.condominio_id,
-                Unidade.condominio_id == usuario.condominio_id,
-                Unidade.eh_setor_interno.is_(False),
-            )
-            pendentes = Unidade.query.filter(
-                Unidade.condominio_id == usuario.condominio_id,
-                Unidade.status == StatusUnidade.PENDENTE,
-                Unidade.eh_setor_interno.is_(False),
-            )
-            if usuario.role == Role.SINDICO:
+            cid = usuario.condominio_id
+            papel = usuario.role
+            blocos = None
+            if papel == Role.SINDICO:
+                from app.routes import _blocos_codigo_sindico
+
                 blocos = _blocos_codigo_sindico(usuario) or [""]
-                base_ocorrencias = base_ocorrencias.filter(Unidade.bloco.in_(blocos))
-                pendentes = pendentes.filter(Unidade.bloco.in_(blocos))
-            qtd_ocorrencias_abertas = base_ocorrencias.filter(
-                Ocorrencia.status == StatusOcorrencia.ABERTO
-            ).count()
-            qtd_ocorrencias_nao_lidas = base_ocorrencias.filter(
-                or_(
-                    Ocorrencia.status == StatusOcorrencia.ABERTO,
-                    Ocorrencia.lida_pela_gestao.is_(False),
+
+            if papel in (Role.ADMIN, Role.PORTEIRO) or (
+                papel == Role.SINDICO and usuario.perm_portaria
+            ):
+                badge_encomendas = Encomenda.query.filter_by(
+                    condominio_id=cid,
+                    status=StatusEncomenda.PENDENTE,
+                ).count()
+
+            if papel in (Role.ADMIN, Role.SINDICO):
+                base_ocorrencias = Ocorrencia.query.join(
+                    Unidade, Ocorrencia.unidade_id == Unidade.id
+                ).filter(
+                    Ocorrencia.condominio_id == cid,
+                    Unidade.condominio_id == cid,
+                    Unidade.eh_setor_interno.is_(False),
                 )
-            ).count()
-            qtd_cadastros_pendentes = pendentes.count()
-            etapa_fila = (
-                EtapaAprovacaoOcupante.SINDICO
-                if usuario.role == Role.SINDICO
-                else EtapaAprovacaoOcupante.ADMIN
-            )
-            inclusoes = Unidade.query.filter(
-                Unidade.condominio_id == usuario.condominio_id,
-                Unidade.eh_setor_interno.is_(False),
-                Unidade.etapa_aprovacao_ocupantes == etapa_fila,
-            )
-            if usuario.role == Role.SINDICO:
-                inclusoes = inclusoes.filter(Unidade.bloco.in_(blocos))
-            qtd_inclusoes_ocupantes = inclusoes.count()
+                pendentes = Unidade.query.filter(
+                    Unidade.condominio_id == cid,
+                    Unidade.status == StatusUnidade.PENDENTE,
+                    Unidade.eh_setor_interno.is_(False),
+                )
+                if papel == Role.SINDICO:
+                    base_ocorrencias = base_ocorrencias.filter(
+                        Unidade.bloco.in_(blocos)
+                    )
+                    pendentes = pendentes.filter(Unidade.bloco.in_(blocos))
+                qtd_ocorrencias_abertas = base_ocorrencias.filter(
+                    Ocorrencia.status == StatusOcorrencia.ABERTO
+                ).count()
+                badge_ocorrencias = base_ocorrencias.filter(
+                    Ocorrencia.status.in_(
+                        (
+                            StatusOcorrencia.ABERTO,
+                            StatusOcorrencia.EM_ANDAMENTO,
+                        )
+                    )
+                ).count()
+                qtd_ocorrencias_nao_lidas = base_ocorrencias.filter(
+                    or_(
+                        Ocorrencia.status == StatusOcorrencia.ABERTO,
+                        Ocorrencia.lida_pela_gestao.is_(False),
+                    )
+                ).count()
+                qtd_cadastros_pendentes = pendentes.count()
+                etapa_fila = (
+                    EtapaAprovacaoOcupante.SINDICO
+                    if papel == Role.SINDICO
+                    else EtapaAprovacaoOcupante.ADMIN
+                )
+                inclusoes = Unidade.query.filter(
+                    Unidade.condominio_id == cid,
+                    Unidade.eh_setor_interno.is_(False),
+                    Unidade.etapa_aprovacao_ocupantes == etapa_fila,
+                )
+                if papel == Role.SINDICO:
+                    inclusoes = inclusoes.filter(Unidade.bloco.in_(blocos))
+                qtd_inclusoes_ocupantes = inclusoes.count()
+                if papel == Role.SINDICO:
+                    badge_aprovacoes = (
+                        qtd_cadastros_pendentes + qtd_inclusoes_ocupantes
+                    )
+                else:
+                    badge_aprovacoes = qtd_inclusoes_ocupantes
+                from app.blueprints.areas import _contar_pendentes
+
+                badge_reservas = _contar_pendentes(usuario)
+                resumo = (
+                    base_ocorrencias.filter(
+                        Ocorrencia.status == StatusOcorrencia.ABERTO
+                    )
+                    .order_by(Ocorrencia.created_at.desc())
+                    .limit(5)
+                    .all()
+                )
+                ocorrencias_alerta = [
+                    {
+                        "unidade": item.unidade.identificador,
+                        "titulo": item.titulo,
+                        "categoria": item.categoria,
+                        "quando": item.created_at,
+                    }
+                    for item in resumo
+                ]
+
+            if papel in (Role.ADMIN, Role.SINDICO, Role.ASSISTENTE):
+                status_mudanca = (
+                    StatusAgendamentoMudanca.PENDENTE_SINDICO
+                    if papel == Role.SINDICO
+                    else StatusAgendamentoMudanca.PENDENTE_ADMINISTRACAO
+                )
+                mudancas = AgendamentoMudanca.query.filter(
+                    AgendamentoMudanca.condominio_id == cid,
+                    AgendamentoMudanca.status == status_mudanca,
+                )
+                if papel == Role.SINDICO:
+                    mudancas = mudancas.join(Unidade).filter(
+                        Unidade.condominio_id == cid,
+                        Unidade.bloco.in_(blocos),
+                    )
+                badge_mudancas = mudancas.count()
+
+            if papel in (Role.ADMIN, Role.SINDICO):
+                remessas = CobrancaUnidade.query.filter(
+                    CobrancaUnidade.condominio_id == cid,
+                    CobrancaUnidade.remessa_gerada.is_(False),
+                    CobrancaUnidade.status.in_(StatusCobranca.ABERTAS),
+                )
+                if papel == Role.SINDICO:
+                    remessas = remessas.join(
+                        Unidade, CobrancaUnidade.unidade_id == Unidade.id
+                    ).filter(
+                        Unidade.condominio_id == cid,
+                        Unidade.bloco.in_(blocos),
+                    )
+                badge_admin_cobrancas = remessas.count()
+                badge_boletos = badge_admin_cobrancas
+
+            if papel == Role.ADMIN:
+                hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+                badge_despesas = DespesaPagamento.query.filter(
+                    DespesaPagamento.condominio_id == cid,
+                    DespesaPagamento.status.in_(
+                        (StatusDespesa.A_VENCER, StatusDespesa.VENCIDO)
+                    ),
+                    DespesaPagamento.vencimento < hoje,
+                ).count()
+                badge_financeiro = badge_admin_cobrancas + badge_despesas
+
             qtd_pendencias_condominio = (
-                qtd_ocorrencias_nao_lidas
-                + qtd_cadastros_pendentes
-                + qtd_inclusoes_ocupantes
+                badge_aprovacoes
+                + badge_ocorrencias
+                + badge_mudancas
+                + badge_reservas
             )
-            resumo = (
-                base_ocorrencias.filter(Ocorrencia.status == StatusOcorrencia.ABERTO)
-                .order_by(Ocorrencia.created_at.desc())
-                .limit(5)
-                .all()
-            )
-            ocorrencias_alerta = [
-                {
-                    "unidade": item.unidade.identificador,
-                    "titulo": item.titulo,
-                    "categoria": item.categoria,
-                    "quando": item.created_at,
-                }
-                for item in resumo
-            ]
 
         return {
             "sidebar_user": usuario,
@@ -2228,6 +2364,19 @@ def create_app(config=None):
             "qtd_cadastros_pendentes": qtd_cadastros_pendentes,
             "qtd_inclusoes_ocupantes": qtd_inclusoes_ocupantes,
             "qtd_pendencias_condominio": qtd_pendencias_condominio,
+            "badge_aprovacoes": badge_aprovacoes,
+            "badge_ocorrencias": badge_ocorrencias,
+            "badge_mudancas": badge_mudancas,
+            "badge_reservas": badge_reservas,
+            "badge_encomendas": badge_encomendas,
+            "badge_boletos": badge_boletos,
+            "badge_admin_cobrancas": badge_admin_cobrancas,
+            "badge_despesas": badge_despesas,
+            "badge_financeiro": badge_financeiro,
+            "badge_morador_encomendas": badge_morador_encomendas,
+            "badge_morador_boletos": badge_morador_boletos,
+            "badge_morador_infracoes": badge_morador_infracoes,
+            "badge_morador": badge_morador,
             "ocorrencias_alerta": ocorrencias_alerta,
         }
 

@@ -876,7 +876,19 @@ Ocorrencias: kanban `admin/ocorrencias_kanban.html` (alias `/sindico/ocorrencias
   com filtro, parecer, encaminhamento bloco/geral, selo de nao lida, SLA e
   `?foco=` (borda pulsante e modal). Morador responde em
   `morador/ocorrencias.html` enquanto Aberto ou Em Andamento. Sidebar do
-  admin e do sindico mostra badge de chamados em Aberto no grupo Condominio.
+  admin e do sindico: o badge do grupo Condominio e a soma dos submenus
+  Aprovacao de Moradores (cadastro Pendente do sindico mais inclusoes da
+  etapa do perfil), Ocorrencias (Aberto e Em Andamento), Mudancas da etapa
+  do perfil e Reservas Pendente. O recorte do sindico e `blocos_escopo`
+  (sindico geral, `*`, ve os blocos residenciais). O assistente so soma
+  Mudancas. Financeiro do admin soma cobrancas em aberto sem remessa
+  (`remessa_gerada` falso) e despesas vencidas. O sindico, se consultado,
+  limita essas cobrancas ao `blocos_escopo`. O morador segue vendo boletos
+  vencidos da propria unidade. Portaria
+  mostra encomendas Pendente. O morador ve, na propria unidade, encomendas
+  Pendente (Aguardando Retirada), boletos ja vencidos e infracoes ainda em
+  Notificada/Aguardando Defesa com prazo vigente. O menu do morador e plano,
+  entao cada item leva o proprio numero.
   Banner no `/admin`, `/admin/dashboard` e `/sindico` quando ha chamado Aberto.
   Controle de acesso: resumo, filtro e sincronizacao facial a partir de
   `foto_perfil`/`foto_facial`. Aba Equipamentos: `EquipamentoAcesso`

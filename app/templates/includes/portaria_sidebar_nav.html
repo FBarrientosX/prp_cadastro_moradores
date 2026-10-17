@@ -13,9 +13,12 @@
    href="{{ url_for('portaria_contatos') }}">
     <i class="bi bi-telephone me-2"></i>Interfone / Contatos
 </a>
-<a class="nav-link text-white d-flex align-items-center {% if encomendas_ativo %}active{% endif %}"
+<a class="nav-link text-white d-flex justify-content-between align-items-center {% if encomendas_ativo %}active{% endif %}"
    href="{{ url_for('portaria_encomendas') }}">
-    <i class="bi bi-box-seam me-2"></i>Encomendas
+    <span class="d-flex align-items-center"><i class="bi bi-box-seam me-2"></i>Encomendas</span>
+    {% if badge_encomendas|default(0) > 0 %}
+    <span class="badge bg-danger rounded-pill">{{ badge_encomendas }}</span>
+    {% endif %}
 </a>
 <a class="nav-link text-white d-flex align-items-center {% if mudancas_ativo %}active{% endif %}"
    href="{{ url_for('portaria_mudancas') }}">
