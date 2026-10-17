@@ -91,19 +91,20 @@
             <div class="tab-pane fade {% if aba_ativa == 'equipe' %}show active{% endif %}"
                  id="painel-equipe" role="tabpanel" aria-labelledby="tab-equipe">
                 <p class="text-muted small mb-3">
-                    Acesso para administração, síndicos e portaria do condomínio.
+                    Administração e síndico entram com o usuário. O porteiro entra com o CPF.
                 </p>
-                <form method="post" action="{{ url_for('tenant_login', slug=slug) }}">
+                <form method="post" action="{{ url_for('tenant_login', slug=slug) }}"
+                      id="form-equipe" autocomplete="off">
                     <input type="hidden" name="perfil" value="equipe">
                     <div class="mb-3">
-                        <label for="username" class="form-label">Usuário</label>
+                        <label for="username" class="form-label">Usuário ou CPF</label>
                         <input type="text" class="form-control" id="username" name="username"
-                               required autocomplete="username">
+                               required autocomplete="off" inputmode="text">
                     </div>
                     <div class="mb-3">
                         <label for="password" class="form-label">Senha</label>
                         <input type="password" class="form-control" id="password" name="password"
-                               required autocomplete="current-password">
+                               required autocomplete="new-password">
                     </div>
                     <button type="submit" class="btn btn-primary w-100">Entrar</button>
                 </form>
@@ -122,6 +123,15 @@
 {% block scripts %}
 {% if not pendente %}
 <script>
+    function limparLoginEquipe() {
+        const usuario = document.getElementById("username");
+        const senha = document.getElementById("password");
+        if (usuario) usuario.value = "";
+        if (senha) senha.value = "";
+    }
+    document.addEventListener("DOMContentLoaded", limparLoginEquipe);
+    window.addEventListener("pageshow", limparLoginEquipe);
+
     const CONDOMINIO_ESTRUTURA = {{ condominio_estrutura | tojson }};
     const STATUS_UNIDADE_URL = {{ url_for('status_unidade', slug=slug) | tojson }};
     const blocoSelect = document.getElementById("bloco");

@@ -106,6 +106,9 @@
                 <div class="min-w-0">
                     <h1 class="h5 mb-1">Portaria</h1>
                     <p class="small text-white-50 mb-0 text-truncate">{{ brand_nome }}</p>
+                    {% if usuario_portaria and usuario_portaria.role == 'porteiro' %}
+                    <p class="small mb-0 text-truncate">{{ usuario_portaria.nome_exibicao }}</p>
+                    {% endif %}
                 </div>
             </div>
         </div>

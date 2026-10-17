@@ -626,6 +626,14 @@ def admin_aprovar_atualizacao(unidade_id):
     unidade = _unidade_do_tenant(unidade_id, condominio_id)
     usuario = get_current_user()
 
+    if unidade.inclusao_ocupante_pendente:
+        flash(
+            "A inclusão de morador é analisada em Aprovação de Moradores. "
+            "Ela não libera a portaria por esta tela.",
+            "warning",
+        )
+        return redirect(url_for("admin_aprovacoes"))
+
     if not unidade.atualizacao_pendente:
         flash("Esta unidade não possui atualização pendente.", "warning")
         return redirect(url_for("admin_index"))
@@ -1231,10 +1239,16 @@ def admin_criar_usuario():
             flash("A senha deve ter ao menos 6 caracteres.", "danger")
             return render_template("criar_usuario.html", blocos=blocos)
 
+        if tipo_acesso == "porteiro":
+            flash(
+                "Porteiros são cadastrados na tela Porteiros, com nome, CPF e senha.",
+                "warning",
+            )
+            return redirect(url_for("admin_porteiros"))
+
         mapeamento_tipo = {
             "assistente": Role.ASSISTENTE,
             "sindico": Role.SINDICO,
-            "porteiro": Role.PORTEIRO,
         }
         role = mapeamento_tipo.get(tipo_acesso)
         if not role:
@@ -2802,6 +2816,13 @@ def _aplicar_config_reservas_infracoes(condominio):
         condominio.aprovacao_automatica_reservas = (
             "1" in request.form.getlist("aprovacao_automatica_reservas")
         )
+    if "fluxo_aprovacao_cadastros" in request.form:
+        from app.models import FluxoAprovacaoCadastro
+
+        fluxo = (request.form.get("fluxo_aprovacao_cadastros") or "").strip().lower()
+        if fluxo not in FluxoAprovacaoCadastro.CHOICES:
+            return "Escolha o fluxo de aprovação dos novos moradores."
+        condominio.fluxo_aprovacao_cadastros = fluxo
     return None
 
 
@@ -3009,6 +3030,344 @@ def admin_condominio():
     )
 
 
+def _username_porteiro(condominio_id, cpf):
+    return f"porteiro-{condominio_id}-{cpf}"[:80]
+
+
+def _cpf_porteiro(texto):
+    from app.blueprints.areas import _cpf_valido
+
+    return _cpf_valido(texto)
+
+
+def _porteiro_do_tenant(porteiro_id, condominio_id):
+    porteiro = Usuario.query.filter_by(
+        id=porteiro_id,
+        condominio_id=condominio_id,
+        role=Role.PORTEIRO,
+    ).first()
+    if porteiro is None:
+        from flask import abort
+
+        abort(404)
+    return porteiro
+
+
+def _cpf_porteiro_em_uso(condominio_id, cpf, ignorar_id=None):
+    consulta = Usuario.query.filter_by(
+        condominio_id=condominio_id,
+        role=Role.PORTEIRO,
+        cpf=cpf,
+    )
+    if ignorar_id:
+        consulta = consulta.filter(Usuario.id != ignorar_id)
+    return consulta.first() is not None
+
+
+@admin_or_sindico_required
+def admin_porteiros():
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    porteiros = (
+        Usuario.query.filter_by(condominio_id=condominio_id, role=Role.PORTEIRO)
+        .order_by(Usuario.nome_completo.asc(), Usuario.id.asc())
+        .all()
+    )
+    return render_template(
+        "admin/porteiros.html",
+        current_user=usuario,
+        porteiros=porteiros,
+    )
+
+
+@admin_or_sindico_required
+def admin_porteiros_novo():
+    from app.routes import _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    nome = " ".join((request.form.get("nome_completo") or "").split())
+    cpf = _cpf_porteiro(request.form.get("cpf"))
+    senha = request.form.get("senha") or ""
+    ativo = request.form.get("ativo") == "1"
+    if len(nome) < 3 or len(nome) > 200:
+        flash("Informe o nome completo do porteiro.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if not cpf:
+        flash("CPF inválido.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if _cpf_porteiro_em_uso(condominio_id, cpf):
+        flash("Já existe um porteiro com este CPF neste condomínio.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if len(senha) < 6:
+        flash("A senha deve ter pelo menos 6 caracteres.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    username = _username_porteiro(condominio_id, cpf)
+    if Usuario.query.filter_by(username=username).first():
+        flash("Não foi possível gravar este CPF. Tente novamente.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    porteiro = Usuario(
+        username=username,
+        role=Role.PORTEIRO,
+        condominio_id=condominio_id,
+        nome_completo=nome,
+        cpf=cpf,
+        ativo=ativo,
+    )
+    porteiro.set_password(senha)
+    db.session.add(porteiro)
+    _registrar_auditoria(usuario, f"Porteiro cadastrado: {nome}.")
+    db.session.commit()
+    flash("Porteiro cadastrado.", "success")
+    return redirect(url_for("admin_porteiros"))
+
+
+@admin_or_sindico_required
+def admin_porteiros_editar(porteiro_id):
+    from app.routes import _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    porteiro = _porteiro_do_tenant(porteiro_id, condominio_id)
+    nome = " ".join((request.form.get("nome_completo") or "").split())
+    cpf = _cpf_porteiro(request.form.get("cpf"))
+    senha = request.form.get("senha") or ""
+    ativo = request.form.get("ativo") == "1"
+    if len(nome) < 3 or len(nome) > 200:
+        flash("Informe o nome completo do porteiro.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if not cpf:
+        flash("CPF inválido.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if _cpf_porteiro_em_uso(condominio_id, cpf, ignorar_id=porteiro.id):
+        flash("Já existe um porteiro com este CPF neste condomínio.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    if senha and len(senha) < 6:
+        flash("A senha deve ter pelo menos 6 caracteres.", "danger")
+        return redirect(url_for("admin_porteiros"))
+    username_auto = _username_porteiro(condominio_id, porteiro.cpf or "")
+    novo_username = _username_porteiro(condominio_id, cpf)
+    if porteiro.username == username_auto and porteiro.username != novo_username:
+        ocupado = Usuario.query.filter(
+            Usuario.username == novo_username,
+            Usuario.id != porteiro.id,
+        ).first()
+        if ocupado:
+            flash("Não foi possível gravar este CPF. Tente novamente.", "danger")
+            return redirect(url_for("admin_porteiros"))
+        porteiro.username = novo_username
+    porteiro.nome_completo = nome
+    porteiro.cpf = cpf
+    porteiro.ativo = ativo
+    if senha:
+        porteiro.set_password(senha)
+    _registrar_auditoria(usuario, f"Porteiro atualizado: {nome}.")
+    db.session.commit()
+    flash("Porteiro atualizado.", "success")
+    return redirect(url_for("admin_porteiros"))
+
+
+@admin_or_sindico_required
+def admin_porteiros_status(porteiro_id):
+    from app.routes import _registrar_auditoria
+
+    usuario = get_current_user()
+    condominio_id = condominio_id_obrigatorio(usuario)
+    porteiro = _porteiro_do_tenant(porteiro_id, condominio_id)
+    porteiro.ativo = request.form.get("ativo") == "1"
+    estado = "ativado" if porteiro.ativo else "inativado"
+    _registrar_auditoria(
+        usuario, f"Porteiro {estado}: {porteiro.nome_exibicao}."
+    )
+    db.session.commit()
+    flash(f"Porteiro {estado}.", "success")
+    return redirect(url_for("admin_porteiros"))
+
+
+def _usuario_aprova_ocupantes():
+    usuario = get_current_user()
+    if usuario is None or usuario.role not in (
+        Role.ADMIN,
+        Role.SINDICO,
+        Role.SUPERADMIN,
+    ):
+        return None
+    if usuario.role != Role.SUPERADMIN and not usuario.condominio_id:
+        return None
+    return usuario
+
+
+def _redirecionar_sem_aprovacao():
+    flash("Acesso restrito à aprovação de moradores.", "danger")
+    usuario = get_current_user()
+    if usuario and usuario.role == Role.SINDICO:
+        return redirect(url_for("sindico_dashboard"))
+    if usuario and usuario.role == Role.SUPERADMIN:
+        return redirect(url_for("superadmin_dashboard"))
+    if usuario and usuario.role == Role.ADMIN:
+        return redirect(url_for("admin_index"))
+    return redirect(url_for("index"))
+
+
+def _etapa_da_fila(usuario):
+    from app.models import EtapaAprovacaoOcupante
+
+    if usuario.role == Role.SINDICO:
+        return EtapaAprovacaoOcupante.SINDICO
+    return EtapaAprovacaoOcupante.ADMIN
+
+
+def _consulta_fila_ocupantes(usuario):
+    etapa = _etapa_da_fila(usuario)
+    consulta = Unidade.query.filter(
+        Unidade.eh_setor_interno.is_(False),
+        Unidade.etapa_aprovacao_ocupantes == etapa,
+    )
+    if usuario.role == Role.SUPERADMIN:
+        return consulta.order_by(Unidade.bloco, Unidade.apartamento)
+    consulta = consulta.filter(Unidade.condominio_id == usuario.condominio_id)
+    if usuario.role == Role.SINDICO:
+        from app.routes import _blocos_codigo_sindico
+
+        blocos = _blocos_codigo_sindico(usuario) or [""]
+        consulta = consulta.filter(Unidade.bloco.in_(blocos))
+    return consulta.order_by(Unidade.bloco, Unidade.apartamento)
+
+
+def _unidade_da_fila(usuario, unidade_id):
+    from app.routes import _sindico_gerencia_bloco, _unidade_do_tenant
+
+    if usuario.role == Role.SUPERADMIN:
+        unidade = db.session.get(Unidade, unidade_id)
+        if unidade is None or unidade.eh_setor_interno:
+            return None
+        return unidade
+    condominio_id = condominio_id_obrigatorio(usuario)
+    if not condominio_id:
+        return None
+    unidade = _unidade_do_tenant(unidade_id, condominio_id)
+    if usuario.role == Role.SINDICO and not _sindico_gerencia_bloco(
+        usuario, unidade.bloco
+    ):
+        return None
+    return unidade
+
+
+def _ocupantes_pendentes(unidade):
+    return [
+        pessoa
+        for pessoa in unidade.pessoas.order_by(Pessoa.nome_completo).all()
+        if pessoa.eh_morador and pessoa.status != StatusPessoa.APROVADO
+    ]
+
+
+def admin_aprovacoes():
+    """Fila de ocupantes novos. Síndico e administradora veem etapas diferentes."""
+    usuario = _usuario_aprova_ocupantes()
+    if usuario is None:
+        return _redirecionar_sem_aprovacao()
+    from app.models import EtapaAprovacaoOcupante
+
+    unidades = _consulta_fila_ocupantes(usuario).all()
+    return render_template(
+        "admin/aprovacoes.html",
+        current_user=usuario,
+        unidades=unidades,
+        etapa=_etapa_da_fila(usuario),
+        etapa_sindico=EtapaAprovacaoOcupante.SINDICO,
+        etapa_admin=EtapaAprovacaoOcupante.ADMIN,
+        ocupantes_pendentes=_ocupantes_pendentes,
+    )
+
+
+def admin_aprovacoes_decidir(unidade_id):
+    """Avança a fila ou recusa só quem ainda não está aprovado."""
+    from app.models import EtapaAprovacaoOcupante, PerfilDestinoNotificacao
+    from app.routes import (
+        _criar_notificacao,
+        _registrar_auditoria,
+        sincronizar_credencial_facial,
+    )
+
+    usuario = _usuario_aprova_ocupantes()
+    if usuario is None:
+        return _redirecionar_sem_aprovacao()
+    unidade = _unidade_da_fila(usuario, unidade_id)
+    if unidade is None:
+        flash("Unidade não encontrada nesta fila.", "danger")
+        return redirect(url_for("admin_aprovacoes"))
+
+    etapa_esperada = _etapa_da_fila(usuario)
+    if unidade.etapa_aprovacao_ocupantes != etapa_esperada:
+        flash("Esta inclusão não está na sua etapa de aprovação.", "warning")
+        return redirect(url_for("admin_aprovacoes"))
+
+    acao = (request.form.get("acao") or "").strip()
+    identificador = unidade.identificador
+    if acao == "aprovar" and usuario.role == Role.SINDICO:
+        unidade.etapa_aprovacao_ocupantes = EtapaAprovacaoOcupante.ADMIN
+        _criar_notificacao(
+            unidade.condominio_id,
+            PerfilDestinoNotificacao.ADMIN,
+            "Novo morador aguarda a administradora",
+            (
+                f"Bloco {unidade.bloco}, Apto {unidade.apartamento} "
+                "passou pelo síndico e ainda não entra na portaria."
+            ),
+            link_destino="/admin/aprovacoes",
+            tipo="CADASTRO",
+        )
+        _registrar_auditoria(
+            usuario,
+            f"Inclusão de morador encaminhada à administradora — {identificador}.",
+        )
+        db.session.commit()
+        flash(
+            f"{identificador} foi para a aprovação da administradora. "
+            "O morador novo ainda não entra na portaria.",
+            "success",
+        )
+        return redirect(url_for("admin_aprovacoes"))
+
+    if acao == "aprovar":
+        for pessoa in _ocupantes_pendentes(unidade):
+            pessoa.status = StatusPessoa.APROVADO
+            sincronizar_credencial_facial(pessoa)
+        unidade.etapa_aprovacao_ocupantes = EtapaAprovacaoOcupante.ATIVO
+        unidade.atualizacao_pendente = False
+        _registrar_auditoria(
+            usuario,
+            f"Inclusão de morador aprovada e liberada na portaria — {identificador}.",
+        )
+        db.session.commit()
+        flash(
+            f"{identificador} está aprovada. O morador novo já pode entrar na portaria.",
+            "success",
+        )
+        return redirect(url_for("admin_aprovacoes"))
+
+    if acao == "recusar":
+        for pessoa in _ocupantes_pendentes(unidade):
+            db.session.delete(pessoa)
+        unidade.etapa_aprovacao_ocupantes = EtapaAprovacaoOcupante.ATIVO
+        unidade.atualizacao_pendente = False
+        _registrar_auditoria(
+            usuario,
+            f"Inclusão de morador recusada — {identificador}. "
+            "Quem já era morador permanece.",
+        )
+        db.session.commit()
+        flash(
+            f"A inclusão em {identificador} foi recusada. "
+            "O morador novo não entra na portaria.",
+            "info",
+        )
+        return redirect(url_for("admin_aprovacoes"))
+
+    flash("Ação inválida.", "danger")
+    return redirect(url_for("admin_aprovacoes"))
+
+
 def register(app):
     """Registra as rotas do admin preservando os endpoints legados."""
     app.add_url_rule(
@@ -3050,6 +3409,18 @@ def register(app):
         methods=["POST"],
     )
     app.add_url_rule("/admin", "admin_index", admin_index, methods=["GET"])
+    app.add_url_rule(
+        "/admin/aprovacoes",
+        "admin_aprovacoes",
+        admin_aprovacoes,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/aprovacoes/<int:unidade_id>",
+        "admin_aprovacoes_decidir",
+        admin_aprovacoes_decidir,
+        methods=["POST"],
+    )
     app.add_url_rule(
         "/admin/clube_vantagens",
         "admin_clube_vantagens",
@@ -3277,4 +3648,28 @@ def register(app):
         "admin_controle_acesso_baixar_agente",
         admin_controle_acesso_baixar_agente,
         methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/porteiros",
+        "admin_porteiros",
+        admin_porteiros,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/porteiros/novo",
+        "admin_porteiros_novo",
+        admin_porteiros_novo,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/porteiros/<int:porteiro_id>/editar",
+        "admin_porteiros_editar",
+        admin_porteiros_editar,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/admin/porteiros/<int:porteiro_id>/status",
+        "admin_porteiros_status",
+        admin_porteiros_status,
+        methods=["POST"],
     )

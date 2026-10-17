@@ -12,28 +12,11 @@
 
 <section class="card border-0 shadow-sm mb-4">
     <div class="card-body">
-        <h2 class="h5 mb-3">Configurações Gerais</h2>
-        <form method="post" action="{{ url_for('admin_portaria_configuracoes_gerais') }}">
-            <div class="form-check form-switch mb-3">
-                <input class="form-check-input" type="checkbox" role="switch"
-                       id="permitir_apoio" name="permitir_apoio" value="1"
-                       {% if condominio.permitir_apoio %}checked{% endif %}>
-                <label class="form-check-label" for="permitir_apoio">
-                    Habilitar campo de Apoio
-                </label>
-                <div class="form-text">O porteiro pode indicar um colega de apoio na abertura do plantão.</div>
-            </div>
-            <div class="form-check form-switch mb-3">
-                <input class="form-check-input" type="checkbox" role="switch"
-                       id="permitir_ronda" name="permitir_ronda" value="1"
-                       {% if condominio.permitir_ronda %}checked{% endif %}>
-                <label class="form-check-label" for="permitir_ronda">
-                    Habilitar campo de Ronda
-                </label>
-                <div class="form-text">O porteiro pode indicar o responsável pela ronda na abertura do plantão.</div>
-            </div>
-            <button type="submit" class="btn btn-primary">Salvar configurações</button>
-        </form>
+        <h2 class="h5 mb-3">Equipe do plantão</h2>
+        <p class="mb-0">
+            Na abertura do plantão, o responsável é o porteiro que está logado.
+            Apoio, ronda e passagem de turno são escolhidos na lista de porteiros ativos.
+        </p>
     </div>
 </section>
 

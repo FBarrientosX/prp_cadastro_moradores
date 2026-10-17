@@ -344,6 +344,18 @@
                         </label>
                     </div>
                 </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="fluxo_aprovacao_cadastros">Aprovação de novos moradores</label>
+                    <select class="form-select" id="fluxo_aprovacao_cadastros" name="fluxo_aprovacao_cadastros">
+                        <option value="dupla" {% if condominio.fluxo_cadastros != 'simples' %}selected{% endif %}>
+                            Dupla — síndico e depois a administradora
+                        </option>
+                        <option value="simples" {% if condominio.fluxo_cadastros == 'simples' %}selected{% endif %}>
+                            Simples — só a administradora
+                        </option>
+                    </select>
+                    <div class="form-text">O morador novo só entra na portaria depois da última aprovação. Quem já mora continua com acesso.</div>
+                </div>
                 <div class="col-12">
                     <input type="hidden" name="aprovacao_automatica_reservas" value="0">
                     <div class="form-check form-switch">

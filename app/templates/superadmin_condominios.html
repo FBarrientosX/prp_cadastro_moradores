@@ -213,6 +213,13 @@
                             </select>
                         </div>
                         <div class="col-md-4">
+                            <label class="form-label" for="fluxo_aprovacao_cadastros">Aprovação de novos moradores</label>
+                            <select class="form-select" id="fluxo_aprovacao_cadastros" name="fluxo_aprovacao_cadastros">
+                                <option value="dupla" selected>Dupla — síndico e administradora</option>
+                                <option value="simples">Simples — só a administradora</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label" for="fluxo_aprovacao_mudanca">Fluxo Aprovação Mudança</label>
                             <select class="form-select" id="fluxo_aprovacao_mudanca" name="fluxo_aprovacao_mudanca">
                                 <option value="Dupla" selected>Dupla (Síndico + Admin)</option>
@@ -314,6 +321,18 @@
                                     {{ opcao }}
                                 </option>
                                 {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="edit_fluxo_cadastros_{{ condo.id }}">Aprovação de novos moradores</label>
+                            <select class="form-select" id="edit_fluxo_cadastros_{{ condo.id }}"
+                                    name="fluxo_aprovacao_cadastros">
+                                <option value="dupla" {% if condo.fluxo_cadastros != 'simples' %}selected{% endif %}>
+                                    Dupla — síndico e administradora
+                                </option>
+                                <option value="simples" {% if condo.fluxo_cadastros == 'simples' %}selected{% endif %}>
+                                    Simples — só a administradora
+                                </option>
                             </select>
                         </div>
                         <div class="col-md-4">

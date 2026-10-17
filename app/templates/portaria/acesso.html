@@ -91,6 +91,15 @@
                     <div class="col-12">
                         <div id="box-interfone" class="border rounded p-2 bg-light d-none"></div>
                     </div>
+                    <div class="col-12 d-none" id="campo-autorizador">
+                        <label class="form-label mb-1" for="autorizado_por_id">Qual morador autorizou a entrada?</label>
+                        <select class="form-select" id="autorizado_por_id" name="autorizado_por_id">
+                            <option value="">Não informado</option>
+                        </select>
+                        <p class="form-text mb-0" id="aviso-sem-adulto" hidden>
+                            Nenhum morador adulto desta unidade pode autorizar a entrada.
+                        </p>
+                    </div>
                     <div class="col-12">
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-check2-circle me-1"></i>Registrar entrada
@@ -456,6 +465,19 @@
                 rotulo.appendChild(foto);
             }
             rotulo.appendChild(document.createTextNode(morador.nome || "Morador"));
+            if (morador.is_menor_de_idade) {
+                const menor = document.createElement("span");
+                menor.className = "badge bg-danger";
+                menor.textContent = "🔞 Menor (" + morador.idade + " anos)";
+                rotulo.appendChild(menor);
+            }
+            if (morador.responsavel && !morador.is_menor_de_idade) {
+                const fone = document.createElement("i");
+                fone.className = "bi bi-telephone-fill text-success";
+                fone.title = "Responsável";
+                fone.setAttribute("aria-label", "Responsável");
+                rotulo.appendChild(fone);
+            }
             linha.appendChild(rotulo);
             if (morador.autoriza_interfone && morador.telefone) {
                 const link = document.createElement("a");
@@ -474,6 +496,7 @@
         contatosAtuais = [];
         const opcao = unidade.selectedOptions[0];
         if (!opcao || !opcao.value) {
+            preencherAutorizador([]);
             desenharInterfone();
             return;
         }
@@ -486,13 +509,43 @@
             credentials: "same-origin"
         });
         if (!resposta.ok) {
+            preencherAutorizador([]);
             desenharInterfone();
             return;
         }
         const dados = await resposta.json();
         const card = (dados.unidades || [])[0];
         contatosAtuais = card && card.moradores ? card.moradores : [];
+        preencherAutorizador(contatosAtuais);
         desenharInterfone();
+    }
+
+    function preencherAutorizador(moradores) {
+        const select = document.getElementById("autorizado_por_id");
+        const caixa = document.getElementById("campo-autorizador");
+        const aviso = document.getElementById("aviso-sem-adulto");
+        if (!select || !caixa) return;
+        const escolhido = select.value;
+        select.replaceChildren();
+        const vazio = document.createElement("option");
+        vazio.value = "";
+        vazio.textContent = "Não informado";
+        select.appendChild(vazio);
+        const adultos = (moradores || []).filter(function (morador) {
+            return !morador.is_menor_de_idade;
+        });
+        adultos.forEach(function (morador) {
+            const opcao = document.createElement("option");
+            opcao.value = String(morador.id);
+            opcao.textContent = morador.nome || "Morador";
+            if (morador.responsavel) opcao.textContent += " — Responsável";
+            select.appendChild(opcao);
+        });
+        if (escolhido && [...select.options].some(function (opcao) { return opcao.value === escolhido; })) {
+            select.value = escolhido;
+        }
+        caixa.classList.toggle("d-none", !unidade.value);
+        if (aviso) aviso.hidden = !unidade.value || adultos.length > 0;
     }
 
     tipo.addEventListener("change", function () {

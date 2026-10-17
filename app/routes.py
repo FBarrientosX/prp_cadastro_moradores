@@ -790,12 +790,16 @@ def _emails_unicos(pessoas):
 
 
 def _parse_data(data_str):
-    if not data_str:
+    """Converte o nascimento do formulário. Vazio vira None."""
+    texto = (data_str or "").strip()
+    if not texto:
         return None
-    try:
-        return datetime.strptime(data_str, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    for formato in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+    raise ValueError("Data de nascimento inválida. Use DD/MM/AAAA.")
 
 
 def _calcular_idade(data_nascimento):
@@ -958,19 +962,65 @@ def _formulario_usa_listas_separadas(form):
     return any(_RE_LISTAS_SEPARADAS.match(chave) for chave in form.keys())
 
 
-def _preencher_dados_basicos(destino, origem):
-    for campo in ("nome_completo", "telefone", "email", "data_nascimento"):
-        valor = origem.get(campo)
-        if valor not in (None, ""):
-            destino[campo] = valor
+def _texto_campo(valor):
+    if valor is None:
+        return ""
+    return " ".join(str(valor).strip().lower().split())
 
 
-def _sincronizar_dados_basicos_por_cpf(proprietarios, moradores):
+def _campo_mudou(novo, atual):
+    if isinstance(novo, date) or isinstance(atual, date):
+        return novo != atual
+    return _texto_campo(novo) != _texto_campo(atual)
+
+
+def _mesclar_campo(itens, campo, atual):
+    """O último lado que difere do valor já gravado prevalece."""
+    escolhido = atual
+    for item in itens:
+        valor = item.get(campo)
+        if campo == "email" and valor == "":
+            valor = None
+        if _campo_mudou(valor, atual):
+            escolhido = valor
+    return escolhido
+
+
+def _propagar_cpf_mesmo_id(proprietarios, moradores, pessoas_atuais):
+    """CPF editado num dos cartões da mesma pessoa vale para os dois."""
+    atuais = {pessoa.id: pessoa for pessoa in pessoas_atuais}
+    proprietarios_por_id = {
+        item.get("id"): item for item in proprietarios if item.get("id")
+    }
+    for morador in moradores:
+        proprietario = proprietarios_por_id.get(morador.get("id"))
+        if proprietario is None:
+            continue
+        atual = atuais.get(morador.get("id"))
+        cpf_atual = _somente_digitos(atual.cpf) if atual else ""
+        cpf_morador = _somente_digitos(morador.get("cpf"))
+        cpf_proprietario = _somente_digitos(proprietario.get("cpf"))
+        if cpf_morador != cpf_atual and cpf_proprietario == cpf_atual:
+            proprietario["cpf"] = morador.get("cpf") or ""
+        elif cpf_proprietario != cpf_atual and cpf_morador == cpf_atual:
+            morador["cpf"] = proprietario.get("cpf") or ""
+        elif cpf_morador and cpf_morador != cpf_proprietario:
+            proprietario["cpf"] = morador.get("cpf") or ""
+
+
+def _sincronizar_dados_basicos_por_cpf(proprietarios, moradores, pessoas_atuais=None):
     """
-    Quando o mesmo CPF está nas duas listas da unidade, nome, telefone,
-    e-mail e data de nascimento ficam iguais nos dois lados.
-    O lado do morador prevalece se os dois trouxerem valor.
+    Quando o mesmo CPF está nas duas listas, nome, telefone, e-mail e
+    nascimento ficam iguais. Vale o lado que o usuário alterou.
     """
+    pessoas_atuais = list(pessoas_atuais or [])
+    _propagar_cpf_mesmo_id(proprietarios, moradores, pessoas_atuais)
+    atuais_por_cpf = {}
+    for pessoa in pessoas_atuais:
+        cpf = _somente_digitos(pessoa.cpf)
+        if cpf and cpf not in atuais_por_cpf:
+            atuais_por_cpf[cpf] = pessoa
+
     por_cpf = {}
     for item in proprietarios:
         cpf = _somente_digitos(item.get("cpf"))
@@ -985,24 +1035,32 @@ def _sincronizar_dados_basicos_por_cpf(proprietarios, moradores):
         por_cpf.setdefault(cpf, {"proprietarios": [], "moradores": []})
         por_cpf[cpf]["moradores"].append(item)
 
-    for grupos in por_cpf.values():
+    for cpf, grupos in por_cpf.items():
         if not grupos["proprietarios"] or not grupos["moradores"]:
             continue
-        base = {
-            "nome_completo": "",
-            "telefone": "",
-            "email": None,
-            "data_nascimento": None,
+        atual = atuais_por_cpf.get(cpf)
+        if atual is None:
+            atuais_por_id = {pessoa.id: pessoa for pessoa in pessoas_atuais}
+            for item in grupos["proprietarios"] + grupos["moradores"]:
+                atual = atuais_por_id.get(item.get("id"))
+                if atual is not None:
+                    break
+        base_atual = {
+            "nome_completo": atual.nome_completo if atual else "",
+            "telefone": (atual.telefone or "") if atual else "",
+            "email": atual.email if atual else None,
+            "data_nascimento": atual.data_nascimento if atual else None,
         }
-        for item in grupos["proprietarios"]:
-            _preencher_dados_basicos(base, item)
-        for item in grupos["moradores"]:
-            _preencher_dados_basicos(base, item)
-        for item in grupos["proprietarios"] + grupos["moradores"]:
-            item["nome_completo"] = base["nome_completo"]
-            item["telefone"] = base["telefone"] or ""
-            item["email"] = base["email"]
-            item["data_nascimento"] = base["data_nascimento"]
+        itens = grupos["proprietarios"] + grupos["moradores"]
+        escolhidos = {
+            campo: _mesclar_campo(itens, campo, base_atual[campo])
+            for campo in ("nome_completo", "telefone", "email", "data_nascimento")
+        }
+        for item in itens:
+            item["nome_completo"] = escolhidos["nome_completo"] or ""
+            item["telefone"] = escolhidos["telefone"] or ""
+            item["email"] = escolhidos["email"] or None
+            item["data_nascimento"] = escolhidos["data_nascimento"]
 
 
 def _cpfs_proprietarios_informados(proprietarios):
@@ -1027,10 +1085,12 @@ def _ajustar_vinculo_morador_sem_dono(proprietarios, moradores):
             morador["vinculo"] = VinculoPessoa.MORADOR
 
 
-def _unir_proprietarios_e_moradores(proprietarios, moradores):
+def _unir_proprietarios_e_moradores(proprietarios, moradores, pessoas_atuais=None):
     """Uma linha de Pessoa por CPF, com as flags dos papéis preenchidos."""
     _ajustar_vinculo_morador_sem_dono(proprietarios, moradores)
-    _sincronizar_dados_basicos_por_cpf(proprietarios, moradores)
+    _sincronizar_dados_basicos_por_cpf(
+        proprietarios, moradores, pessoas_atuais
+    )
     pessoas = []
     indice_por_cpf = {}
 
@@ -1434,6 +1494,45 @@ def _houve_mudanca_proprietario_ou_responsavel(unidade, pessoas_data, dados_prop
     return False
 
 
+def _houve_novo_ocupante(pessoas_data):
+    """Pessoa sem id e que mora na unidade. Dono que não ocupa não abre a fila."""
+    return any(
+        not pessoa.get("id") and pessoa.get("eh_morador", True)
+        for pessoa in pessoas_data
+    )
+
+
+def _marcar_inclusao_ocupante(unidade):
+    """Coloca o ocupante novo na fila e avisa quem aprova. Não muda o login da unidade."""
+    from app.models import EtapaAprovacaoOcupante, PerfilDestinoNotificacao
+
+    condominio = unidade.condominio
+    fluxo = condominio.fluxo_cadastros if condominio is not None else "dupla"
+    if fluxo == "simples":
+        unidade.etapa_aprovacao_ocupantes = EtapaAprovacaoOcupante.ADMIN
+        perfil = PerfilDestinoNotificacao.ADMIN
+        aviso_unidade_id = None
+        titulo = "Novo morador aguarda a administradora"
+    else:
+        unidade.etapa_aprovacao_ocupantes = EtapaAprovacaoOcupante.SINDICO
+        perfil = PerfilDestinoNotificacao.SINDICO
+        aviso_unidade_id = unidade.id
+        titulo = "Novo morador aguarda o síndico"
+    unidade.atualizacao_pendente = True
+    _criar_notificacao(
+        unidade.condominio_id,
+        perfil,
+        titulo,
+        (
+            f"Bloco {unidade.bloco}, Apto {unidade.apartamento} incluiu um morador. "
+            "Ele não entra na portaria até o fim da aprovação."
+        ),
+        unidade_id=aviso_unidade_id,
+        link_destino="/admin/aprovacoes",
+        tipo="CADASTRO",
+    )
+
+
 def _requer_nova_aprovacao_sindico(
     unidade, pessoas_data, veiculos_data, dados_proprietario, pessoas_atuais=None
 ):
@@ -1541,6 +1640,31 @@ def _redirect_pos_login_equipe(usuario):
     return _redirect_pos_login_admin(usuario)
 
 
+def _buscar_usuario_equipe(condominio_id, identificador):
+    """Equipe entra pelo usuário. Porteiro entra pelo CPF do próprio condomínio."""
+    from app.blueprints.areas import _cpf_valido
+
+    bruto = (identificador or "").strip()
+    cpf = _cpf_valido(bruto)
+    if cpf:
+        porteiro = Usuario.query.filter_by(
+            condominio_id=condominio_id,
+            role=Role.PORTEIRO,
+            cpf=cpf,
+        ).first()
+        if porteiro is not None:
+            return porteiro
+    if not bruto:
+        return None
+    return Usuario.query.filter(
+        Usuario.username == bruto,
+        Usuario.role.in_(
+            [Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]
+        ),
+        Usuario.condominio_id == condominio_id,
+    ).first()
+
+
 def tenant_login(slug):
     """Login unificado: Morador (aba) e Equipe (admin/síndico/porteiro)."""
     condominio, bloqueio = _carregar_condominio_entrada(slug)
@@ -1556,14 +1680,12 @@ def tenant_login(slug):
     if request.method == "POST" and request.form.get("perfil") in ("admin", "equipe"):
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        usuario = Usuario.query.filter(
-            Usuario.username == username,
-            Usuario.role.in_(
-                [Role.ADMIN, Role.ASSISTENTE, Role.SINDICO, Role.PORTEIRO]
-            ),
-            Usuario.condominio_id == condominio.id,
-        ).first()
-        if usuario and usuario.check_password(password):
+        usuario = _buscar_usuario_equipe(condominio.id, username)
+        if (
+            usuario
+            and usuario.check_password(password)
+            and (usuario.role != Role.PORTEIRO or usuario.ativo)
+        ):
             login_usuario(usuario)
             return _redirect_pos_login_equipe(usuario)
         flash("Usuário ou senha inválidos.", "danger")
@@ -1961,6 +2083,7 @@ def morador_inicio(unidade):
     cadastro_pendente = (
         unidade.status == StatusUnidade.PENDENTE
         or unidade.atualizacao_pendente
+        or unidade.inclusao_ocupante_pendente
         or docs_incompletos
         or contrato_incompleto
     )
@@ -1970,6 +2093,11 @@ def morador_inicio(unidade):
         alerta_cadastro = (
             "A documentação do seu cadastro foi recusada. "
             "Envie os arquivos novamente para concluir a análise."
+        )
+    elif unidade.inclusao_ocupante_pendente:
+        alerta_cadastro = (
+            "Um novo morador desta unidade ainda aguarda aprovação "
+            "e não entra na portaria."
         )
     elif unidade.atualizacao_pendente:
         alerta_cadastro = (
@@ -2471,7 +2599,9 @@ def salvar_cadastro():
             proprietarios_lista = _parse_proprietarios_lista_form(request.form)
             moradores_lista = _parse_moradores_form(request.form)
             pessoas_data = _unir_proprietarios_e_moradores(
-                proprietarios_lista, moradores_lista
+                proprietarios_lista,
+                moradores_lista,
+                unidade.pessoas.all() if modo_atualizacao else None,
             )
         else:
             pessoas_data = _parse_pessoas_form(request.form)
@@ -2663,10 +2793,15 @@ def salvar_cadastro():
             unidade.proprietario_telefone = None
             unidade.proprietario_email = None
 
+        inclusao_nova = bool(
+            modo_atualizacao and _houve_novo_ocupante(pessoas_data)
+        )
         if modo_atualizacao:
             unidade.data_alteracao = datetime.utcnow()
-            if requer_nova_aprovacao:
-                # Mantém Aprovada/Registrada para não bloquear o login do titular.
+            if inclusao_nova:
+                # Mantém Aprovada/Registrada. A fila vale só para o ocupante novo.
+                _marcar_inclusao_ocupante(unidade)
+            elif requer_nova_aprovacao:
                 unidade.atualizacao_pendente = True
             # Sem mudança crítica: atualizacao_pendente permanece como estava.
         db.session.commit()
@@ -2682,7 +2817,21 @@ def salvar_cadastro():
             )
 
         if modo_atualizacao:
-            if requer_nova_aprovacao:
+            if inclusao_nova and unidade.etapa_aprovacao_ocupantes == "Pendente Aprovação (Admin)":
+                flash(
+                    "O novo morador aguarda a administradora. "
+                    "Enquanto isso, ele não entra na portaria. "
+                    "O seu acesso continua normal.",
+                    "success",
+                )
+            elif inclusao_nova:
+                flash(
+                    "O novo morador aguarda o síndico e, depois, a administradora. "
+                    "Enquanto isso, ele não entra na portaria. "
+                    "O seu acesso continua normal.",
+                    "success",
+                )
+            elif requer_nova_aprovacao:
                 flash(
                     "Dados atualizados e enviados para análise do síndico. "
                     "O seu acesso ao sistema continua normal.",

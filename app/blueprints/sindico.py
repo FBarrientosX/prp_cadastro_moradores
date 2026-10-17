@@ -300,6 +300,14 @@ def sindico_validar_unidade(unidade_id):
         flash("Você não tem permissão para esta unidade.", "danger")
         return redirect(url_for("sindico_dashboard"))
 
+    if unidade.inclusao_ocupante_pendente:
+        flash(
+            "A inclusão de morador é analisada em Aprovação de Moradores. "
+            "Ela não libera a portaria por esta tela.",
+            "warning",
+        )
+        return redirect(url_for("admin_aprovacoes"))
+
     if unidade.status != StatusUnidade.PENDENTE and not unidade.atualizacao_pendente:
         flash(
             "Apenas cadastros pendentes ou com atualização em análise podem ser validados.",

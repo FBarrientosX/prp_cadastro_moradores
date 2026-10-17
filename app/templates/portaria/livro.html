@@ -82,8 +82,12 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                     </div>
                     <div class="modal-body">
-                        <p class="text-muted small mb-3">
+                        <p class="text-muted small mb-1">
                             Confirme o estado dos equipamentos na abertura do turno.
+                        </p>
+                        <p class="small mb-3">
+                            <strong>Responsável do plantão:</strong>
+                            {{ current_user.nome_exibicao }}
                         </p>
                         {% if itens_checklist %}
                         {% for item in itens_checklist %}
@@ -124,29 +128,35 @@
                             </button>
                         </div>
 
-                        {% if condominio and condominio.permitir_apoio %}
-                        <div class="mb-3 mt-4">
-                            <label class="form-label" for="apoio_id">Apoio</label>
-                            <select class="form-select" id="apoio_id" name="apoio_id">
-                                <option value="">Nenhum</option>
-                                {% for porteiro in porteiros %}
-                                <option value="{{ porteiro.id }}">{{ porteiro.username }}</option>
-                                {% endfor %}
-                            </select>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-4">
+                                <label class="form-label" for="apoio_id">Apoio</label>
+                                <select class="form-select" id="apoio_id" name="apoio_id">
+                                    <option value="">Nenhum</option>
+                                    {% for porteiro in porteiros if porteiro.id != current_user.id %}
+                                    <option value="{{ porteiro.id }}">{{ porteiro.nome_exibicao }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="ronda_id">Ronda</label>
+                                <select class="form-select" id="ronda_id" name="ronda_id">
+                                    <option value="">Nenhum</option>
+                                    {% for porteiro in porteiros if porteiro.id != current_user.id %}
+                                    <option value="{{ porteiro.id }}">{{ porteiro.nome_exibicao }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="passagem_id">Passagem de Turno</label>
+                                <select class="form-select" id="passagem_id" name="passagem_id">
+                                    <option value="">Nenhum</option>
+                                    {% for porteiro in porteiros if porteiro.id != current_user.id %}
+                                    <option value="{{ porteiro.id }}">{{ porteiro.nome_exibicao }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
                         </div>
-                        {% endif %}
-
-                        {% if condominio and condominio.permitir_ronda %}
-                        <div class="mb-0 {% if not condominio.permitir_apoio %}mt-4{% endif %}">
-                            <label class="form-label" for="ronda_id">Ronda</label>
-                            <select class="form-select" id="ronda_id" name="ronda_id">
-                                <option value="">Nenhum</option>
-                                {% for porteiro in porteiros %}
-                                <option value="{{ porteiro.id }}">{{ porteiro.username }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        {% endif %}
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
@@ -165,12 +175,15 @@
             <span class="badge text-bg-success mb-2">Plantão em Andamento</span>
             <h3 class="h5 mb-1">Equipa em serviço</h3>
             <ul class="list-unstyled small mb-2">
-                <li><strong>Titular:</strong> {{ plantao_aberto.porteiro.username if plantao_aberto.porteiro else '—' }}</li>
-                {% if condominio and condominio.permitir_apoio and plantao_aberto.apoio %}
-                <li><strong>Apoio:</strong> {{ plantao_aberto.apoio.username }}</li>
+                <li><strong>Titular:</strong> {{ plantao_aberto.porteiro.nome_exibicao if plantao_aberto.porteiro else '—' }}</li>
+                {% if plantao_aberto.apoio %}
+                <li><strong>Apoio:</strong> {{ plantao_aberto.apoio.nome_exibicao }}</li>
                 {% endif %}
-                {% if condominio and condominio.permitir_ronda and plantao_aberto.ronda %}
-                <li><strong>Ronda:</strong> {{ plantao_aberto.ronda.username }}</li>
+                {% if plantao_aberto.ronda %}
+                <li><strong>Ronda:</strong> {{ plantao_aberto.ronda.nome_exibicao }}</li>
+                {% endif %}
+                {% if plantao_aberto.passagem %}
+                <li><strong>Passagem de turno:</strong> {{ plantao_aberto.passagem.nome_exibicao }}</li>
                 {% endif %}
             </ul>
             <p class="text-muted small mb-0">
@@ -286,7 +299,7 @@
                     <td class="text-nowrap small">
                         {{ plantao.data_fechamento.strftime('%d/%m/%Y %H:%M') if plantao.data_fechamento else '—' }}
                     </td>
-                    <td>{{ plantao.porteiro.username if plantao.porteiro else '—' }}</td>
+                    <td>{{ plantao.porteiro.nome_exibicao if plantao.porteiro else '—' }}</td>
                     <td>
                         {% if plantao.checklist_itens %}
                         <div class="d-flex flex-wrap gap-1">

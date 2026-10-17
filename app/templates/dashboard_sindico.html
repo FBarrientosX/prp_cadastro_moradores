@@ -148,7 +148,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
-                {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
+                {% if (unidade.status == 'Pendente' or unidade.atualizacao_pendente) and not unidade.inclusao_ocupante_pendente %}
                 <form method="post"
                       action="{{ url_for('sindico_validar_unidade', unidade_id=unidade.id) }}"
                       onsubmit="return confirm('Confirmar finalização da validação desta unidade?');">
@@ -173,7 +173,9 @@
                             {% else %}
                             <span class="badge bg-dark">{{ unidade.status }}</span>
                             {% endif %}
-                            {% if unidade.atualizacao_pendente %}
+                            {% if unidade.inclusao_ocupante_pendente %}
+                            <span class="badge bg-warning text-dark">{{ unidade.etapa_aprovacao_ocupantes }}</span>
+                            {% elif unidade.atualizacao_pendente %}
                             <span class="badge bg-warning text-dark">Atualização Pendente</span>
                             {% endif %}
                         </dd>
@@ -397,13 +399,17 @@
             </div>
             <div class="modal-footer flex-column flex-sm-row justify-content-between gap-2">
                 <button type="button" class="btn btn-outline-secondary w-100 w-sm-auto order-2 order-sm-0" data-bs-dismiss="modal">Fechar</button>
-                {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
+                {% if unidade.inclusao_ocupante_pendente %}
+                <a class="btn btn-primary w-100 w-sm-auto order-1" href="{{ url_for('admin_aprovacoes') }}">
+                    Analisar inclusão
+                </a>
+                {% elif unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
                 <button type="submit" class="btn btn-primary w-100 w-sm-auto order-1">
                     Finalizar Validação da Unidade
                 </button>
                 {% endif %}
             </div>
-            {% if unidade.status == 'Pendente' or unidade.atualizacao_pendente %}
+            {% if (unidade.status == 'Pendente' or unidade.atualizacao_pendente) and not unidade.inclusao_ocupante_pendente %}
             </form>
             {% endif %}
         </div>

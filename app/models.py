@@ -40,6 +40,23 @@ class StatusPessoa:
     CHOICES = (PENDENTE, APROVADO)
 
 
+class FluxoAprovacaoCadastro:
+    """Quem precisa autorizar um ocupante novo antes da portaria."""
+
+    DUPLA = "dupla"
+    SIMPLES = "simples"
+    CHOICES = (DUPLA, SIMPLES)
+
+
+class EtapaAprovacaoOcupante:
+    """Fila da inclusão. Não substitui o status operacional da unidade."""
+
+    SINDICO = "Pendente Aprovação (Síndico)"
+    ADMIN = "Pendente Aprovação (Admin)"
+    ATIVO = "Aprovado/Ativo"
+    PENDENTES = (SINDICO, ADMIN)
+
+
 class StatusDocumento:
     PENDENTE = "Pendente"
     ENTREGUE = "Entregue"
@@ -204,6 +221,17 @@ class Condominio(db.Model):
     aprovacao_automatica_reservas = db.Column(
         db.Boolean, nullable=False, default=False
     )
+    # dupla: síndico e depois a administradora. simples: só a administradora.
+    fluxo_aprovacao_cadastros = db.Column(
+        db.String(20), nullable=False, default=FluxoAprovacaoCadastro.DUPLA
+    )
+
+    @property
+    def fluxo_cadastros(self):
+        valor = (self.fluxo_aprovacao_cadastros or "").strip().lower()
+        if valor not in FluxoAprovacaoCadastro.CHOICES:
+            return FluxoAprovacaoCadastro.DUPLA
+        return valor
 
     configuracao = db.relationship(
         "ConfiguracaoCondominio",
@@ -302,6 +330,9 @@ class Usuario(db.Model):
     perm_portaria = db.Column(db.Boolean, nullable=False, default=False)
     perm_reservas_geral = db.Column(db.Boolean, nullable=False, default=False)
     perm_configuracoes = db.Column(db.Boolean, nullable=False, default=False)
+    nome_completo = db.Column(db.String(200), nullable=True)
+    cpf = db.Column(db.String(14), nullable=True, index=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
 
     condominio = db.relationship("Condominio", backref=db.backref("usuarios", lazy=True))
 
@@ -362,6 +393,17 @@ class Usuario(db.Model):
     def is_porteiro(self):
         return self.role == Role.PORTEIRO
 
+    @property
+    def nome_exibicao(self):
+        return (self.nome_completo or "").strip() or self.username
+
+    @property
+    def cpf_formatado(self):
+        digitos = "".join(caractere for caractere in (self.cpf or "") if caractere.isdigit())
+        if len(digitos) != 11:
+            return self.cpf or ""
+        return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
+
     def __repr__(self):
         return f"<Usuario {self.username} ({self.role})>"
 
@@ -412,10 +454,18 @@ class Unidade(db.Model):
     notificacao_sindico = db.Column(db.Text, nullable=True)
     # Soft flag: atualização crítica aguarda síndico sem derrubar o login.
     atualizacao_pendente = db.Column(db.Boolean, nullable=False, default=False)
+    # Fila só da inclusão de ocupante. Aprovada/Registrada segue para login e catraca
+    # de quem já estava aprovado.
+    etapa_aprovacao_ocupantes = db.Column(db.String(40), nullable=True)
     # Administração, zeladoria e outros destinos da portaria. Não é unidade residencial.
     eh_setor_interno = db.Column(db.Boolean, nullable=False, default=False)
     criada_pela_admin = db.Column(db.Boolean, nullable=False, default=True)
     conta_reivindicada = db.Column(db.Boolean, nullable=False, default=False)
+
+    @property
+    def inclusao_ocupante_pendente(self):
+        return self.etapa_aprovacao_ocupantes in EtapaAprovacaoOcupante.PENDENTES
+
     cpf_pre_autorizado = db.Column(db.String(20), nullable=True)
     # Marca a última troca de senha; usado para invalidar tokens de
     # redefinição já consumidos (evita reuso do mesmo link).
@@ -889,6 +939,24 @@ class Pessoa(db.Model):
         back_populates="morador",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def idade(self):
+        nascimento = self.data_nascimento
+        if not nascimento:
+            return None
+        hoje = date.today()
+        anos = hoje.year - nascimento.year
+        if (hoje.month, hoje.day) < (nascimento.month, nascimento.day):
+            anos -= 1
+        return anos
+
+    @property
+    def is_menor_de_idade(self):
+        if not self.data_nascimento:
+            return False
+        anos = self.idade
+        return anos is not None and anos < 18
 
     def __repr__(self):
         return f"<Pessoa {self.nome_completo}>"
@@ -2229,6 +2297,9 @@ class Plantao(db.Model):
     ronda_id = db.Column(
         db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
     )
+    passagem_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=True, index=True
+    )
 
     guarita = db.relationship(
         "Guarita", backref=db.backref("plantoes", lazy="dynamic")
@@ -2240,9 +2311,32 @@ class Plantao(db.Model):
     )
     apoio = db.relationship("Usuario", foreign_keys=[apoio_id])
     ronda = db.relationship("Usuario", foreign_keys=[ronda_id])
+    passagem = db.relationship("Usuario", foreign_keys=[passagem_id])
 
     def __repr__(self):
         return f"<Plantao {self.id} ({self.status})>"
+
+
+class AnotacaoPlantao(db.Model):
+    """Linha do livro de serviço, com o porteiro que a escreveu."""
+
+    __tablename__ = "anotacoes_plantao"
+
+    id = db.Column(db.Integer, primary_key=True)
+    condominio_id = db.Column(
+        db.Integer, db.ForeignKey("condominio.id"), nullable=False, index=True
+    )
+    plantao_id = db.Column(
+        db.Integer, db.ForeignKey("plantoes.id"), nullable=False, index=True
+    )
+    porteiro_id = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id"), nullable=False, index=True
+    )
+    texto = db.Column(db.Text, nullable=False)
+    criada_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    plantao = db.relationship("Plantao", backref=db.backref("anotacoes", lazy="dynamic"))
+    porteiro = db.relationship("Usuario", foreign_keys=[porteiro_id])
 
 
 class TipoRespostaChecklist:

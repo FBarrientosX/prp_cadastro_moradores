@@ -285,7 +285,7 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                         <td>{{ item.destinatario or '—' }}</td>
                         <td>{{ item.transportadora or '—' }}</td>
                         <td>{{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}</td>
-                        <td>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</td>
+                        <td>{{ item.porteiro_recebimento.nome_exibicao if item.porteiro_recebimento else '—' }}</td>
                         <td>
                             {% if item.data_entrega %}
                             {{ item.data_entrega.strftime('%d/%m/%Y %H:%M') }}
@@ -294,7 +294,7 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                             {% endif %}
                         </td>
                         <td>{{ item.entregue_para or '—' }}</td>
-                        <td>{{ item.porteiro_entrega.username if item.porteiro_entrega else '—' }}</td>
+                        <td>{{ item.porteiro_entrega.nome_exibicao if item.porteiro_entrega else '—' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -319,7 +319,7 @@ Olá, {{ nome }}! Aqui é da Portaria do condomínio. Chegou uma encomenda (*{{ 
                 <div class="card border-0 bg-light mb-3">
                     <div class="card-body py-3">
                         Encomenda cadastrada por
-                        <strong>{{ item.porteiro_recebimento.username if item.porteiro_recebimento else '—' }}</strong>
+                        <strong>{{ item.porteiro_recebimento.nome_exibicao if item.porteiro_recebimento else '—' }}</strong>
                         em {{ item.data_recebimento.strftime('%d/%m/%Y %H:%M') }}.
                     </div>
                 </div>
