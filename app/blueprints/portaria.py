@@ -42,7 +42,6 @@ from app.auth import (
     condominio_id_obrigatorio,
     get_current_user,
     interfone_required,
-    logout_usuario,
     portaria_required,
 )
 from app.utils import (
@@ -53,6 +52,7 @@ from app.utils import (
 )
 from app.models import (
     AgendamentoMudanca,
+    AnotacaoPlantao,
     AutorizacaoAcesso,
     Condominio,
     Encomenda,
@@ -68,6 +68,7 @@ from app.models import (
     StatusAgendamentoMudanca,
     StatusAutorizacaoAcesso,
     StatusEncomenda,
+    StatusPessoa,
     StatusPlantao,
     TipoRespostaChecklist,
     TipoVisitante,
@@ -243,7 +244,7 @@ def portaria_logout():
     from app.routes import _slug_logout
 
     slug = _slug_logout()
-    logout_usuario()
+    session.clear()
     flash("Sessão encerrada.", "info")
     return redirect(url_for("tenant_login", slug=slug, tab="equipe"))
 
@@ -373,6 +374,24 @@ def portaria_acesso():
     )
 
 
+def _morador_autorizador_adulto(unidade, pessoa_id_raw):
+    """None se ninguém foi escolhido. False se o id não é um adulto da unidade."""
+    bruto = str(pessoa_id_raw or "").strip()
+    if not bruto:
+        return None
+    if not bruto.isdigit():
+        return False
+    pessoa = Pessoa.query.filter_by(
+        id=int(bruto),
+        unidade_id=unidade.id,
+        eh_morador=True,
+        status=StatusPessoa.APROVADO,
+    ).first()
+    if pessoa is None or pessoa.is_menor_de_idade:
+        return False
+    return pessoa
+
+
 @portaria_required
 def portaria_acesso_entrada():
     from app.routes import _condominio_id_portaria, _criar_notificacao, _registrar_auditoria
@@ -409,6 +428,16 @@ def portaria_acesso_entrada():
     ).first()
     if unidade is None:
         flash("Unidade inválida para este condomínio.", "danger")
+        return redirect(url_for("portaria_acesso"))
+
+    autorizador = _morador_autorizador_adulto(
+        unidade, request.form.get("autorizado_por_id")
+    )
+    if autorizador is False:
+        flash(
+            "Apenas um morador adulto desta unidade pode autorizar a entrada.",
+            "danger",
+        )
         return redirect(url_for("portaria_acesso"))
 
     if tipo not in (TipoVisitante.PRESTADOR, TipoVisitante.DELIVERY):
@@ -458,8 +487,13 @@ def portaria_acesso_entrada():
     db.session.add(registro)
     _registrar_auditoria(
         usuario,
-        f"Portaria '{usuario.username}' registrou entrada de {visitante.nome} "
-        f"({visitante.tipo}) na unidade {unidade.identificador}.",
+        f"Portaria '{usuario.nome_exibicao}' registrou entrada de {visitante.nome} "
+        f"({visitante.tipo}) na unidade {unidade.identificador}"
+        + (
+            f", autorizada por {autorizador.nome_completo}."
+            if autorizador
+            else "."
+        ),
     )
     rotulo = _rotulo_chegada(visitante.tipo)
     _criar_notificacao(
@@ -641,6 +675,7 @@ def _href_whatsapp_morador(unidade, texto):
             unidade_id=unidade.id,
             eh_morador=True,
             autoriza_interfone=True,
+            status=StatusPessoa.APROVADO,
         )
         .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
         .all()
@@ -697,6 +732,7 @@ def _telefone_destinatario_encomenda(unidade, nome, telefone_informado):
         Pessoa.query.filter(
             Pessoa.unidade_id == unidade.id,
             Pessoa.eh_morador.is_(True),
+            Pessoa.status == StatusPessoa.APROVADO,
         )
         .order_by(Pessoa.is_responsavel.desc(), Pessoa.id.asc())
         .all()
@@ -798,6 +834,7 @@ def portaria_encomendas():
         .filter(
             Unidade.condominio_id == condominio_id,
             Pessoa.eh_morador.is_(True),
+            Pessoa.status == StatusPessoa.APROVADO,
         )
         .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
         .all()
@@ -863,7 +900,10 @@ def _avisar_emails_setor(unidade, quando, destinatario, codigo_rastreio):
 
     vistos = set()
     falhas = 0
-    contatos = unidade.pessoas.filter(Pessoa.eh_morador.is_(True)).all()
+    contatos = unidade.pessoas.filter(
+        Pessoa.eh_morador.is_(True),
+        Pessoa.status == StatusPessoa.APROVADO,
+    ).all()
     for pessoa in contatos:
         email = (pessoa.email or "").strip()
         chave = email.casefold()
@@ -947,7 +987,7 @@ def portaria_encomendas_receber():
     db.session.add(encomenda)
     _registrar_auditoria(
         usuario,
-        f"Portaria '{usuario.username}' recebeu encomenda para "
+        f"Portaria '{usuario.nome_exibicao}' recebeu encomenda para "
         f"{unidade.identificador}"
         + (f" ({destinatario})" if destinatario else "")
         + ".",
@@ -1610,16 +1650,17 @@ def _garantir_guarita_padrao(condominio_id):
     db.session.commit()
 
 
-def _porteiros_do_condominio(condominio_id):
-    """Porteiros (e segurança, se existir) do tenant para apoio e ronda."""
-    return (
-        Usuario.query.filter(
-            Usuario.condominio_id == condominio_id,
-            Usuario.role.in_((Role.PORTEIRO, "seguranca")),
-        )
-        .order_by(Usuario.username.asc(), Usuario.id.asc())
-        .all()
+def _porteiros_do_condominio(condominio_id, somente_ativos=False):
+    """Porteiros do tenant. Apoio, ronda e passagem usam só os ativos."""
+    consulta = Usuario.query.filter(
+        Usuario.condominio_id == condominio_id,
+        Usuario.role == Role.PORTEIRO,
     )
+    if somente_ativos:
+        consulta = consulta.filter(Usuario.ativo.is_(True))
+    return consulta.order_by(
+        Usuario.nome_completo.asc(), Usuario.username.asc(), Usuario.id.asc()
+    ).all()
 
 
 def _itens_checklist_ativos(guarita_id):
@@ -1715,27 +1756,41 @@ def _parse_checklist_json(raw, itens_por_id=None):
     return []
 
 
-def _resolver_apoio_ronda(form, condominio, porteiros):
-    """Devolve (apoio_id, ronda_id) válidos no tenant, ou None se o campo estiver desligado."""
-    ids_validos = {porteiro.id for porteiro in porteiros}
+def _resolver_equipe_plantao(form, porteiros, titular_id):
+    """Apoio, ronda e passagem saem da lista de porteiros ativos do condomínio."""
+    ids_validos = {porteiro.id for porteiro in porteiros if porteiro.id != titular_id}
 
-    def _id_opcional(campo, habilitado):
-        if not habilitado:
-            return None
+    def _id_opcional(campo):
         bruto = (form.get(campo) or "").strip()
         if not bruto:
             return None
-        if not bruto.isdigit():
-            raise ValueError("Selecione um porteiro válido.")
-        usuario_id = int(bruto)
-        if usuario_id not in ids_validos:
-            raise ValueError("O porteiro selecionado não pertence a este condomínio.")
-        return usuario_id
+        if not bruto.isdigit() or int(bruto) not in ids_validos:
+            raise ValueError("Selecione um porteiro ativo deste condomínio.")
+        return int(bruto)
 
     return (
-        _id_opcional("apoio_id", bool(condominio and condominio.permitir_apoio)),
-        _id_opcional("ronda_id", bool(condominio and condominio.permitir_ronda)),
+        _id_opcional("apoio_id"),
+        _id_opcional("ronda_id"),
+        _id_opcional("passagem_id"),
     )
+
+
+def _anotar_plantao(plantao, usuario, texto):
+    """Grava a linha no livro e o porteiro que a escreveu."""
+    nome = usuario.nome_exibicao
+    carimbo = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
+    plantao.ocorrencias = f"{plantao.ocorrencias or ''}[{carimbo}] {nome}: {texto}\n"
+    condominio_id = plantao.guarita.condominio_id if plantao.guarita else None
+    if condominio_id:
+        db.session.add(
+            AnotacaoPlantao(
+                condominio_id=condominio_id,
+                plantao_id=plantao.id,
+                porteiro_id=usuario.id,
+                texto=texto[:2000],
+                criada_em=_agora_sao_paulo(),
+            )
+        )
 
 
 @portaria_required
@@ -1753,7 +1808,7 @@ def portaria_livro():
 
     _garantir_guarita_padrao(condominio_id)
     condominio = Condominio.query.filter_by(id=condominio_id).first()
-    porteiros = _porteiros_do_condominio(condominio_id)
+    porteiros = _porteiros_do_condominio(condominio_id, somente_ativos=True)
     itens_por_id = {
         item.id: item
         for item in ItemChecklist.query.filter_by(condominio_id=condominio_id).all()
@@ -1795,6 +1850,7 @@ def portaria_livro():
             joinedload(Plantao.porteiro),
             joinedload(Plantao.apoio),
             joinedload(Plantao.ronda),
+            joinedload(Plantao.passagem),
         )
         .filter_by(guarita_id=guarita.id, status=StatusPlantao.ABERTO)
         .order_by(Plantao.data_abertura.desc())
@@ -1806,6 +1862,7 @@ def portaria_livro():
             joinedload(Plantao.porteiro),
             joinedload(Plantao.apoio),
             joinedload(Plantao.ronda),
+            joinedload(Plantao.passagem),
         )
         .filter_by(guarita_id=guarita.id, status=StatusPlantao.FECHADO)
         .order_by(Plantao.data_fechamento.desc(), Plantao.id.desc())
@@ -1862,11 +1919,11 @@ def portaria_plantao_abrir():
 
     condominio = Condominio.query.filter_by(id=condominio_id).first()
     itens = _itens_checklist_ativos(guarita.id)
-    porteiros = _porteiros_do_condominio(condominio_id)
+    porteiros = _porteiros_do_condominio(condominio_id, somente_ativos=True)
     try:
         checklist_json = _montar_checklist_abertura(request.form, itens)
-        apoio_id, ronda_id = _resolver_apoio_ronda(
-            request.form, condominio, porteiros
+        apoio_id, ronda_id, passagem_id = _resolver_equipe_plantao(
+            request.form, porteiros, usuario.id
         )
     except ValueError as exc:
         flash(str(exc), "danger")
@@ -1877,6 +1934,7 @@ def portaria_plantao_abrir():
         porteiro_id=usuario.id,
         apoio_id=apoio_id,
         ronda_id=ronda_id,
+        passagem_id=passagem_id,
         data_abertura=_agora_sao_paulo(),
         status=StatusPlantao.ABERTO,
         checklist_json=checklist_json,
@@ -1958,12 +2016,7 @@ def portaria_plantao_ocorrencia():
         flash("Só é possível registrar ocorrência em plantão aberto.", "warning")
         return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
 
-    agora = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
-    linha = f"[{agora}] {texto}"
-    if plantao.ocorrencias:
-        plantao.ocorrencias = f"{plantao.ocorrencias.rstrip()}\n{linha}"
-    else:
-        plantao.ocorrencias = linha
+    _anotar_plantao(plantao, usuario, texto)
 
     _registrar_auditoria(
         usuario,
@@ -2012,9 +2065,7 @@ def portaria_plantao_evento():
         flash("Só é possível registrar evento em plantão aberto.", "warning")
         return redirect(url_for("portaria_livro", guarita_id=plantao.guarita_id))
 
-    carimbo = _agora_sao_paulo().strftime("%d/%m/%Y %H:%M")
-    linha = f"[{carimbo}] - {texto}\n"
-    plantao.ocorrencias = f"{plantao.ocorrencias or ''}{linha}"
+    _anotar_plantao(plantao, usuario, texto)
 
     _registrar_auditoria(
         usuario,
@@ -2151,8 +2202,11 @@ def _morador_contato(pessoa):
         "nome": pessoa.nome_completo,
         "vinculo": _ROTULOS_VINCULO.get(pessoa.vinculo, pessoa.vinculo or "Morador"),
         "parentesco": (pessoa.parentesco or "").strip(),
+        "id": pessoa.id,
         "responsavel": bool(pessoa.is_responsavel),
         "autoriza_interfone": bool(pessoa.autoriza_interfone),
+        "idade": pessoa.idade,
+        "is_menor_de_idade": pessoa.is_menor_de_idade,
     }
     nome_foto = nome_foto_facial_seguro(pessoa.foto_facial)
     if nome_foto:
@@ -2171,6 +2225,7 @@ def _moradores_residentes(unidade):
         Pessoa.query.filter(
             Pessoa.unidade_id == unidade.id,
             Pessoa.eh_morador.is_(True),
+            Pessoa.status == StatusPessoa.APROVADO,
         )
         .order_by(Pessoa.is_responsavel.desc(), Pessoa.nome_completo.asc())
         .all()
@@ -2263,6 +2318,7 @@ def _unidades_interfone(condominio_id, bloco, apartamento, consulta, permitidos)
             return [], False
         consulta_unidades = consulta_unidades.join(Pessoa).filter(
             Pessoa.eh_morador.is_(True),
+            Pessoa.status == StatusPessoa.APROVADO,
             Pessoa.nome_completo.ilike(f"%{termo}%"),
         )
 

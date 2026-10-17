@@ -44,6 +44,16 @@ def _garantir_colunas_usuarios():
             "ALTER TABLE usuarios ADD COLUMN perm_configuracoes "
             "BOOLEAN NOT NULL DEFAULT 0"
         )
+    if "nome_completo" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN nome_completo VARCHAR(200)"
+        )
+    if "cpf" not in colunas:
+        alteracoes.append("ALTER TABLE usuarios ADD COLUMN cpf VARCHAR(14)")
+    if "ativo" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE usuarios ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT 1"
+        )
     for sql in alteracoes:
         db.session.execute(text(sql))
     if alteracoes:
@@ -97,6 +107,10 @@ def _garantir_colunas_unidades():
         alteracoes.append(
             "ALTER TABLE unidades ADD COLUMN atualizacao_pendente "
             "BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "etapa_aprovacao_ocupantes" not in colunas:
+        alteracoes.append(
+            "ALTER TABLE unidades ADD COLUMN etapa_aprovacao_ocupantes VARCHAR(40)"
         )
     if "documento_drive_id" not in colunas:
         alteracoes.append(
@@ -1156,6 +1170,10 @@ def _garantir_colunas_livro_servico():
             alteracoes.append(
                 "ALTER TABLE plantoes ADD COLUMN ronda_id INTEGER"
             )
+        if "passagem_id" not in colunas:
+            alteracoes.append(
+                "ALTER TABLE plantoes ADD COLUMN passagem_id INTEGER"
+            )
 
     if "itens_checklist" in tabelas:
         colunas = {
@@ -1170,6 +1188,9 @@ def _garantir_colunas_livro_servico():
         db.session.execute(text(alteracao))
     if alteracoes:
         db.session.commit()
+    from app.models import AnotacaoPlantao
+
+    AnotacaoPlantao.__table__.create(bind=db.engine, checkfirst=True)
 
 
 def _garantir_tabelas_areas_infracoes():
@@ -1220,6 +1241,7 @@ def _garantir_colunas_dados_condominio():
         ("prazo_defesa_dias", "INTEGER NOT NULL DEFAULT 15"),
         ("prazo_defesa_tipo_contagem", "VARCHAR(10) NOT NULL DEFAULT 'corridos'"),
         ("aprovacao_automatica_reservas", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("fluxo_aprovacao_cadastros", "VARCHAR(20) NOT NULL DEFAULT 'dupla'"),
     )
     faltava_prazo_defesa = "prazo_defesa_dias" not in colunas
     for nome, tipo in definicoes:
@@ -1354,6 +1376,7 @@ def _garantir_colunas_planta_unidades():
         ("criada_pela_admin", "BOOLEAN NOT NULL DEFAULT 1"),
         ("conta_reivindicada", "BOOLEAN NOT NULL DEFAULT 0"),
         ("cpf_pre_autorizado", "VARCHAR(20)"),
+        ("etapa_aprovacao_ocupantes", "VARCHAR(40)"),
     )
     precisa_sanear = any(
         nome not in colunas
@@ -2112,6 +2135,7 @@ def create_app(config=None):
         qtd_ocorrencias_abertas = 0
         qtd_ocorrencias_nao_lidas = 0
         qtd_cadastros_pendentes = 0
+        qtd_inclusoes_ocupantes = 0
         qtd_pendencias_condominio = 0
         ocorrencias_alerta = []
         if (
@@ -2121,7 +2145,13 @@ def create_app(config=None):
         ):
             from sqlalchemy import or_
 
-            from app.models import Ocorrencia, StatusOcorrencia, StatusUnidade, Unidade
+            from app.models import (
+                EtapaAprovacaoOcupante,
+                Ocorrencia,
+                StatusOcorrencia,
+                StatusUnidade,
+                Unidade,
+            )
             from app.routes import _blocos_codigo_sindico
 
             base_ocorrencias = Ocorrencia.query.join(
@@ -2150,8 +2180,23 @@ def create_app(config=None):
                 )
             ).count()
             qtd_cadastros_pendentes = pendentes.count()
+            etapa_fila = (
+                EtapaAprovacaoOcupante.SINDICO
+                if usuario.role == Role.SINDICO
+                else EtapaAprovacaoOcupante.ADMIN
+            )
+            inclusoes = Unidade.query.filter(
+                Unidade.condominio_id == usuario.condominio_id,
+                Unidade.eh_setor_interno.is_(False),
+                Unidade.etapa_aprovacao_ocupantes == etapa_fila,
+            )
+            if usuario.role == Role.SINDICO:
+                inclusoes = inclusoes.filter(Unidade.bloco.in_(blocos))
+            qtd_inclusoes_ocupantes = inclusoes.count()
             qtd_pendencias_condominio = (
-                qtd_ocorrencias_nao_lidas + qtd_cadastros_pendentes
+                qtd_ocorrencias_nao_lidas
+                + qtd_cadastros_pendentes
+                + qtd_inclusoes_ocupantes
             )
             resumo = (
                 base_ocorrencias.filter(Ocorrencia.status == StatusOcorrencia.ABERTO)
@@ -2181,6 +2226,7 @@ def create_app(config=None):
             "qtd_ocorrencias_abertas": qtd_ocorrencias_abertas,
             "qtd_ocorrencias_nao_lidas": qtd_ocorrencias_nao_lidas,
             "qtd_cadastros_pendentes": qtd_cadastros_pendentes,
+            "qtd_inclusoes_ocupantes": qtd_inclusoes_ocupantes,
             "qtd_pendencias_condominio": qtd_pendencias_condominio,
             "ocorrencias_alerta": ocorrencias_alerta,
         }

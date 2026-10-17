@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Porteiros{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Porteiros</h1>
+    <p class="text-muted mb-0">
+        Cada porteiro entra na guarita com o próprio CPF e senha. O nome fica no plantão, nas entradas e nas encomendas.
+    </p>
+</div>
+
+<section class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5 mb-3">Novo porteiro</h2>
+        <form method="post" action="{{ url_for('admin_porteiros_novo') }}" class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label" for="nome_completo">Nome completo</label>
+                <input type="text" class="form-control" id="nome_completo" name="nome_completo"
+                       maxlength="200" required autocomplete="off">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="cpf">CPF</label>
+                <input type="text" class="form-control" id="cpf" name="cpf"
+                       inputmode="numeric" maxlength="14" required autocomplete="off">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="senha">Senha</label>
+                <input type="password" class="form-control" id="senha" name="senha"
+                       minlength="6" required autocomplete="new-password">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="ativo">Status</label>
+                <select class="form-select" id="ativo" name="ativo">
+                    <option value="1" selected>Ativo</option>
+                    <option value="0">Inativo</option>
+                </select>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Cadastrar porteiro</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<section class="card border-0 shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th>
+                        <th>CPF</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for porteiro in porteiros %}
+                    <tr>
+                        <td>{{ porteiro.nome_exibicao }}</td>
+                        <td>{{ porteiro.cpf_formatado or '—' }}</td>
+                        <td>
+                            {% if porteiro.ativo %}
+                            <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-outline-primary btn-sm"
+                                    data-bs-toggle="modal" data-bs-target="#editarPorteiro{{ porteiro.id }}">
+                                Editar
+                            </button>
+                            <form method="post" action="{{ url_for('admin_porteiros_status', porteiro_id=porteiro.id) }}"
+                                  class="d-inline"
+                                  onsubmit="return confirm('{{ 'Inativar' if porteiro.ativo else 'Ativar' }} este porteiro?');">
+                                <input type="hidden" name="ativo" value="{{ '0' if porteiro.ativo else '1' }}">
+                                <button type="submit" class="btn btn-outline-secondary btn-sm">
+                                    {{ 'Inativar' if porteiro.ativo else 'Ativar' }}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="text-muted p-4">Nenhum porteiro cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+{% for porteiro in porteiros %}
+<div class="modal fade" id="editarPorteiro{{ porteiro.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('admin_porteiros_editar', porteiro_id=porteiro.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title h5">Editar porteiro</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="nome_{{ porteiro.id }}">Nome completo</label>
+                        <input type="text" class="form-control" id="nome_{{ porteiro.id }}"
+                               name="nome_completo" maxlength="200" required
+                               value="{{ porteiro.nome_completo or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="cpf_{{ porteiro.id }}">CPF</label>
+                        <input type="text" class="form-control" id="cpf_{{ porteiro.id }}"
+                               name="cpf" inputmode="numeric" maxlength="14" required
+                               value="{{ porteiro.cpf_formatado }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="senha_{{ porteiro.id }}">Nova senha</label>
+                        <input type="password" class="form-control" id="senha_{{ porteiro.id }}"
+                               name="senha" minlength="6" autocomplete="new-password"
+                               placeholder="Em branco mantém a senha atual">
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="ativo_{{ porteiro.id }}">Status</label>
+                        <select class="form-select" id="ativo_{{ porteiro.id }}" name="ativo">
+                            <option value="1" {% if porteiro.ativo %}selected{% endif %}>Ativo</option>
+                            <option value="0" {% if not porteiro.ativo %}selected{% endif %}>Inativo</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

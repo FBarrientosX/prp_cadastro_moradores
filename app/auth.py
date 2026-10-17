@@ -104,6 +104,9 @@ def login_usuario(usuario):
     session["user_id"] = usuario.id
     session["role"] = usuario.role
     session["condominio_id"] = usuario.condominio_id
+    if usuario.role == Role.PORTEIRO:
+        session["porteiro_id"] = usuario.id
+        session["porteiro_nome"] = usuario.nome_exibicao
     _gravar_tenant_slug_sessao(usuario.condominio_id)
     session.permanent = True
 
@@ -113,6 +116,8 @@ def logout_usuario():
     session.pop("role", None)
     session.pop("condominio_id", None)
     session.pop("tenant_slug", None)
+    session.pop("porteiro_id", None)
+    session.pop("porteiro_nome", None)
 
 
 def get_current_user():
@@ -121,6 +126,8 @@ def get_current_user():
         return None
     usuario = Usuario.query.get(user_id)
     if usuario is None:
+        return None
+    if usuario.role == Role.PORTEIRO and not usuario.ativo:
         return None
     if usuario.role == Role.SUPERADMIN:
         return usuario

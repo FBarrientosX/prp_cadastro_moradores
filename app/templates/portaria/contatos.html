@@ -214,8 +214,18 @@
         nome.className = "fs-5 fw-semibold";
         nome.textContent = morador.nome || "Morador";
         topo.appendChild(nome);
+        if (morador.is_menor_de_idade) {
+            topo.appendChild(badge("🔞 Menor (" + morador.idade + " anos)", "bg-danger"));
+        }
         if (morador.responsavel) {
             topo.appendChild(badge("Responsável", "text-bg-primary"));
+        }
+        if (morador.responsavel && !morador.is_menor_de_idade) {
+            const fone = document.createElement("i");
+            fone.className = "bi bi-telephone-fill text-success";
+            fone.title = "Responsável";
+            fone.setAttribute("aria-label", "Responsável");
+            topo.appendChild(fone);
         }
         if (morador.vinculo) {
             topo.appendChild(badge(morador.vinculo, "text-bg-light border"));

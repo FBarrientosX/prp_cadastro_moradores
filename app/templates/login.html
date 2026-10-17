@@ -24,7 +24,7 @@
             <input type="hidden" name="perfil" value="equipe">
             {% endif %}
             <div class="mb-3">
-                <label for="username" class="form-label">Usuário</label>
+                <label for="username" class="form-label">{% if action == 'admin' %}Usuário ou CPF{% else %}Usuário{% endif %}</label>
                 <input type="text" class="form-control" id="username" name="username" required autofocus>
             </div>
             <div class="mb-3">

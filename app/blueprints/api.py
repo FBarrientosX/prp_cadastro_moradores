@@ -66,6 +66,8 @@ def credenciais_ativas(condominio):
         morador = credencial.morador
         if morador is None or not morador.eh_morador:
             continue
+        if morador.status != StatusPessoa.APROVADO:
+            continue
         unidade = morador.unidade
         if unidade is not None and unidade.eh_setor_interno:
             continue

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Aprovação de Moradores{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="h3 mb-1">Aprovação de Moradores</h1>
+    <p class="text-muted mb-0">
+        {% if etapa == etapa_sindico %}
+        Inclusões paradas no síndico. Aprovar encaminha para a administradora e ainda não libera a portaria.
+        {% else %}
+        Inclusões paradas na administradora. Aprovar libera o morador novo na portaria.
+        {% endif %}
+    </p>
+</div>
+
+{% if not unidades %}
+<div class="alert alert-light border mb-0">Nenhuma inclusão aguardando a sua etapa.</div>
+{% else %}
+<div class="d-flex flex-column gap-3">
+    {% for unidade in unidades %}
+    {% set pendentes = ocupantes_pendentes(unidade) %}
+    <section class="card border-0 shadow-sm">
+        <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                <div>
+                    <h2 class="h5 mb-1">
+                        {% if current_user.role == 'superadmin' and unidade.condominio %}
+                        {{ unidade.condominio.nome }} —
+                        {% endif %}
+                        Bloco {{ unidade.bloco }}, Apto {{ unidade.apartamento }}
+                    </h2>
+                    <span class="badge {% if unidade.etapa_aprovacao_ocupantes == etapa_sindico %}bg-warning text-dark{% else %}bg-primary{% endif %}">
+                        {{ unidade.etapa_aprovacao_ocupantes }}
+                    </span>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <form method="post" action="{{ url_for('admin_aprovacoes_decidir', unidade_id=unidade.id) }}">
+                        <input type="hidden" name="acao" value="aprovar">
+                        <button type="submit" class="btn btn-success btn-sm"
+                                onclick="return confirm('Aprovar esta inclusão?');">
+                            {% if etapa == etapa_sindico %}
+                            Aprovar e enviar à administradora
+                            {% else %}
+                            Aprovar e liberar na portaria
+                            {% endif %}
+                        </button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin_aprovacoes_decidir', unidade_id=unidade.id) }}">
+                        <input type="hidden" name="acao" value="recusar">
+                        <button type="submit" class="btn btn-outline-danger btn-sm"
+                                onclick="return confirm('Recusar só o morador novo? Quem já mora na unidade permanece.');">
+                            Recusar inclusão
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% if pendentes %}
+            <ul class="list-group list-group-flush">
+                {% for pessoa in pendentes %}
+                <li class="list-group-item px-0 d-flex flex-wrap justify-content-between gap-2">
+                    <span>{{ pessoa.nome_completo }}</span>
+                    <span class="text-muted">
+                        {{ pessoa.vinculo }}
+                        {% if pessoa.data_nascimento %}
+                        · {{ pessoa.data_nascimento.strftime('%d/%m/%Y') }}
+                        {% endif %}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted mb-0">Nenhum ocupante pendente nesta unidade.</p>
+            {% endif %}
+        </div>
+    </section>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -184,6 +184,11 @@ Principio geral:
 Portas de entrada:
 - Morador + equipe do condominio: `GET|POST /c/<slug>/login` (`tenant_login`).
   Abas: morador (bloco/apto/senha) e equipe (username/senha, roles locais).
+  Porteiro da equipe entra com CPF + senha; os demais seguem pelo username.
+  O formulario da aba Equipe usa autocomplete desligado no usuario e
+  `new-password` na senha, e o JS zera os dois campos ao carregar e no
+  botao Voltar. `GET /portaria/logout` faz `session.clear()` e volta
+  para essa aba.
 - Síndico legado: `GET|POST /c/<slug>/sindico/login` e `/sindico/login` (redirect).
 - Admin legado: `/admin/login` redireciona para `tenant_login` do slug `prp`.
 - Super Admin: `/superadmin/login` — filtra `role=SUPERADMIN`.
@@ -333,6 +338,21 @@ Somente Sindico:
   ao criar ou editar o sindico.
 
 Porteiro:
+- Continua sendo `Usuario` com `role=porteiro` (sem tabela paralela).
+  Campos `nome_completo`, `cpf` (digitos, unico entre porteiros do tenant)
+  e `ativo` (default True). Senha via `set_password`.
+- CRUD em `GET|POST /admin/porteiros` para admin e sindico do tenant
+  (assistente nao entra). Inativar no lugar de excluir.
+- Login da equipe em `/c/<slug>/login`: porteiro entra com CPF + senha.
+  Usuario de equipe sem CPF continua pelo username. Porteiro inativo
+  recebe a mesma mensagem generica de credencial invalida.
+  A sessao grava `porteiro_id` e `porteiro_nome` alem de `user_id`.
+  Sair da portaria destroi a sessao inteira e abre o login da equipe.
+- Livro de servico: abrir plantao grava o usuario logado em
+  `Plantao.porteiro_id`. Apoio, ronda e passagem de turno sao selects
+  de porteiros ativos, excluindo o titular. Anotacoes do livro gravam
+  `AnotacaoPlantao.porteiro_id`. Entrada de visitante e recebimento de
+  encomenda ja gravam o id de quem clicou.
 - `/portaria`, `/portaria/dashboard`, `/portaria/acesso`, `/portaria/encomendas`
 - check-in de mudanca aprovada no dia (`POST /portaria/mudanca/<id>/chegar`)
 - nao acessa reservas nem paineis admin
@@ -387,6 +407,8 @@ Parceiro logado:
 - `condominio_id` (NULL so para superadmin)
 - `senha_atualizada_em` (invalida tokens antigos)
 - `set_password()` atualiza hash e timestamp
+- Porteiro: `nome_completo`, `cpf`, `ativo` (default True). O username
+  interno novo e `porteiro-{condominio_id}-{cpf}`; o login usa o CPF.
 - Sindico: `blocos_escopo` (`"1"`, `"1,2"` ou `"*"`), `perm_portaria`,
   `perm_reservas_geral`, `perm_configuracoes` (default False).
   Boot copia agrupamentos/`bloco_responsavel` para `blocos_escopo` vazio
@@ -743,6 +765,11 @@ Portaria (`app/blueprints/portaria.py`):
   Sindico limitado aos proprios agrupamentos. Telefone so sai no JSON se
   `autoriza_interfone=True` (digitos com prefixo 55 + numero formatado).
   Sem consentimento: nome, vinculo/parentesco e `autoriza_interfone: false`.
+  `Pessoa.idade` e `Pessoa.is_menor_de_idade` usam `data_nascimento` e
+  `date.today()`. Sem nascimento, nao e menor. A guarita mostra o selo
+  `Menor (X anos)` e um telefone verde no responsavel adulto. O select
+  "Qual morador autorizou a entrada?" no check-in lista so adultos; o
+  servidor recusa id de menor.
   Setores internos (`eh_setor_interno`) aparecem no bloco `ADM` e na busca
   `adm` / `administracao` / `zeladoria` / `sindico`. O sindico ve esses
   setores mesmo fora dos agrupamentos residenciais.
@@ -915,6 +942,23 @@ Helpers:
 - `_parse_pessoas_form()` aceita `pessoa_{i}_id` (oculto no modo atualizacao).
 - Novos sem `id` = adicao. Fallback CPF ou nome+nascimento.
 - `_salvar_pessoas_veiculos()` recria registros; o diff usa snapshot pre-salvamento.
+- Inclusão de ocupante (`eh_morador` sem id) não muda o status operacional
+  da unidade. `Condominio.fluxo_aprovacao_cadastros` (`dupla` ou `simples`,
+  padrão `dupla`, inclusive no PRP) grava `Unidade.etapa_aprovacao_ocupantes`:
+  `Pendente Aprovação (Síndico)` ou `Pendente Aprovação (Admin)`.
+  A pessoa nova fica `Pendente` e não entra no agente, na credencial facial
+  nem no interfone. `/admin/aprovacoes`: síndico só vê a etapa do síndico
+  e, ao aprovar, encaminha à administradora sem liberar a portaria.
+  Admin local e Super Admin veem a etapa da administradora e, ao aprovar,
+  marcam `Aprovado/Ativo` e só então sincronizam. No fluxo simples a etapa
+  do síndico não existe. Quem já estava aprovado continua na portaria.
+- Nascimento do formulário (`morador_{i}_data_nascimento` e
+  `proprietario_{i}_data_nascimento`) chega como texto. `_parse_data` aceita
+  `YYYY-MM-DD` e `DD/MM/AAAA` e grava `None` quando o campo vem vazio.
+  No envio, o flatpickr copia a data visível para o input com `name`.
+- A mesma pessoa nas duas listas guarda o lado que mudou em relação ao
+  banco (nome, telefone, e-mail, nascimento e CPF). Campo limpo não é
+  preenchido de novo com o valor do outro cartão.
 
 Feedback:
 - Critica: "Dados atualizados e cadastro reenviado para nova aprovação do síndico."

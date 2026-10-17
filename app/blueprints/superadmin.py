@@ -167,6 +167,15 @@ def superadmin_condominios():
             flash("Fluxo de aprovação de mudança inválido.", "danger")
             return redirect(url_for("superadmin_condominios"))
 
+        from app.models import FluxoAprovacaoCadastro
+
+        fluxo_cadastros = (
+            request.form.get("fluxo_aprovacao_cadastros") or FluxoAprovacaoCadastro.DUPLA
+        ).strip().lower()
+        if fluxo_cadastros not in FluxoAprovacaoCadastro.CHOICES:
+            flash("Fluxo de aprovação de novos moradores inválido.", "danger")
+            return redirect(url_for("superadmin_condominios"))
+
         logo_filename, erro_logo = _salvar_logo_condominio(request.files.get("logo"), slug)
         if erro_logo:
             flash(erro_logo, "danger")
@@ -178,6 +187,7 @@ def superadmin_condominios():
             cnpj=cnpj,
             ativo=True,
             api_key=gerar_api_key(),
+            fluxo_aprovacao_cadastros=fluxo_cadastros,
         )
         db.session.add(condominio)
         db.session.flush()
